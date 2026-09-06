@@ -55,8 +55,23 @@ service.interceptors.response.use(
                     window.location.href = '#/login';
                 }
             }
-            // 请求已发出，但是不在2xx的范围
-            return Promise.reject(showMessage(response.status));
+            /*
+             * Carry the status with the message.
+             *
+             * Rejecting with a bare string loses the one field callers test.
+             * The status poll in App.vue asks for e.response.status so that a
+             * 401 -- a session that needs signing in, which the branch above
+             * has already acted on -- does not also claim the miner is
+             * broken. Against a string that read undefined, so sitting at the
+             * login screen raised "data synchronization failed" every time,
+             * which is the alarm that suppression was written to prevent.
+             *
+             * The message stays the message, so callers that log or display
+             * it are unaffected.
+             */
+            const failure = new Error(showMessage(response.status)) as Error & { response?: any };
+            failure.response = response;
+            return Promise.reject(failure);
         } else {
             return Promise.reject(lang("errxxx1"));
         }
