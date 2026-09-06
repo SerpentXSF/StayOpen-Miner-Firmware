@@ -25,6 +25,11 @@
 #include "esp_transport_tcp.h"
 #include "esp_transport_ssl.h"
 
+/* The payout address the shipped config templates carry, so an
+ * unconfigured miner cannot quietly mine to somebody else's wallet.
+ * Matched as a substring because the templates append a worker suffix. */
+#define STRATUM_PLACEHOLDER_USER "REPLACE-WITH-YOUR"
+
 #define PORT CONFIG_STRATUM_PORT
 #define STRATUM_URL CONFIG_STRATUM_URL
 
@@ -461,16 +466,41 @@ void stratum_task(void * pvParameters)
 
         ///// Start Stratum Action
         // mining.configure - ID: 1
-        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->transport, GLOBAL_STATE->send_uid++, &GLOBAL_STATE->version_mask);
+        int configure_message_id = GLOBAL_STATE->send_uid++;
+        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->transport, configure_message_id, &GLOBAL_STATE->version_mask);
 
         // mining.subscribe - ID: 2
-        STRATUM_V1_subscribe(GLOBAL_STATE->transport, GLOBAL_STATE->send_uid++, GLOBAL_STATE->asic_model_str);
+        int subscribe_message_id = GLOBAL_STATE->send_uid++;
+        STRATUM_V1_subscribe(GLOBAL_STATE->transport, subscribe_message_id, GLOBAL_STATE->asic_model_str);
 
         char * username = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? \
             GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
         char * password = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? \
             GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_pass : GLOBAL_STATE->SYSTEM_MODULE.pool_pass;
 
+        /*
+         * The shipped config templates carry a placeholder payout address, so
+         * that a miner flashed and left unconfigured cannot quietly mine to
+         * somebody else's wallet. That is deliberate and worth keeping.
+         *
+         * What is not worth keeping is what the owner sees when they hit it.
+         * The pool refuses the authorize and closes the connection, and the
+         * only clue is "setup message rejected: 3,unknown" -- which says
+         * nothing about the address. Observed on a BC04 that had been flashed
+         * from the web flasher and never configured: a sixty-second connect,
+         * reject, disconnect, retry loop with no indication why.
+         */
+        if (NULL != username && NULL != strstr(username, STRATUM_PLACEHOLDER_USER)) {
+            ESP_LOGE(TAG, "=====================================================");
+            ESP_LOGE(TAG, "The payout address is still the placeholder:");
+            ESP_LOGE(TAG, "  %s", username);
+            ESP_LOGE(TAG, "The pool will refuse this and close the connection.");
+            ESP_LOGE(TAG, "Set your own address in Settings, or as stratumuser");
+            ESP_LOGE(TAG, "in config.cvs. Nothing will mine until you do.");
+            ESP_LOGE(TAG, "=====================================================");
+        }
+
+        int extranonce_message_id = -1;   /* set if we send one, below */
         int authorize_message_id = GLOBAL_STATE->send_uid++;
         // mining.authorize - ID: 3
         STRATUM_V1_authorize(GLOBAL_STATE->transport, authorize_message_id, username, password);
@@ -599,14 +629,36 @@ void stratum_task(void * pvParameters)
                     if (stratum_api_v1_message.message_id == authorize_message_id) {
                         // authorize 成功后发送 extranonce.subscribe（仅一次）
                         if (extranonce_subscribe) {
-                            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transport, GLOBAL_STATE->send_uid++);
+                            extranonce_message_id = GLOBAL_STATE->send_uid++;
+                            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transport, extranonce_message_id);
                         }
                     }
                 } else {
-                    if(NULL != stratum_api_v1_message.error_str) {
-                        ESP_LOGE(TAG, "setup message rejected: %lld,%s", stratum_api_v1_message.message_id,stratum_api_v1_message.error_str);
+                    /* Name the method. A bare id tells the owner nothing, and
+                     * "3" is the one they most need to understand. */
+                    const char *which = "unknown message";
+                    if (stratum_api_v1_message.message_id == authorize_message_id) {
+                        which = "mining.authorize -- the pool refused this "
+                                "worker/payout address";
+                    } else if (stratum_api_v1_message.message_id == subscribe_message_id) {
+                        which = "mining.subscribe";
+                    } else if (stratum_api_v1_message.message_id == configure_message_id) {
+                        which = "mining.configure (version rolling)";
+                    } else if (stratum_api_v1_message.message_id == extranonce_message_id) {
+                        which = "mining.extranonce.subscribe";
+                    }
+
+                    /* The parser substitutes "unknown" when the pool sends
+                     * error:null, which is exactly the case here. Printing it
+                     * verbatim reads as though the pool said something. */
+                    if(NULL != stratum_api_v1_message.error_str &&
+                       0 != strcmp(stratum_api_v1_message.error_str, "unknown")) {
+                        ESP_LOGE(TAG, "pool rejected %s (id %lld): %s",
+                                 which, stratum_api_v1_message.message_id,
+                                 stratum_api_v1_message.error_str);
                     } else {
-                        ESP_LOGE(TAG, "setup message rejected: %lld",stratum_api_v1_message.message_id);
+                        ESP_LOGE(TAG, "pool rejected %s (id %lld), no reason given",
+                                 which, stratum_api_v1_message.message_id);
                     }
                 }
             }
