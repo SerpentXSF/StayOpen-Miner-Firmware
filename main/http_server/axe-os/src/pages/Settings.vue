@@ -713,6 +713,29 @@ onMounted(async () => {
 
 .set-unofficial-notice {
   margin-bottom: 16px;
+
+  /*
+   * Paint both halves of the pair, not one.
+   *
+   * The alert kept Ant's light warning background while the app's dark theme
+   * set text to near-white, which put #f5f7fb on #fffbe6 -- a contrast ratio
+   * of about 1.03. The notice was in the DOM, the correct 217 characters of
+   * it, and invisible on screen: the one thing the release existed to add,
+   * shipped as an empty yellow box.
+   *
+   * Stating only the text colour would leave the same trap for whichever
+   * theme is not the one in front of you, so the surface is stated too.
+   */
+  background: #fffbe6;
+  border: 1px solid #ffe58f;
+
+  :deep(.ant-alert-message) {
+    color: #613400;
+  }
+
+  :deep(.ant-alert-icon) {
+    color: #d48806;
+  }
 }
 
 </style>
