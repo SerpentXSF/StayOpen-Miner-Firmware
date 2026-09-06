@@ -5,7 +5,6 @@ import viteCompression from 'vite-plugin-compression';
 import AutoImport from 'unplugin-auto-import/vite';
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
-import cssInjectedByJsPlugin from 'vite-plugin-css-injected-by-js';
 
 // 全局捕获 ECONNRESET 防止 vite dev 进程因为底层 socket 出错而直接退出
 process.on('uncaughtException', (err: any) => {
@@ -77,7 +76,27 @@ export default defineConfig({
                 comments: false, // 移除注释
             },
         },
-        cssCodeSplit: false, // CSS 注入到 JS 中，减少文件请求
+        /*
+         * CSS is its own hashed asset again.
+         *
+         * With cssCodeSplit off, vite-plugin-css-injected-by-js appended the
+         * whole app's CSS into the vendor chunk after Rollup had already
+         * computed that chunk's content hash. The filename therefore never
+         * moved when the styles did: two builds with different CSS both
+         * shipped as vendor-BefK_L50.js. The firmware serves /assets with
+         * Cache-Control: max-age=2592000, so a browser that had been to the
+         * miner before kept a month-old copy across an update.
+         *
+         * That is worse than stale colours. Scoped-style ids are derived from
+         * component source, so an edited component gets a new id in its
+         * freshly named chunk while the cached CSS still carries the old one,
+         * and the selectors stop matching at all -- an update that appears to
+         * do nothing, or to break the interface.
+         *
+         * Splitting CSS back out costs one request and restores the property
+         * the cache header assumes: a changed file has a changed name.
+         */
+        cssCodeSplit: true,
 
         rollupOptions: {
             output: {
@@ -97,7 +116,6 @@ export default defineConfig({
     },
     plugins: [
         vue(),
-        cssInjectedByJsPlugin(),
         AutoImport({
             imports: ['vue', 'vue-router', 'vue-i18n'],
             dts: 'src/auto-imports.d.ts',

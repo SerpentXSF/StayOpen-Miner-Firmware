@@ -719,8 +719,20 @@ static esp_err_t rest_common_get_handler(httpd_req_t * req)
         return ESP_OK;
     }
 
+    /*
+     * Thirty days is right for a file whose name changes when its contents
+     * do, and wrong for the document that says what those names are.
+     *
+     * index.html is served for "/", which took no header at all, leaving the
+     * browser free to guess a lifetime for it. A guessed lifetime on that one
+     * file pins the whole interface: it is the only place the hashed chunk
+     * names appear, so a cached copy keeps pointing an updated miner at the
+     * assets of the firmware it used to be running.
+     */
     if (req->uri[strlen(req->uri) - 1] != '/') {
         httpd_resp_set_hdr(req, "Cache-Control", "max-age=2592000");
+    } else {
+        httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
     }
 
     // [删除] 这一行必须删除，已经在上方根据实际打开的文件动态设置了
