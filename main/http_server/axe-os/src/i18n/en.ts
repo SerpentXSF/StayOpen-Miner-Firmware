@@ -248,6 +248,7 @@ const lang = {
         ref_relationship_title: 'Voltage vs Frequency:',
         ref_relationship_desc: 'Voltage too low may cause chip malfunction, while too high increases power consumption.',
         ref_config_title: 'Reference Configuration:',
+        unofficial_notice: 'Unofficial firmware, not affiliated with or endorsed by Hammer. No warranty — GPL-3.0 sections 15 and 16 apply. You run it at your own risk. Two hardware protections are known not to work; see docs/HARDWARE-SAFETY.md.',
         update_combined: 'Firmware Update',
         open_update_page: 'Open Update Page',
         download_link: 'Download Link',

@@ -391,6 +391,11 @@ onMounted(async () => {
 <template>
   <settings-edit :title="''" :url="''"></settings-edit>
   <a-card :title="sel('update_combined')" class="card set-status-wrap" style="border: 1px solid var(--surface-border); box-shadow: none;">
+    <!-- Shown where someone is about to change firmware, which is the moment
+         it is worth knowing whose firmware this is and what it does not
+         promise. The README and the web flasher carry the same statement. -->
+    <a-alert type="warning" show-icon class="set-unofficial-notice"
+             :message="sel('unofficial_notice')" />
     <a-descriptions bordered :column="{ xs: 1, sm: 1, md: 1 }" size="small">
       <a-descriptions-item :label="sel('remote_ota_model') || 'Model'">
         {{ minerStatusRef?.DeviceModel || appStore.deviceModel || 'DC02' }}
@@ -704,6 +709,10 @@ onMounted(async () => {
   margin-bottom: 0.5rem;
   font-size: 0.9rem;
   color: #1A81FF;
+}
+
+.set-unofficial-notice {
+  margin-bottom: 16px;
 }
 
 </style>

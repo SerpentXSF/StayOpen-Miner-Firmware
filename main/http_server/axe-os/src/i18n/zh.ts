@@ -247,6 +247,7 @@ const lang = {
         ref_relationship_title: '电压与频率：',
         ref_relationship_desc: '电压过低，可能造成芯片运行异常；过高则会增加整体功耗。',
         ref_config_title: '参考配置：',
+        unofficial_notice: '非官方固件，与 Hammer 无关联、未获其认可。不提供任何担保 —— 适用 GPL-3.0 第 15、16 条。使用风险自负。已知有两项硬件保护无效，详见 docs/HARDWARE-SAFETY.md。',
         update_combined: '固件升级',
         open_update_page: '打开升级页面',
         download_link: '手动下载链接',
