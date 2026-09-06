@@ -14,6 +14,17 @@ that the vendor release omitted put back.
 > So is this. See [NOTICE.md](NOTICE.md) for attribution and
 > [LICENSE](LICENSE) for terms.
 
+> **Unofficial, and no warranty.** This firmware is written by an independent
+> open-source miner. It is **not affiliated with, endorsed by, or supported
+> by Hammer**, and flashing it may void your warranty with them. It comes
+> with no warranty of any kind — see sections 15 and 16 of
+> [LICENSE](LICENSE). **You flash at your own risk.** We are not responsible
+> for damage caused by running a device beyond its limits, or by the flashing
+> process leaving it unusable. Before you flash anything, read
+> [docs/HARDWARE-SAFETY.md](docs/HARDWARE-SAFETY.md) — it lists what protects
+> the hardware, what has actually been tested, and the two protections that
+> are known not to work.
+
 > **Security.** Stock Hammer firmware has **no authentication on any HTTP
 > endpoint**. Any host on your network can read the configuration, change
 > the payout address, or start a firmware update. If you own one of these

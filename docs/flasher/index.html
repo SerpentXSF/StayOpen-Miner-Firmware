@@ -138,6 +138,27 @@
     run on real hardware.</p>
   </div>
 
+  <div class="card stop">
+    <h2>Before you flash</h2>
+    <p>This is <strong>unofficial</strong> firmware, written by an independent
+    open-source miner. It is not affiliated with, endorsed by, or supported by
+    Hammer, and flashing it may void your warranty with them.</p>
+    <p>It comes with <strong>no warranty of any kind</strong> &mdash; see
+    sections 15 and 16 of the
+    <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/LICENSE">GPL-3.0 licence</a>.
+    You flash at your own risk. We are not responsible for damage caused by
+    running a device beyond its limits, or by the flashing process leaving it
+    unusable.</p>
+    <p>Flashing <strong>erases your configuration</strong>: WiFi credentials,
+    pool settings and payout address all go. Note them down first.</p>
+    <p>Two protections in this firmware are known <em>not</em> to work, and
+    both are documented rather than hidden:
+    <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/HARDWARE-SAFETY.md">HARDWARE-SAFETY.md</a>
+    lists what stands between a fault and a damaged board, what has actually
+    been tested, and what has not. Read it before you leave a miner
+    unattended.</p>
+  </div>
+
   <div class="cta">
     <esp-web-install-button id="installer" manifest="manifest-bc01.json">
       <button slot="activate" style="background:var(--gold);color:#050910;border:0;border-radius:999px;padding:.85rem 2rem;font-size:1rem;font-weight:700;cursor:pointer">
