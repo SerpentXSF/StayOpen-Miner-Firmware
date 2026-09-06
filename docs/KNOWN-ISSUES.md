@@ -306,6 +306,46 @@ It does not: `dist/stay-open-bc04-*-full.bin` carries `devicemodel=BC04` and
 `selftest=0` preloaded at `0xe000`. The advice was right for the wrong
 reason.)
 
+## Two stratum defects found beside another change (open)
+
+**Status: open.** Both pre-date the change that surfaced them and neither was
+introduced by it. Recorded here rather than folded into 2.0.22, because
+fixing unrelated memory bugs inside a release is how the last two regressions
+in this project got out.
+
+### `error_str` is never freed
+
+`components/stratum/stratum_api.c` allocates `error_str` on the rejection
+paths (around lines 224, 239, 245 and 260). Nothing in `main/` or
+`components/` frees it.
+
+In normal operation this is nothing -- a few bytes on the rare rejected
+share. It matters in exactly the situation the placeholder-address diagnostic
+exists for: a pool that refuses every `mining.authorize` on a sixty-second
+retry loop leaks steadily and forever. A share-rejection storm leaks faster.
+
+Fix by freeing it in the consumer after use, or by making ownership explicit
+rather than implied.
+
+### The settings handler can free a string stratum_task is using
+
+`main/http_server/http_server.c` (around lines 849-852) does
+`free(pool_user)` then `pool_user = strdup(...)`, from the HTTP task.
+`main/tasks/stratum_task.c` takes a raw pointer to that same string into a
+local `username` and holds it across the placeholder check and
+`STRATUM_V1_authorize`.
+
+A settings save landing exactly during a stratum reconnect can therefore free
+the string mid-use. The window is microseconds and needs a save to coincide
+with a reconnect, which is why nobody has hit it -- but it is a genuine
+use-after-free, not a theoretical one.
+
+Fix by `strdup`ing `username` after selecting it and freeing it after the
+authorize, or by taking `global_parameter_mutex` around the config strings.
+
+**Line numbers are as of 2.0.22 and will move.** Verify against current code
+before changing anything.
+
 ## The radio came up before the supply it runs on (fixed)
 
 **Status: fixed** in `main/main.c` and `main/device.c`. Affects the **BC01
