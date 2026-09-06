@@ -68,11 +68,30 @@ def released_tags():
 
 
 def main():
-    boards = [a.lower() for a in sys.argv[1:] if not a.startswith("-")]
+    argv = sys.argv[1:]
+    if "--notes-file" in argv:
+        i = argv.index("--notes-file")
+        del argv[i:i + 2]
+    boards = [a.lower() for a in argv if not a.startswith("-")]
     if not boards:
-        sys.exit("usage: ship.py <board> [board...] [--push] [--github]")
+        sys.exit("usage: ship.py <board> [board...] [--push] [--github] "
+                 "[--notes-file PATH]")
     push = "--push" in sys.argv
     github = "--github" in sys.argv
+
+    # Release notes default to a pointer at the repository. That is fine for a
+    # release whose changes are all in the log, and wrong for one that has
+    # something an owner needs to read before flashing -- a known-broken
+    # protection, a fault that needs the power pulled by hand. Those belong on
+    # the releases page, not one link away from it.
+    notes_file = None
+    if "--notes-file" in sys.argv:
+        i = sys.argv.index("--notes-file")
+        if i + 1 >= len(sys.argv):
+            sys.exit("--notes-file needs a path")
+        notes_file = sys.argv[i + 1]
+        if not os.path.isfile(notes_file):
+            sys.exit("no such notes file: %s" % notes_file)
 
     for board in boards:
         print("\n=== building %s ===" % board)
@@ -155,8 +174,12 @@ def main():
         print("\n=== github release %s ===" % tag)
         title = "Stay Open %s - %s" % (
             version, " and ".join(b.upper() for b in boards))
-        run(["gh", "release", "create", tag, "--title", title, "--notes",
-             "See the repository README and docs/ for what changed."]
+        if notes_file:
+            notes_arg = ["--notes-file", notes_file]
+        else:
+            notes_arg = ["--notes",
+                         "See the repository README and docs/ for what changed."]
+        run(["gh", "release", "create", tag, "--title", title] + notes_arg
             + [os.path.join("dist", a) for a in assets])
     elif push:
         print("\nFlasher pushed at %s. The GitHub release was NOT cut -- re-run "
