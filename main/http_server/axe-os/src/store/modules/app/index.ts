@@ -4,7 +4,7 @@ import { isDesktop } from "@/util/common";
 import { DEVICE_MODELS_INFO, ModelConfig } from "@/util/const.ts"; // [修改] 引入类型
 import { validData } from "@/util/utils.ts"; // [新增]
 import { MinerStatusData } from "@/api/type.ts";
-import { getMinerStatus, login } from "@/api";
+import { getHistory, getMinerStatus, login } from "@/api";
 
 // Max log lines
 const MAX_LOG_LINES = 5000;
@@ -40,6 +40,8 @@ export const useAppStore = defineStore("app", {
             hash: [0, 0]
         },
         chartResetting: false,
+        historyWindow: 3600,
+        historyLoading: false,
 
         // WebSocket Status
         ws: null,
@@ -130,6 +132,81 @@ export const useAppStore = defineStore("app", {
         onTopbarMenuClick() {
             this.onMenuMobileClose();
         },
+        /*
+         * Seed the chart from the miner instead of from this tab.
+         *
+         * These arrays used to hold only what the open page had watched, so
+         * the chart showed how long the tab had been up rather than what the
+         * device had been doing -- empty on every fresh load, and empty for a
+         * miner that had run all week with nobody looking. The firmware keeps
+         * a day of samples now; this replaces the series with them and lets
+         * the ten-second poll carry on appending to the end.
+         *
+         * Timestamps come from this clock, positioned by the age the device
+         * reports for its newest sample, so history and live points share one
+         * timebase even when the miner's clock is wrong or unset.
+         */
+        async loadHistory(windowSeconds?: number) {
+            const seconds = windowSeconds ?? this.historyWindow;
+            this.historyWindow = seconds;
+            this.historyLoading = true;
+            try {
+                const h: any = await getHistory(seconds);
+                const count = h?.count ?? 0;
+                const interval = (h?.interval || 30) * 1000;
+                const newest = Date.now() - (h?.age ?? 0) * 1000;
+
+                const labels: number[] = [];
+                const hash: number[] = [];
+                const temp: number[] = [];
+                const temp2: number[] = [];
+                const power: number[] = [];
+                const chart: any[] = [];
+
+                for (let i = 0; i < count; i++) {
+                    const t = newest - (count - 1 - i) * interval;
+                    const gh = h.hashrate?.[i];
+                    const offline = gh === null || gh === undefined;
+                    // The device reports GH/s; the live path pushes H/s.
+                    const hashrate = offline ? 0 : gh * 1000000000;
+                    labels.push(t);
+                    hash.push(hashrate);
+                    temp.push(h.temp?.[i] ?? 0);
+                    temp2.push(h.vrTemp?.[i] ?? 0);
+                    power.push(h.power?.[i] ?? 0);
+                    chart.push({ time: t, hashrate, temperature: h.temp?.[i] ?? 0, offline });
+                    if (!offline) {
+                        this.setDomains(hashrate, Math.max(h.temp?.[i] ?? 0, h.vrTemp?.[i] ?? 0));
+                    }
+                }
+
+                this.dataLabel = labels;
+                this.hashrateData = hash;
+                this.temperatureData = temp;
+                this.temperatureData2 = temp2;
+                this.powerData = power;
+                this.chartData = chart;
+                this.chartDataVersion = this.chartDataVersion + 1;
+                this.persistChartData();
+            } catch (e) {
+                // An older firmware has no such endpoint. The chart then does
+                // what it always did -- fills from this tab -- rather than
+                // showing an error for a feature the device predates.
+                console.log(e);
+            } finally {
+                this.historyLoading = false;
+            }
+        },
+
+        persistChartData() {
+            sessionStorage.setItem("dataLabel", JSON.stringify(this.dataLabel));
+            sessionStorage.setItem("hashrateData", JSON.stringify(this.hashrateData));
+            sessionStorage.setItem("temperatureData", JSON.stringify(this.temperatureData));
+            sessionStorage.setItem("temperatureData2", JSON.stringify(this.temperatureData2));
+            sessionStorage.setItem("powerData", JSON.stringify(this.powerData));
+            sessionStorage.setItem("chartData", JSON.stringify(this.chartData));
+        },
+
         resetChartData() {
             this.domainsOrigin.temp = [];
             this.domainsOrigin.hash = [];
@@ -269,7 +346,19 @@ export const useAppStore = defineStore("app", {
 
             this.chartDataVersion = this.chartDataVersion + 1;
 
-            if (this.hashrateData.length >= 7200) {
+            /*
+             * Drop what has fallen out of the selected window.
+             *
+             * The series is seeded from the device for the chosen range and
+             * then appended to every ten seconds, so without this a chart
+             * asked for one hour quietly becomes one hour plus however long
+             * the tab has been open. The old 7200-point cap stays as a
+             * backstop for the case where no window is set.
+             */
+            const cutoff = this.historyWindow ? (time - this.historyWindow * 1000) : 0;
+            while (this.dataLabel.length > 1 &&
+                   ((cutoff && this.dataLabel[0] < cutoff) ||
+                    this.hashrateData.length >= 7200)) {
                 this.dataLabel.shift();
                 this.hashrateData.shift();
                 this.temperatureData.shift();

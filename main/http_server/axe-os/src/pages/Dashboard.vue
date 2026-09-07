@@ -212,6 +212,18 @@ const efficiency = computed(() => {
   return (power / (hashrateG / 1000)).toFixed(1);
 });
 
+const HISTORY_RANGES = [
+  { label: '1H', seconds: 3600 },
+  { label: '4H', seconds: 14400 },
+  { label: '24H', seconds: 86400 },
+];
+
+const selectRange = async (seconds: number) => {
+  if (appStore.historyLoading) return;
+  await appStore.loadHistory(seconds);
+  renderChart();
+};
+
 const resetChartData = () => {
   if (appStore.chartResetting) {
     return;
@@ -460,6 +472,14 @@ watch(() => locale.value, () => {
 });
 
 onMounted(async () => {
+  /*
+   * Ask the miner what it has been doing before drawing anything. Without
+   * this the chart opens empty on every fresh page and fills only at the
+   * speed of the poll, which is what made it a record of the tab rather
+   * than of the device.
+   */
+  await appStore.loadHistory(appStore.historyWindow);
+
   themeObserver = new MutationObserver(() => {
     renderChart();
   });
@@ -700,6 +720,21 @@ const gaugeColor = computed(() => {
                       </a-menu>
                     </template>
                   </a-dropdown>
+                </div>
+
+                <div class="divider-vertical"></div>
+
+                <!-- The device keeps a day of samples; these ask it for a
+                     slice of them. Ranges longer than the miner has been up
+                     simply return what it has. -->
+                <div class="range-group">
+                  <button v-for="r in HISTORY_RANGES" :key="r.seconds"
+                          class="btn-range"
+                          :class="{ active: appStore.historyWindow === r.seconds }"
+                          :disabled="appStore.historyLoading"
+                          @click="selectRange(r.seconds)">
+                    {{ r.label }}
+                  </button>
                 </div>
 
                 <div class="divider-vertical"></div>
@@ -1425,6 +1460,34 @@ const gaugeColor = computed(() => {
 }
 
 /* [修改] Reset 按钮样式升级 */
+.range-group {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.btn-range {
+  border: 1px solid var(--surface-border);
+  background: var(--surface-ground);
+  color: var(--text-color-secondary);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  letter-spacing: 0.5px;
+}
+
+.btn-range.active {
+  border-color: var(--ant-primary-color);
+  color: var(--ant-primary-color);
+}
+
+.btn-range:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .btn-reset {
   border: 1px solid var(--surface-border);
   background: var(--surface-ground);

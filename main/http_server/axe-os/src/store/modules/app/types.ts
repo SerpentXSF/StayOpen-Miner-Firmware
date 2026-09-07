@@ -24,6 +24,8 @@ export interface AppState {
   domainsOrigin: DomainData;
   domainsDst: DomainData;
   chartResetting: boolean;
+  historyWindow: number;
+  historyLoading: boolean;
 
   // WebSocket Global State
   ws: WebSocket | null;

@@ -20,7 +20,8 @@ enum URL {
     getTheme = "/api/theme",
     setTheme = "/api/theme",
     downloadLog = "/api/system/log/download",
-    login = "/api/system/login"
+    login = "/api/system/login",
+    getHistory = "/api/system/history"
 }
 
 export const wifiInfoList =
@@ -234,6 +235,16 @@ const getMinerStatus = async (baseUrl: string, data?: {}) => {
     return get<MinerStatusData>({ baseURL: baseUrl, url: URL.getMinerStatus, data });
 }
 
+// Since-boot history for the dashboard chart, averaged by the device into the
+// number of points we say we can draw.
+const getHistory = async (windowSeconds: number, points = 180) => {
+    if (USE_MOCK) {
+        return Promise.resolve({ interval: 30, age: 0, count: 0, span: 0,
+                                 hashrate: [], temp: [], vrTemp: [], power: [] });
+    }
+    return get<any>({ url: `${URL.getHistory}?window=${windowSeconds}&points=${points}` });
+}
+
 const restartMiner = async (baseUrl: string, data?: {}) => {
     if (USE_MOCK) {
         console.log(`[Mock] restartMiner`);
@@ -358,6 +369,7 @@ const login = async (password: string) => {
 export {
     URL,
     getMinerStatus,
+    getHistory,
     restartMiner,
     updateSystem,
     setAutotuneStatus,
