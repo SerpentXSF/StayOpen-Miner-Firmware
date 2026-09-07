@@ -9,6 +9,7 @@ set(SRCS
     "device.c"
     "api_helper.c"
     "statistic.c"
+    "history.c"
     "network.c"
     "./http_server/http_server.c"
     "./http_server/api_auth.c"

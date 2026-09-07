@@ -31,6 +31,7 @@
 
 #include "cJSON.h"
 #include "global_state.h"
+#include "history.h"
 #include "nvs_config.h"
 #include "dual_clamp.h"
 #include "api_auth.h"
@@ -1566,6 +1567,105 @@ float roundToPrecision(float value, int precision) {
 }
 
 /* Simple handler for getting system handler */
+
+/*
+ * Since-boot history for the dashboard chart.
+ *
+ * GET /api/system/history?window=<seconds>&points=<n>
+ *
+ * The caller says how far back it wants and how many points it can draw; the
+ * device averages its stored samples into that many buckets. Timestamps are
+ * deliberately absent. The miner's clock depends on NTP having worked, and a
+ * chart that mixes a device clock with a browser clock draws its live points
+ * at an offset from its history. `age` -- how long ago the newest returned
+ * point was taken -- lets the browser place the whole series against its own
+ * clock, which is the only one it can plot live points against anyway.
+ */
+static esp_err_t GET_system_history(httpd_req_t * req)
+{
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    if (api_auth_require(req) != ESP_OK) {
+        return ESP_OK; /* 401 already sent */
+    }
+
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    uint32_t window = HISTORY_RETENTION_SECONDS;
+    uint32_t points = 180;
+
+    char query[96];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        char value[16];
+        if (httpd_query_key_value(query, "window", value, sizeof(value)) == ESP_OK) {
+            uint32_t asked = (uint32_t)strtoul(value, NULL, 10);
+            if (asked > 0 && asked < window) {
+                window = asked;
+            }
+        }
+        if (httpd_query_key_value(query, "points", value, sizeof(value)) == ESP_OK) {
+            uint32_t asked = (uint32_t)strtoul(value, NULL, 10);
+            if (asked > 0) {
+                points = (asked > 720) ? 720 : asked;
+            }
+        }
+    }
+
+    history_sample_t * samples = calloc(points, sizeof(history_sample_t));
+    if (samples == NULL) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    uint32_t interval = HISTORY_INTERVAL_SECONDS;
+    uint32_t count = history_query(window, points, samples, &interval);
+
+    cJSON * root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "interval", interval);
+    cJSON_AddNumberToObject(root, "sampleInterval", HISTORY_INTERVAL_SECONDS);
+    cJSON_AddNumberToObject(root, "retention", HISTORY_RETENTION_SECONDS);
+    cJSON_AddNumberToObject(root, "span", history_span_seconds());
+    cJSON_AddNumberToObject(root, "age", history_age_seconds());
+    cJSON_AddNumberToObject(root, "count", count);
+
+    cJSON * hashrate = cJSON_AddArrayToObject(root, "hashrate");
+    cJSON * temp     = cJSON_AddArrayToObject(root, "temp");
+    cJSON * vr       = cJSON_AddArrayToObject(root, "vrTemp");
+    cJSON * power    = cJSON_AddArrayToObject(root, "power");
+
+    for (uint32_t i = 0; i < count; i++) {
+        /* An empty bucket is a gap, not a zero: the chart should break the
+         * line there rather than draw a dive to the floor that never
+         * happened. null is how it says so. */
+        if (samples[i].valid) {
+            cJSON_AddItemToArray(hashrate, cJSON_CreateNumber(samples[i].hashrate_gh));
+            cJSON_AddItemToArray(temp,     cJSON_CreateNumber(samples[i].board_c));
+            cJSON_AddItemToArray(vr,       cJSON_CreateNumber(samples[i].vr_c));
+            cJSON_AddItemToArray(power,    cJSON_CreateNumber(samples[i].power_dw / 10.0));
+        } else {
+            cJSON_AddItemToArray(hashrate, cJSON_CreateNull());
+            cJSON_AddItemToArray(temp,     cJSON_CreateNull());
+            cJSON_AddItemToArray(vr,       cJSON_CreateNull());
+            cJSON_AddItemToArray(power,    cJSON_CreateNull());
+        }
+    }
+
+    free(samples);
+
+    httpd_resp_set_type(req, "application/json");
+    const char * body = cJSON_PrintUnformatted(root);
+    httpd_resp_sendstr(req, body);
+    free((void *)body);
+    cJSON_Delete(root);
+
+    return ESP_OK;
+}
+
 static esp_err_t GET_system_info(httpd_req_t * req)
 {
     if (is_network_allowed(req) != ESP_OK) {
@@ -3302,6 +3402,14 @@ esp_err_t start_rest_server(void * pvParameters)
         .user_ctx = NULL,
     };
     httpd_register_uri_handler(server, &system_options_uri);
+
+    httpd_uri_t system_history_uri = {
+        .uri = "/api/system/history",
+        .method = HTTP_GET,
+        .handler = GET_system_history,
+        .user_ctx = NULL,
+    };
+    httpd_register_uri_handler(server, &system_history_uri);
 
 	/* URI handler for OTA */
     httpd_uri_t update_post_ota_firmware = {
