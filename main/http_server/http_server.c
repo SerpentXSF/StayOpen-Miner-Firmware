@@ -283,6 +283,24 @@ static char WWWVersion[32];
 /* Handler for WiFi scan endpoint */
 static esp_err_t GET_wifi_scan(httpd_req_t *req)
 {
+    /*
+     * This had neither gate, alone among the endpoints that do something.
+     *
+     * Unauthenticated, it handed anyone on the network the list of nearby
+     * SSIDs -- a map of the owner's RF neighbourhood, and by extension a
+     * decent guess at where the miner is. Being a plain GET with no custom
+     * header, a web page open in the owner's browser could also fire it
+     * cross-origin: the reply is not readable there, but the scan still runs
+     * on the radio the miner needs for its pool connection.
+     */
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    if (api_auth_require(req) != ESP_OK) {
+        return ESP_OK; /* 401 already sent */
+    }
+
     httpd_resp_set_type(req, "application/json");
     
     // Give some time for the connected flag to take effect

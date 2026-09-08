@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "nvs_config.h"
 #include "cJSON.h"
+#include "api_auth.h"
 
 //static const char *TAG = "theme_api";
 
@@ -82,6 +83,24 @@ static esp_err_t theme_get_handler(httpd_req_t *req)
 // POST /api/theme handler
 static esp_err_t theme_post_handler(httpd_req_t *req)
 {
+    /*
+     * This wrote NVS with no authentication of any kind.
+     *
+     * A JSON body sent as text/plain is a CORS "simple request" and needs no
+     * preflight, so any page open in the owner's browser could rewrite the
+     * stored theme without credentials. That is not only cosmetic: the theme
+     * drives the accent colours, and this interface has a documented history
+     * of colour changes rendering warnings unreadable -- so an attacker-set
+     * theme is a way to hide the alerts that report a fault.
+     *
+     * The GET is deliberately left open. The interface reads the theme before
+     * anyone has signed in, and the only thing it discloses is which colours
+     * the owner likes.
+     */
+    if (api_auth_require(req) != ESP_OK) {
+        return ESP_OK; /* 401 already sent */
+    }
+
     set_cors_headers(req);
 
     // Read POST data
