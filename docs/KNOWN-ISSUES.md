@@ -527,20 +527,34 @@ out unusable. What reaches the page is whatever its fallback produces, which is
 usually close to the surrounding background.
 
 This is not a styling preference. It is a whole class of defects, and it has
-produced at least three:
+produced at least four:
 
 - the selected card tab rendered as an empty box, because Ant Design paints the
   label on an inner `.ant-tabs-tab-btn` and gave it a colour close to the tab's
   own background — the text was present and invisible
 - an enabled switch looked identical to a disabled one, so there was no way to
   see whether dual mining was on
+- the unofficial-firmware notice in the Firmware Update card rendered as an
+  empty yellow box: `colorText` reached `.ant-alert-message` as near-white
+  and Ant painted the warning surface from its own static palette, giving
+  #f5f7fb on #fffbe6, a contrast ratio of 1.03. Found in September 2026 by
+  looking at the page, a release after the notice was added and verified
+  present in the compiled asset -- which was never the same question as
+  whether it could be read
 - anything else derived from the accent colour is suspect until checked
 
-**Current state:** the three known cases are corrected in
+**Current state:** the four known cases are corrected in
 `main/http_server/axe-os/src/styles/layout/_antd-fixes.scss`, which sets the
 affected properties in ordinary CSS where the variables resolve correctly. That
 file is a patch over the cause, not a fix for it, and it will grow every time
 another component turns out to derive a colour the same way.
+
+The alert rule there is written for `.ant-alert-warning` and
+`.ant-alert-error` as a whole rather than for the notice that exposed it.
+Seven other alerts share the markup, and every one of them is rendered only
+on a fault -- an unreachable miner, a failed save, a pool that will not
+connect -- so they were unreadable exactly when they had something to report,
+on screens nobody looks at while the miner is healthy.
 
 **The real fix** is to stop passing custom properties into the token block and
 give Ant Design real colour values, driven from the same source as the CSS
@@ -582,3 +596,106 @@ rather than being done in passing.
 Found while checking that the corrections in `_antd-fixes.scss` had reached the
 device: the same rules appeared twice in the built bundle, once with a scope
 attribute and once without.
+
+## Published binaries carried the blob this repository says they do not (fixed)
+
+**Where:** `components/asic/CMakeLists.txt`, `components/asic/asic.c`.
+
+`lt0051.c` was compiled into every build, and it is the only caller of
+`components/a/liba.a`, a prebuilt archive with no source. No BC board ever
+runs it — the dispatch arms it sits behind are chosen by device model, and no
+BC board reports an LT0051 part — but a linker resolves references, not
+reachable calls. Compiling the file was enough. Eighty-two sections of that
+archive sat at live flash addresses in every published BC01 and BC04 image
+from 2.0.4 to 2.0.25, about 20 KB of it.
+
+Three documents said the opposite: `README.md`, `docs/ASIC-ABSTRACTION.md`
+and `docs/FINDINGS.md` all described the BM1370 path as blob-free. So the
+releases conveyed object code with no corresponding source — the same defect
+this project raises against the vendor — while the repository asserted they
+did not.
+
+Found by an external review of the link map in September 2026. Not by us, and
+not by any of the verification this project had been doing, because none of it
+looked at what the linker actually placed.
+
+**The fix:** the driver is behind `CONFIG_STAYOPEN_ASIC_LT0051`, off by
+default; the dispatch arms resolve to stubs when it is off. Component `a`
+stays in `REQUIRES` because `common.c` includes a header of `#define`s from
+it, which contributes no code.
+
+**How it was checked:** the link map, not the source. Before, 82 `liba.a`
+contributions at live addresses; after, one `LOAD` line and no member
+extracted, and the image 20,608 bytes smaller. Anyone changing this should
+re-read the map rather than trusting the Kconfig default.
+
+## An eleventh reject reason corrupted the system module (fixed)
+
+**Where:** `main/system.c`, the reject-reason tally.
+
+The bound was `sizeof(module->rejected_reason_stats)` on an array of ten
+68-byte structs, so the limit read 680 rather than 10. The eleventh distinct
+reject string wrote past the end, and the field immediately after the array is
+the count itself: it took the first four bytes of the message — around half a
+billion — and the `qsort` below then ran over that many elements.
+
+It needed eleven *distinct* strings in one session, which sounds unlikely
+until you meet a pool that puts the job id in the reject reason, at which
+point every stale share is a new string and this is a matter of time rather
+than of luck.
+
+## Two endpoints answered anyone who asked (fixed)
+
+**Where:** `main/http_server/http_server.c` (`GET_wifi_scan`),
+`main/http_server/theme_api.c`.
+
+Every other endpoint that does something opens with `is_network_allowed()`
+and `api_auth_require()`. These two had neither.
+
+`GET /api/system/wifi/scan` returned the list of nearby SSIDs to anyone on the
+network — a map of the owner's RF neighbourhood — and being a plain GET, a web
+page open in the owner's browser could start a scan cross-origin on the radio
+the miner needs for its pool connection.
+
+`POST /api/theme` wrote NVS with no authentication at all. A JSON body sent as
+`text/plain` is a CORS simple request and needs no preflight, so any page
+could rewrite the stored theme without credentials. Given the entry above —
+accent colours rendering alerts unreadable — that is a way to hide the
+warnings that report a fault, not merely a cosmetic nuisance.
+
+Both now require a session. The theme GET is deliberately left open: the
+interface reads it before anyone signs in, and it discloses only which colours
+the owner likes.
+
+## The fan-fault protection cannot fire (open)
+
+**Where:** `main/tasks/health_maintennance.c`, `components/bc_hal/pwm_fan.c`.
+
+`force_fan_check` is declared false and never assigned, so the check never
+runs. It is worse than that: `check_fan_ok()` is passed `max_fan_speed = 0`,
+and both of its comparisons are against that value, so the function returns
+true for any RPM including zero. Enabling the flag on its own would change
+nothing.
+
+On a BC04, `EMC2302_get_fan_speed()` also discards the return values of its
+two channel reads and reports `ESP_OK` with 0 RPM when the controller is
+absent, so a dead fan controller and a stopped fan are indistinguishable.
+
+The over-temperature trip and the unreadable-sensor trip are the two thermal
+protections known to work. Do not treat a working fan as something the
+firmware is checking for you.
+
+## A BC04 cannot de-energise its own hashboard once I2C is gone (open)
+
+**Where:** `main/device.c`, `power_off_hashboard()`.
+
+The regulator sits on the I2C bus. With the bus dead there is no way to
+command the output off, and `power_off_hashboard()` returns `ESP_OK`
+regardless of whether `TPS546_set_vout(0)` succeeded, so no caller can even
+tell.
+
+The BC01 family has a second lever the firmware does not use as a fallback —
+closing the USB-PD gate would cut VBUS behind it — but the BC04 has no gate.
+
+A miner showing an empty bus scan, a board temperature of −60 °C, or a reboot
+every four minutes should have its power removed by hand.
