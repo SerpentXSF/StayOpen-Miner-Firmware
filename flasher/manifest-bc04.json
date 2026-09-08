@@ -1,0 +1,17 @@
+{
+  "name": "SerpentX / Stay Open (BC04)",
+  "version": "2.0.27",
+  "home_assistant_domain": null,
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "stay-open-bc04-2.0.27-full.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

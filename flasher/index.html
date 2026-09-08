@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SerpentX | Stay Open — flash a Hammer miner</title>
+<link rel="icon" href="favicon.ico" sizes="any">
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+  :root{
+    --bg:#050910; --card:#050b16; --line:#1f2937;
+    --fg:#f5f7fb; --dim:#9ca3af; --gold:#ffb81c; --warn:#ff4d5e;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font:15px/1.6 Inter,-apple-system,Segoe UI,Roboto,sans-serif;
+    padding:2.5rem 1.25rem 4rem;
+  }
+  main{max-width:720px;margin:0 auto}
+  header{text-align:center;margin-bottom:2.25rem}
+  .wordmark{font-size:1.05rem;font-weight:700;letter-spacing:.06em;margin-bottom:.5rem}
+  header img{width:180px;max-width:60%;height:auto;display:block;margin:0 auto}
+  h1{font-size:1.35rem;margin:2rem 0 .5rem}
+  h2{font-size:1.05rem;margin:2rem 0 .5rem}
+  p{color:var(--dim)}
+  a{color:var(--gold)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.25rem 1.4rem;margin:1.25rem 0}
+  .stop{border-color:var(--warn)}
+  .stop h2{color:var(--warn);margin-top:0}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.86em}
+  pre{background:#020610;border:1px solid var(--line);border-radius:8px;padding:.8rem 1rem;overflow-x:auto;color:var(--fg)}
+  table{width:100%;border-collapse:collapse;margin-top:.5rem}
+  td,th{text-align:left;padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--fg);font-weight:600}
+  td{color:var(--dim)}
+  .cta{text-align:center;margin:2rem 0 .5rem}
+  .device-badge{
+    display:inline-block;background:var(--gold);color:#050910;
+    font-weight:700;font-size:.82rem;letter-spacing:.04em;
+    padding:.35rem 1rem;border-radius:999px;margin-bottom:1rem;
+  }
+  .note{font-size:.85rem;color:var(--dim);text-align:center}
+  .picker{display:flex;gap:.6rem;justify-content:center;margin:0 0 1.25rem;flex-wrap:wrap}
+  .picker button{background:var(--card);color:var(--fg);border:1px solid var(--line);
+    border-radius:999px;padding:.55rem 1.4rem;font:inherit;font-weight:600;cursor:pointer}
+  .picker button[aria-pressed="true"]{background:var(--gold);color:#050910;border-color:var(--gold)}
+  .board-only{display:none}
+  .board-only.on{display:block}
+  footer{margin-top:3rem;border-top:1px solid var(--line);padding-top:1.25rem;font-size:.85rem;color:var(--dim);text-align:center}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="wordmark">Stay Open</div>
+    <img src="serpentx.png" alt="SerpentX">
+  </header>
+
+  <div class="picker" role="group" aria-label="Choose your board">
+    <button type="button" data-board="bc01" aria-pressed="true">Hammer BC01</button>
+    <button type="button" data-board="bc04" aria-pressed="false">Hammer BC04</button>
+  </div>
+
+  <div class="device-badge">Flashing a <strong id="badge-board">Hammer BC01</strong></div>
+
+  <div class="board-only on" data-board="bc01">
+    <p>Open firmware for the <strong>Hammer BC01</strong>. Measured on hardware:
+    1.6&ndash;1.7&nbsp;TH/s at 750&nbsp;MHz, 24&nbsp;W, around 54&nbsp;&deg;C, no
+    hardware errors.</p>
+
+    <div class="card stop">
+      <h2>Check your device before you flash</h2>
+      <p>Retail BC01 units ship with Secure Boot enforced and both spare key
+      slots revoked. On one of those this firmware <strong>will not boot and
+      cannot be recovered</strong> &mdash; eFuses are permanent and USB access
+      does not help. Ask the device first:</p>
+      <pre>esptool.py --port COM3 get_security_info</pre>
+      <p>If <code>secure_boot_en</code> is set, stop. The ESP32-S3 is a socketed
+      LilyGO T-Display-S3, so fitting a fresh module runs this firmware with no
+      exploit and leaves your original untouched &mdash; see
+      <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/SECURE-BOOT.md">SECURE-BOOT.md</a> and
+      <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/HARDWARE-SWAP.md">HARDWARE-SWAP.md</a>.</p>
+    </div>
+  </div>
+
+  <div class="board-only" data-board="bc04">
+    <p>Open firmware for the <strong>Hammer BC04</strong>, four BM1370s in
+    series. Measured on hardware: <strong>6.1&nbsp;TH/s at 750&nbsp;MHz</strong>,
+    99&nbsp;W, 65&nbsp;&deg;C, no hardware errors &mdash; or 5.1&nbsp;TH/s at
+    72&nbsp;W if you would rather have the efficiency.</p>
+
+    <div class="card">
+      <h2 style="margin-top:0">Ethernet and WiFi both work</h2>
+      <p>Ethernet on a BC04 had to be started <em>after</em> the hashboard is
+      powered rather than before it &mdash; a controller already running when
+      the core rail steps up stops answering about 70&nbsp;ms later and never
+      recovers. The firmware now starts it at the right point, and a BC04
+      hashing at 750&nbsp;MHz serves its own interface over Ethernet with no
+      errors.</p>
+      <p>Confirmed both ways: with WiFi alongside, and with WiFi switched off
+      entirely &mdash; which is what this image is until you set it up. On
+      Ethernet alone it mined at 6.2&nbsp;TH/s with no rejected shares and no
+      hardware errors.</p>
+      <p>So <strong>plug in a cable and it works</strong>. If you would rather
+      set up over WiFi, the miner also raises an access point named
+      <code>HAMMER_xxxx</code> on first boot.</p>
+      <p><a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/KNOWN-ISSUES.md">KNOWN-ISSUES.md</a>
+      has the measurements, including the four wrong theories that came first.</p>
+    </div>
+
+    <div class="card stop">
+      <h2>We have not measured a retail BC04's eFuses</h2>
+      <p>The BC01 ships with Secure Boot enforced, and this firmware cannot boot
+      on a locked module. <strong>Whether a retail BC04 is locked the same way
+      is unknown to us</strong> &mdash; the BC04 tested here ran on a
+      replacement LilyGO T-Display-S3, so its original module was never read.
+      Do not assume it is open. Ask the device:</p>
+      <pre>esptool.py --port COM3 get_security_info</pre>
+      <p>If <code>secure_boot_en</code> is set, stop and read
+      <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/SECURE-BOOT.md">SECURE-BOOT.md</a>.
+      The module is socketed on this board too.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">Not for BC02, BC06 or BC08</h2>
+    <p>The board model is fixed when the firmware is compiled, and the boards do
+    not share a pinout. The BC01 and BC04 have their ASIC UART lines
+    <strong>swapped</strong> &mdash; TX&nbsp;18/RX&nbsp;17 against
+    TX&nbsp;17/RX&nbsp;18 &mdash; so a BC01 image on a BC04 crosses transmit and
+    receive. Pick the wrong one above and the miner boots, the web UI works, the
+    chip is even detected, and it never returns a single share. The firmware
+    catches that case now and says so on screen rather than looking like broken
+    hardware, but the flash is still wasted.</p>
+    <p>The other models are supported in the source and can be built from it;
+    only the BC01 and BC04 are published here, because only those two have been
+    run on real hardware.</p>
+  </div>
+
+  <div class="card stop">
+    <h2>Before you flash</h2>
+    <p>This is <strong>unofficial</strong> firmware, written by an independent
+    open-source miner. It is not affiliated with, endorsed by, or supported by
+    Hammer, and flashing it may void your warranty with them.</p>
+    <p>It comes with <strong>no warranty of any kind</strong> &mdash; see
+    sections 15 and 16 of the
+    <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/LICENSE">GPL-3.0 licence</a>.
+    You flash at your own risk. We are not responsible for damage caused by
+    running a device beyond its limits, or by the flashing process leaving it
+    unusable.</p>
+    <p>Flashing <strong>erases your configuration</strong>: WiFi credentials,
+    pool settings and payout address all go. Note them down first.</p>
+    <p>Two protections in this firmware are known <em>not</em> to work, and
+    both are documented rather than hidden:
+    <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/HARDWARE-SAFETY.md">HARDWARE-SAFETY.md</a>
+    lists what stands between a fault and a damaged board, what has actually
+    been tested, and what has not. Read it before you leave a miner
+    unattended.</p>
+  </div>
+
+  <div class="cta">
+    <esp-web-install-button id="installer" manifest="manifest-bc01.json">
+      <button slot="activate" style="background:var(--gold);color:#050910;border:0;border-radius:999px;padding:.85rem 2rem;font-size:1rem;font-weight:700;cursor:pointer">
+        Connect and flash
+      </button>
+      <span slot="unsupported">
+        This browser cannot talk to serial devices. Use Chrome or Edge on a
+        desktop, or flash with <code>esptool</code> instead.
+      </span>
+      <span slot="not-allowed">
+        Serial access needs a secure context &mdash; open this page over HTTPS.
+      </span>
+    </esp-web-install-button>
+    <p class="note">Chrome or Edge on desktop. Connect the miner's ESP32-S3 by
+    USB&#8209;C first.</p>
+  </div>
+
+  <h2>Nothing here mines to us</h2>
+  <p>The image carries no credentials. Its settings partition is built from the
+  public template, so a freshly flashed miner starts its own WiFi access point
+  and waits for you to enter your network, your pool and
+  <strong>your own payout address</strong>. Set an API password while you are
+  there — leaving it blank disables authentication, which is how the vendor
+  firmware shipped.</p>
+
+  <h2>Or do it yourself</h2>
+  <table>
+    <tr><th>Build from source</th>
+        <td>ESP-IDF 5.5.1.
+        <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware">Full source</a>,
+        GPL-3.0.</td></tr>
+    <tr><th>Flash with esptool</th>
+        <td><code>esptool.py --chip esp32s3 write_flash 0x0 <span id="esptool-file">stay-open-bc01-full.bin</span></code></td></tr>
+    <tr><th>Update over the air</th>
+        <td>Upload the <code>-ota.bin</code> through the miner's own update
+        page. Keeps your settings.</td></tr>
+  </table>
+  <p>Every file, with digests, is on the
+  <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/releases/latest">releases page</a>.</p>
+
+  <footer>
+    GPL-3.0. This firmware descends from
+    <a href="https://github.com/valerio-vaccaro/HAN">HAN</a>,
+    <a href="https://github.com/BitMaker-hub/NerdMiner_v2">NerdMiner</a>,
+    <a href="https://github.com/bitaxeorg/ESP-Miner">ESP-Miner</a>
+    and the work of Open Source Miners United —
+    <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/CREDITS.md">who they are</a>.
+  </footer>
+</main>
+<script>
+  /* One page, one install button, manifest swapped per board -- esp-web-tools
+     reads the attribute when the button is pressed, so setting it here is
+     enough and the page does not have to be duplicated. */
+  const installer = document.getElementById('installer');
+  const badge = document.getElementById('badge-board');
+  const esptoolFile = document.getElementById('esptool-file');
+  const names = { bc01: 'Hammer BC01', bc04: 'Hammer BC04' };
+
+  async function pick(board) {
+    document.querySelectorAll('.picker button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.board === board));
+    });
+    document.querySelectorAll('.board-only').forEach(function (el) {
+      el.classList.toggle('on', el.dataset.board === board);
+    });
+    badge.textContent = names[board];
+    installer.setAttribute('manifest', 'manifest-' + board + '.json');
+
+    /* Name the artifact that is actually published rather than a hardcoded
+       filename, so the manual instructions cannot drift from the release. */
+    try {
+      const r = await fetch('manifest-' + board + '.json', { cache: 'no-store' });
+      const m = await r.json();
+      const path = m.builds && m.builds[0] && m.builds[0].parts[0].path;
+      if (path) { esptoolFile.textContent = path; }
+    } catch (e) { /* leave the fallback text */ }
+  }
+
+  document.querySelectorAll('.picker button').forEach(function (b) {
+    b.addEventListener('click', function () { pick(b.dataset.board); });
+  });
+  pick('bc01');
+</script>
+</body>
+</html>
