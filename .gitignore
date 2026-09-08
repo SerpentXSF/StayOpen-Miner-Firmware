@@ -54,3 +54,10 @@ __pycache__/
 # compromised and change it on the device rather than only deleting it.
 .api-password.txt
 *api-password*
+
+# Editor and assistant tooling. .claude/launch.json is a dev-server config
+# with nothing private in it, but the directory name is the only place this
+# public repository names the tools it was written with, and the project
+# keeps that out of its commits, code and files. It stays on disk and keeps
+# working; it just is not published.
+.claude/
