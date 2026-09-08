@@ -110,12 +110,6 @@ def main():
         print("\n=== packaging %s ===" % board)
         run([sys.executable, os.path.join("tools", "make_release.py"), board])
 
-    print("\n=== flasher ===")
-    args = [sys.executable, os.path.join("tools", "publish_flasher.py")] + boards
-    if push:
-        args.append("--push")
-    run(args)
-
     tag = "v" + version
     if github:
         """
@@ -171,6 +165,20 @@ def main():
                 sys.exit("no %s artifacts in dist/ -- refusing to cut a release "
                          "that omits a board it claims to cover" % board)
 
+    # Nothing leaves this machine until every check above has passed.
+    #
+    # The flasher used to be pushed before those checks ran, so a guard
+    # doing its job still left gh-pages advertising a version with no
+    # release behind it -- the same drift the checks exist to prevent, in
+    # the other direction. dist/ is filled by the packaging step, so the
+    # asset check has everything it needs by this point.
+    print("\n=== flasher ===")
+    args = [sys.executable, os.path.join("tools", "publish_flasher.py")] + boards
+    if push:
+        args.append("--push")
+    run(args)
+
+    if github:
         print("\n=== github release %s ===" % tag)
         title = "Stay Open %s - %s" % (
             version, " and ".join(b.upper() for b in boards))
