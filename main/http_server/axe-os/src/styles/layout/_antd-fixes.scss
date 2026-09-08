@@ -170,3 +170,78 @@
     color: #cf1322;
   }
 }
+
+/*
+ * Tags with a semantic colour, same cause as the alerts above.
+ *
+ * `color="warning"` makes Ant paint its static warning surface, #fffbe6,
+ * while `colorText` arrives as var(--text-color) and is near-white in the
+ * dark themes. Only two tags in the interface use one, and both mark an
+ * available update in the Firmware Update card -- so, like the alerts, they
+ * are on screen only at the moment they have something to say.
+ *
+ * The distinction worth remembering: components that take their surface from
+ * colorBgBase follow the theme correctly, which is why the notification
+ * toasts have always been readable. It is the ones with their own static
+ * semantic palettes that need both halves stated here.
+ */
+/* Matched at two classes and forced, for the reason spelled out on the
+   select placeholder below: Ant wraps its own selectors in :where(), which
+   scores nothing, and injects them after this sheet, so anything less than
+   this loses or draws. Unlike the alerts, these could not be checked on
+   screen -- the only two tags in the interface appear when an update is
+   available, which was not the case while this was written. Worth a look the
+   next time one shows. */
+.ant-tag.ant-tag-warning {
+  background-color: #fffbe6 !important;
+  border-color: #ffe58f !important;
+  color: #d46b08 !important;
+}
+
+.ant-tag.ant-tag-error {
+  background-color: #fff2f0 !important;
+  border-color: #ffccc7 !important;
+  color: #cf1322 !important;
+}
+
+.ant-tag.ant-tag-success {
+  background-color: #f6ffed !important;
+  border-color: #b7eb8f !important;
+  color: #389e0d !important;
+}
+
+/*
+ * The select placeholder was black on a black interface.
+ *
+ * A different failure from the alerts above, and worth telling apart. The
+ * alerts break because Ant paints a light surface of its own and our near-
+ * white text token lands on it. This one breaks the other way: Ant leaves
+ * `.ant-select-selection-placeholder` at its stock rgba(0, 0, 0, 0.25),
+ * meant for a white form on a white page, and nothing in the theme block
+ * ever reaches it. On this interface that is black at quarter opacity over
+ * #050910 -- a contrast ratio of 1.05, measured on the running miner.
+ *
+ * The visible symptom was the Quick Select box on the pool page looking
+ * empty, so "select a recommended solo pool" read as a control with nothing
+ * in it rather than one waiting to be used.
+ *
+ * Input placeholders already resolve to a usable grey; only the select was
+ * left behind. --text-color-secondary is the token the rest of the interface
+ * uses for exactly this weight of text, and it follows the theme, so this
+ * needs no light-mode counterpart.
+ */
+.ant-select .ant-select-selection-placeholder {
+  /*
+   * Specificity, and why !important earns its place here.
+   *
+   * Ant writes this as
+   *   :where(.css-1enm8c).ant-select .ant-select-selection-placeholder
+   * and :where() contributes nothing, so the rule counts as two classes. A
+   * single-class override loses to it outright -- which is what happened on
+   * the first attempt: the stylesheet shipped, the rule was in the file, and
+   * the placeholder stayed black. Matching at two classes only draws level,
+   * and Ant injects its styles at runtime after this sheet, so a draw still
+   * goes to Ant.
+   */
+  color: var(--text-color-secondary) !important;
+}
