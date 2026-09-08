@@ -15,6 +15,12 @@
 
 esp_err_t read_hash_board_temperature(GlobalState *GLOBAL_STATE);
 int       read_power_temp(void);
+
+/*
+ * The highest core voltage this model may be commanded to, in hundredths of
+ * a volt. Ask before setting a voltage from anywhere.
+ */
+uint16_t  device_core_voltage_ceiling(GlobalState * GLOBAL_STATE);
 esp_err_t read_power_information(GlobalState *GLOBAL_STATE);
 
 /* Thermal sensor addresses for a device model. `fallback` is the model to

@@ -956,7 +956,17 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
 
     if ((item = cJSON_GetObjectItem(root, "asicovervdef")) != NULL) 
     {
-        if((item->valueint >= GLOBAL_STATE->asic_vol_min) && (item->valueint <= GLOBAL_STATE->asic_vol_max))
+        /*
+         * Against the model's ceiling, not against TPS546_VOUT_MAX.
+         *
+         * On a BC04 those differ -- 4.80 V against 5.20 -- and all four of the
+         * voltage fields here checked the wrong one, so a single request could
+         * command four BM1370s in series 8% over the cap the vendor put on
+         * them, and store it as the value the miner comes back up on. The cap
+         * was only ever applied to the startup default, in nvs_device.c.
+         */
+        if((item->valueint >= GLOBAL_STATE->asic_vol_min) &&
+           (item->valueint <= device_core_voltage_ceiling(GLOBAL_STATE)))
         {
             nvs_config_set_u16(NVS_CONFIG_ASIC_VOLTAGE_DEF, item->valueint);
         }
@@ -968,7 +978,8 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
 
     if ((item = cJSON_GetObjectItem(root, "coreVoltage")) != NULL && item->valueint > 0) {
         
-        if((item->valueint >= GLOBAL_STATE->asic_vol_min) && (item->valueint <= GLOBAL_STATE->asic_vol_max))
+        if((item->valueint >= GLOBAL_STATE->asic_vol_min) &&
+           (item->valueint <= device_core_voltage_ceiling(GLOBAL_STATE)))
         {
             nvs_config_set_u16(NVS_CONFIG_ASIC_VOLTAGE, item->valueint);
 
@@ -1030,7 +1041,8 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     }
     if ((item = cJSON_GetObjectItem(root, "coreNormalVoltage")) != NULL && item->valueint > 0) {
 
-        if((item->valueint >= GLOBAL_STATE->asic_vol_min) && (item->valueint <= GLOBAL_STATE->asic_vol_max))
+        if((item->valueint >= GLOBAL_STATE->asic_vol_min) &&
+           (item->valueint <= device_core_voltage_ceiling(GLOBAL_STATE)))
         {
             nvs_config_set_u16(NVS_CONFIG_ASIC_NORMAL_VOLTAGE, item->valueint);
 
@@ -1067,7 +1079,8 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     }
     if ((item = cJSON_GetObjectItem(root, "coreOverVoltage")) != NULL && item->valueint > 0) {
 
-        if((item->valueint >= GLOBAL_STATE->asic_vol_min) && (item->valueint <= GLOBAL_STATE->asic_vol_max))
+        if((item->valueint >= GLOBAL_STATE->asic_vol_min) &&
+           (item->valueint <= device_core_voltage_ceiling(GLOBAL_STATE)))
         {
             nvs_config_set_u16(NVS_CONFIG_ASIC_OVER_VOLTAGE, item->valueint);
 

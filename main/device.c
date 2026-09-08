@@ -531,13 +531,48 @@ esp_err_t power_on_hashboard(GlobalState *GLOBAL_STATE)
 
 esp_err_t power_off_hashboard(GlobalState *GLOBAL_STATE)
 {
-    esp_err_t ret = ESP_OK;
-
+    /*
+     * Report whether the power actually went off.
+     *
+     * This returned ESP_OK whatever happened, including when the regulator
+     * never heard the command. Every caller is a protection path -- overheat,
+     * unreadable sensor, fan fault -- so the one thing they all need to know
+     * is the one thing this would not tell them: they logged "cut off the
+     * power" and waited a hundred seconds for a board that might still be
+     * energised.
+     *
+     * The regulator sits on I2C, so when that bus is gone there is no way to
+     * command it. On the BC01 family there is a second lever -- the USB-PD
+     * gate is on a different bus, and closing it cuts VBUS to everything
+     * behind it -- so it is worth trying when the first attempt fails. The
+     * BC04 has no such gate: on that board a failure here is final, and the
+     * only remaining action is a person pulling the plug. Saying so in the
+     * log is the most this firmware can do for them.
+     */
     GLOBAL_STATE->asic_vol_default = 0;
     ESP_LOGI(TAG, "vcore power off hashboard, set voltage 0");
-    float core_voltage = 0;
-    VCORE_set_voltage(core_voltage);
 
+    esp_err_t ret = VCORE_set_voltage(0);
+    if (ESP_OK == ret) {
+        return ESP_OK;
+    }
+
+    ESP_LOGE(TAG, "could not command the regulator off (%s)",
+             esp_err_to_name(ret));
+
+    if (device_is_bc01_family(GLOBAL_STATE->device_model)) {
+        esp_err_t gate = husb238a_gate_close();
+        pd_power_io_off();
+        if (ESP_OK == gate) {
+            ESP_LOGW(TAG, "cut VBUS at the PD gate instead");
+            return ESP_OK;
+        }
+        ESP_LOGE(TAG, "the PD gate did not close either (%s)",
+                 esp_err_to_name(gate));
+    }
+
+    ESP_LOGE(TAG, "THE HASHBOARD MAY STILL BE POWERED. This board has no way "
+                  "to switch it off from software. Remove power by hand.");
     return ret;
 }
 
@@ -554,6 +589,41 @@ esp_err_t read_power_information(GlobalState *GLOBAL_STATE)
 int read_power_temp(void)
 {
     return VCORE_get_temp();
+}
+
+/*
+ * One ceiling, asked for in every place a voltage is set.
+ *
+ * The vendor caps BC04 and BC08 at 4.80 V and nvs_device.c applied that to
+ * the startup default -- but only there. CONFIG_TPS546_VOUT_MAX is 5.20 on a
+ * BC04, and both of the other ways in checked against that instead: the boot
+ * mode config lifts asic_vol_default to whatever asicnormalvol holds, and the
+ * coreVoltage PATCH accepted anything inside min..max and applied it live. So
+ * the cap the vendor put on four BM1370s in series could be stepped over by
+ * writing one NVS key or sending one request -- 1.30 V a chip instead of
+ * 1.20.
+ *
+ * Whether 1.30 V damages a BM1370 is not something this repository can
+ * answer. That the cap existed and did not hold is answerable, and is the
+ * defect.
+ */
+uint16_t device_core_voltage_ceiling(GlobalState * GLOBAL_STATE)
+{
+    uint16_t ceiling = GLOBAL_STATE->asic_vol_max;
+
+    switch (GLOBAL_STATE->device_model) {
+        case DEVICE_BC04:
+        case DEVICE_BC08:
+            /* Four and eight BM1370 in series; the vendor's figure. */
+            if (ceiling > 480) {
+                ceiling = 480;
+            }
+            break;
+        default:
+            break;
+    }
+
+    return ceiling;
 }
 
 esp_err_t set_fan_pwm(GlobalState *GLOBAL_STATE, uint8_t pwm_percent)
