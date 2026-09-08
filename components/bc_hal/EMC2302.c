@@ -202,10 +202,28 @@ esp_err_t EMC2302_get_fan_speed(uint16_t *dst)
 {
     uint16_t rpm1 = 0;
     uint16_t rpm2 = 0;
-    
-    EMC2302_get_fan_speed1(&rpm1);
-    EMC2302_get_fan_speed2(&rpm2);
-    
+
+    /*
+     * Say when the reads failed.
+     *
+     * Both return values used to be dropped and ESP_OK returned regardless,
+     * so a controller that had stopped answering reported a healthy zero --
+     * indistinguishable from a fan that had stopped turning, and both were
+     * then ignored anyway. A caller that cannot tell "no fan" from "no
+     * controller" cannot protect the board from either.
+     *
+     * One good channel is still an answer: these boards drive two outputs and
+     * a single dead channel leaves a usable reading. Only when neither
+     * responds is there nothing to report.
+     */
+    esp_err_t err1 = EMC2302_get_fan_speed1(&rpm1);
+    esp_err_t err2 = EMC2302_get_fan_speed2(&rpm2);
+
+    if (ESP_OK != err1 && ESP_OK != err2) {
+        *dst = 0;
+        return err1;
+    }
+
     *dst = rpm1 > rpm2 ? rpm1 : rpm2;
     return ESP_OK;
 }

@@ -125,7 +125,15 @@ void health_maintenance_task(void *pvParameters)
     FanInputInfo fan_input_info;
     uint32_t counter = 0, fan_error_counter = 0;
     uint32_t num_of_pwm_channel = 0;
-    bool force_fan_check = false;
+    /*
+     * Ten seconds of being driven with no rotation at all, at this loop's two
+     * second period. Long enough that a spin-up or a dropped tach sample does
+     * not count as a stall.
+     */
+    #define FAN_STALL_MIN_DUTY 30
+    #define FAN_STALL_STRIKES  5
+    bool fan_tach_proven = false;
+    int fan_read_failures = 0;
     static uint8_t lotto_refresh_data_counter = 2;
 
     led_mutex = xSemaphoreCreateMutex();
@@ -164,7 +172,31 @@ void health_maintenance_task(void *pvParameters)
                 //VCORE_check_fault(GLOBAL_STATE);
             }
 
-            ESP_ERROR_CHECK(read_fan_rpm(GLOBAL_STATE));
+            /*
+             * A fan we cannot read is a fault to act on, not a reason to
+             * abort. ESP_ERROR_CHECK panics, which on a board whose fan
+             * controller has gone turns one detectable fault into a reboot
+             * loop -- and a panic is the one response that guarantees nobody
+             * turns the heat off first. Counted like the temperature read,
+             * and it takes the same exit.
+             */
+            if (ESP_OK != read_fan_rpm(GLOBAL_STATE))
+            {
+                if (++fan_read_failures >= 3)
+                {
+                    ESP_LOGE(TAG, "WARNING: fan speed unreadable %d times "
+                                  "running -- powering down rather than "
+                                  "mining with no idea whether it is turning.",
+                             fan_read_failures);
+                    SYSTEM_notify_error_info(GLOBAL_STATE, FAN_ERROR, NULL);
+                    break;
+                }
+                ESP_LOGW(TAG, "fan speed read failed (%d/3)", fan_read_failures);
+            }
+            else
+            {
+                fan_read_failures = 0;
+            }
 
             ESP_LOGD(TAG, "fan %d %d", healthModule->fan_rpm[0], healthModule->fan_rpm[1]);
 
@@ -214,16 +246,64 @@ void health_maintenance_task(void *pvParameters)
                 break;
             }
 
-            /*check the fan and adjust the fan.*/
-            if(!check_fan_ok(healthModule->fan_percent, healthModule->fan_rpm,
-                    num_of_pwm_channel, max_fan_speed, fan_check_param))
+            /*
+             * Fan stall.
+             *
+             * What was here could not fire, twice over. check_fan_ok() was
+             * passed max_fan_speed = 0 and both of its comparisons are
+             * against that value, so it returned true for any RPM including
+             * zero; and the trip behind it was gated on force_fan_check,
+             * which is declared false and never assigned. Fixing either alone
+             * would have changed nothing, which is presumably how it survived
+             * so long in a file whose whole job is protection.
+             *
+             * This asks a narrower question than the curve check did, because
+             * a false positive here powers down a working miner: it only
+             * looks for a fan that is being driven and is not turning at all.
+             * A stopped or disconnected fan reads zero; a slow one does not,
+             * and is left to the over-temperature trip, which is the thing
+             * that actually matters and is known to work.
+             *
+             * Only judged once a channel has reported a non-zero speed since
+             * boot. A board with no tachometer reads zero forever, and
+             * without that latch this would power it off ten seconds in.
+             */
+            for (uint32_t ch = 0; ch < num_of_pwm_channel; ch++)
             {
-                if(fan_error_counter ++ > 5 && force_fan_check){
-                    //inform_led(MSG_FAN_ERROR);
+                if (healthModule->fan_rpm[ch] > 0)
+                {
+                    fan_tach_proven = true;
+                }
+            }
+
+            bool fan_stalled = false;
+            if (fan_tach_proven)
+            {
+                for (uint32_t ch = 0; ch < num_of_pwm_channel; ch++)
+                {
+                    if (healthModule->fan_percent[ch] >= FAN_STALL_MIN_DUTY &&
+                        healthModule->fan_rpm[ch] == 0)
+                    {
+                        fan_stalled = true;
+                    }
+                }
+            }
+
+            if (fan_stalled)
+            {
+                if (++fan_error_counter >= FAN_STALL_STRIKES)
+                {
+                    ESP_LOGE(TAG, "WARNING: fan driven at %"PRIu16"%% and "
+                                  "reporting 0 RPM for %"PRIu32" checks -- "
+                                  "powering down.",
+                             healthModule->fan_percent[0], fan_error_counter);
                     SYSTEM_notify_error_info(GLOBAL_STATE, FAN_ERROR, NULL);
                     break;
                 }
-            }else
+                ESP_LOGW(TAG, "fan reporting 0 RPM while driven (%"PRIu32"/%d)",
+                         fan_error_counter, FAN_STALL_STRIKES);
+            }
+            else
             {
                 fan_error_counter = 0;
             }
