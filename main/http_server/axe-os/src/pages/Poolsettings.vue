@@ -36,6 +36,7 @@ interface FormState {
   poolBUser: string;
   poolBPassword: string | null;
   poolBTLS: number;
+  poolBExtranonceSubscribe: number;
   poolBFbURL: string;
   poolBFbUser: string;
   poolBFbPassword: string | null;
@@ -61,6 +62,7 @@ const formState = reactive<FormState>({
   poolBUser: '',
   poolBPassword: null,
   poolBTLS: 0,
+  poolBExtranonceSubscribe: 0,
   poolBFbURL: '',
   poolBFbUser: '',
   poolBFbPassword: null,
@@ -152,6 +154,9 @@ const updateSys = async (values: any) => {
         return { url, port };
     };
 
+    const fallbackStratumPasswordStr =
+        (values.fallbackStratumPassword === '*****' ? undefined : values.fallbackStratumPassword);
+
     const primary = parseAddress(formState.stratumURL);
     const fallback = parseAddress(formState.fallbackStratumURL);
 
@@ -166,7 +171,11 @@ const updateSys = async (values: any) => {
       fallbackStratumURL: fallback.url,
       fallbackStratumPort: fallback.port,
       fallbackStratumUser: values.fallbackStratumUser,
-      fallbackStratumPassword: values.fallbackStratumPassword,
+      /* Same sentinel the other two use. This one was sent raw against
+         an initial value of the literal 'password', so opening this page
+         and pressing Save replaced a configured fallback password with
+         that string without anyone touching the field. */
+      fallbackStratumPassword: fallbackStratumPasswordStr,
       fallbackStratumTLS: values.fallbackStratumTLS,
       fallbackStratumExtranonceSubscribe: values.fallbackStratumExtranonceSubscribe,
     }
@@ -180,6 +189,7 @@ const updateSys = async (values: any) => {
         poolBPort: poolB.port,
         poolBUser: formState.poolBUser,
         poolBTLS: formState.poolBTLS,
+        poolBExtranonceSubscribe: formState.poolBExtranonceSubscribe,
       });
       if (formState.poolBPassword && formState.poolBPassword !== '*****') {
         Object.assign(formData, { poolBPass: formState.poolBPassword });
@@ -279,7 +289,7 @@ const applyPendingOverFormState = () => {
   const direct: Array<keyof typeof formState> = [
     'stratumUser', 'fallbackStratumUser', 'stratumTLS', 'fallbackStratumTLS',
     'stratumExtranonceSubscribe', 'fallbackStratumExtranonceSubscribe',
-    'poolBUser', 'poolBTLS', 'poolBFbUser', 'poolBFbTLS',
+    'poolBUser', 'poolBTLS', 'poolBExtranonceSubscribe', 'poolBFbUser', 'poolBFbTLS',
     'dualEnable', 'dualRatioA', 'dualSliceMs',
   ] as any;
 
@@ -300,7 +310,7 @@ onMounted(async () => {
     formState.stratumUser = minerStatusRef.value.stratumUser;
     formState.stratumPassword = '*****';
     formState.fallbackStratumUser = minerStatusRef.value.fallbackStratumUser;
-    formState.fallbackStratumPassword = 'password';
+    formState.fallbackStratumPassword = '*****';
     formState.stratumTLS = minerStatusRef.value.stratumTLS ?? 0;
     formState.stratumExtranonceSubscribe = minerStatusRef.value.stratumExtranonceSubscribe ?? 0;
     formState.fallbackStratumTLS = minerStatusRef.value.fallbackStratumTLS ?? 0;
@@ -313,6 +323,7 @@ onMounted(async () => {
     formState.poolBUser = st.poolBUser ?? '';
     formState.poolBPassword = st.poolBUrl ? '*****' : '';
     formState.poolBTLS = st.poolBTLS ?? 0;
+    formState.poolBExtranonceSubscribe = st.poolBExtranonceSubscribe ?? 0;
     formState.poolBFbURL = st.poolBFbUrl ? `${st.poolBFbUrl}:${st.poolBFbPort ?? 3333}` : '';
     formState.poolBFbUser = st.poolBFbUser ?? '';
     formState.poolBFbPassword = st.poolBFbUrl ? '*****' : '';
@@ -474,6 +485,15 @@ onMounted(async () => {
                   <span class="ps-switch-label">{{ pl('stratum_tls') }}</span>
                   <a-switch :checked="formState.poolBTLS === 1"
                             @change="(checked: boolean) => formState.poolBTLS = checked ? 1 : 0" />
+                </div>
+              </a-form-item>
+              <!-- Pool B could always receive an extranonce rotation; it just
+                   never asked for one, and there was no way to ask. -->
+              <a-form-item v-if="appStore.currentModelConfig?.support_xnsub" name="poolBExtranonceSubscribe" :colon="false" style="margin-bottom: 0;">
+                <div class="ps-switch-row">
+                  <span class="ps-switch-label">{{ pl('stratum_xnsub') }}</span>
+                  <a-switch :checked="formState.poolBExtranonceSubscribe === 1"
+                            @change="(checked: boolean) => formState.poolBExtranonceSubscribe = checked ? 1 : 0" />
                 </div>
               </a-form-item>
 

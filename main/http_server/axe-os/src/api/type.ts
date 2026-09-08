@@ -118,6 +118,7 @@ export interface MinerStatusData {
   stratumExtranonceSubscribe: number,
   fallbackStratumTLS: number,
   fallbackStratumExtranonceSubscribe: number,
+  poolBExtranonceSubscribe?: number,
   frequency: number,
   version: string,
   idfVersion: string,
