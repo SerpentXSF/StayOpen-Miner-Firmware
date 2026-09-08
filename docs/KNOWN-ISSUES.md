@@ -667,7 +667,7 @@ Both now require a session. The theme GET is deliberately left open: the
 interface reads it before anyone signs in, and it discloses only which colours
 the owner likes.
 
-## The fan-fault protection cannot fire (open)
+## The fan-fault protection could not fire (fixed)
 
 **Where:** `main/tasks/health_maintennance.c`, `components/bc_hal/pwm_fan.c`.
 
@@ -681,11 +681,28 @@ On a BC04, `EMC2302_get_fan_speed()` also discards the return values of its
 two channel reads and reports `ESP_OK` with 0 RPM when the controller is
 absent, so a dead fan controller and a stopped fan are indistinguishable.
 
-The over-temperature trip and the unreadable-sensor trip are the two thermal
-protections known to work. Do not treat a working fan as something the
-firmware is checking for you.
+**The fix**, in three parts, because one alone would have changed nothing:
 
-## A BC04 cannot de-energise its own hashboard once I2C is gone (open)
+`EMC2302_get_fan_speed()` now reports a failed read instead of returning
+ESP_OK with zero, so a dead controller and a stopped fan are no longer the
+same answer. The caller no longer wraps that read in `ESP_ERROR_CHECK`, which
+panicked -- turning a fault the firmware could have acted on into a reboot
+loop, and a panic is the one response that guarantees nobody turns the heat
+off first. Three unreadable samples now take the same exit as an unreadable
+temperature.
+
+The curve check is replaced by a narrower question, because a false positive
+here powers down a working miner: a fan being driven at 30% or more and
+reporting no rotation at all, for five consecutive checks -- ten seconds at
+this loop's period. A stopped or disconnected fan reads zero; a merely slow
+one does not, and is left to the over-temperature trip, which is the thing
+that actually matters and is known to work.
+
+It only judges a channel that has reported a non-zero speed since boot. A
+board with no tachometer reads zero forever, and without that latch this
+would power one off ten seconds after it started.
+
+## A BC04 cannot de-energise its own hashboard once I2C is gone (open, mitigated)
 
 **Where:** `main/device.c`, `power_off_hashboard()`.
 
@@ -699,3 +716,52 @@ closing the USB-PD gate would cut VBUS behind it — but the BC04 has no gate.
 
 A miner showing an empty bus scan, a board temperature of −60 °C, or a reboot
 every four minutes should have its power removed by hand.
+
+**What changed:** `power_off_hashboard()` returned ESP_OK whatever happened,
+so every protection path logged "cut off the power" and waited a hundred
+seconds without knowing whether it had. It now reports the failure, tries the
+USB-PD gate on the BC01 family -- a different bus, so it survives the I2C
+failure that took the regulator away -- and, when there is nothing left to
+try, says so in as many words: the hashboard may still be powered, remove
+power by hand.
+
+That does not fix the BC04, which has no gate. It replaces a silent failure
+with a stated one, which is the whole of what this firmware can do on that
+board.
+
+**It did not cause the failure of the BC04 in this project's evidence
+bundle.** The log shows four I2C devices responding, Ethernet up with an
+address, then `vcore power on hashboard, set voltage 480` and the first W5500
+error 70 ms later. The bus was healthy when the damage happened, so the
+firmware had full control of the regulator; the same board had cleanly
+executed `vcore power off hashboard, set voltage 0` on the preceding restart.
+The dead board then reported `input_voltage: 0` -- nothing left to switch off.
+This limitation is downstream of that fault, not upstream of it.
+
+## The core-voltage cap could be stepped over four ways (fixed)
+
+**Where:** `main/nvs_device.c`, `main/system.c`, `main/http_server/http_server.c`.
+
+The vendor caps a BC04 at 4.80 V across four BM1370s in series, and
+`nvs_device.c` applied that — to the startup default, and nowhere else.
+`CONFIG_TPS546_VOUT_MAX` on that board is 5.20, and every other path checked
+against *that*:
+
+- the boot-mode config lifted `asic_vol_default` to whatever `asicnormalvol`
+  held, after a `min..max` check, so one NVS key brought the board up over the
+  cap;
+- all four voltage fields in the settings handler — `coreVoltage`,
+  `coreNormalVoltage`, `coreOverVoltage`, `asicovervdef` — accepted anything
+  inside `min..max` and applied it live, storing it as the value the miner
+  comes back up on.
+
+So the cap could be exceeded by 8% with a single request, on a four-chip
+string, and the miner would keep that setting across restarts.
+
+Whether 1.30 V a chip damages a BM1370 is not something this repository can
+answer, and nothing here claims it does. That a cap existed and did not hold
+is answerable, and is the defect.
+
+**The fix:** `device_core_voltage_ceiling()` in `device.c` returns the model's
+real ceiling — 480 on BC04 and BC08, `asic_vol_max` elsewhere — and all five
+sites ask it. Found by an external review, not by us.
