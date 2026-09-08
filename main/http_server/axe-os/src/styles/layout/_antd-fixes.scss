@@ -124,3 +124,49 @@
     white-space: nowrap;
   }
 }
+
+/*
+ * Alerts: paint the text with the surface it sits on.
+ *
+ * The fourth instance of the class this file exists for. `colorText` is handed
+ * to Ant as `var(--text-color)`, which in the dark themes is near-white, and
+ * Ant applies it to the alert message -- over a warning background it paints
+ * from its own static palette, #fffbe6. The result was #f5f7fb on #fffbe6: a
+ * contrast ratio of 1.03, text present in the DOM and invisible on screen.
+ *
+ * That was found on the one alert someone happened to look at. The others are
+ * rendered only on a fault -- an offline miner, a failed save, a pool that
+ * will not connect -- so they were invisible exactly when they had something
+ * to say, and nobody would have been looking at a healthy miner to notice.
+ *
+ * Both halves are stated for each type. Setting only the text colour leaves
+ * the same trap for whichever theme is not in front of you, and setting only
+ * the surface leaves it for the next person who changes the text token.
+ */
+.ant-alert-warning {
+  background-color: #fffbe6;
+  border: 1px solid #ffe58f;
+
+  .ant-alert-message,
+  .ant-alert-description {
+    color: #613400;
+  }
+
+  .ant-alert-icon {
+    color: #d48806;
+  }
+}
+
+.ant-alert-error {
+  background-color: #fff2f0;
+  border: 1px solid #ffccc7;
+
+  .ant-alert-message,
+  .ant-alert-description {
+    color: #a8071a;
+  }
+
+  .ant-alert-icon {
+    color: #cf1322;
+  }
+}
