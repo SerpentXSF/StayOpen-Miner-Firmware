@@ -166,6 +166,29 @@ void stratum_poolb_task(void *pvParameters)
         STRATUM_V1_authorize(GLOBAL_STATE->transportB, GLOBAL_STATE->send_uidB++,
                              user, pass);
 
+        /*
+         * Ask for extranonce updates, if the owner turned them on.
+         *
+         * The handler for MINING_SET_EXTRANONCE below has always been here,
+         * so pool B could receive a rotation -- it simply never asked to. The
+         * setting existed too: poolbxnsub is read out of NVS at startup into
+         * poolB_extranonce_subscribe, and then nothing in the firmware ever
+         * looked at that field. Pool A and the fallback both do this properly.
+         *
+         * Without it, pool B keeps whatever extranonce it was given when it
+         * subscribed. Against a pool that rotates them the work goes stale and
+         * the shares are refused, which reads as a pool problem rather than as
+         * a request we never sent.
+         *
+         * Sent straight after authorize rather than waiting for its reply, as
+         * pool A does: stratum is ordered over the connection, so the pool
+         * still processes the authorize first.
+         */
+        if (GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe) {
+            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transportB,
+                                            GLOBAL_STATE->send_uidB++);
+        }
+
         while (1) {
             if (!GLOBAL_STATE->dual_enable) {
                 ESP_LOGI(TAG, "dual mining disabled, dropping pool B");

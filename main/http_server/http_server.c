@@ -1215,6 +1215,10 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     if ((item = cJSON_GetObjectItem(root, "poolBTLS")) != NULL) {
         nvs_config_set_u16(NVS_CONFIG_POOLB_TLS, item->valueint);
     }
+    if ((item = cJSON_GetObjectItem(root, "poolBExtranonceSubscribe")) != NULL) {
+        nvs_config_set_u16(NVS_CONFIG_POOLB_XNSUB, item->valueint);
+        GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe = item->valueint;
+    }
     if ((item = cJSON_GetObjectItem(root, "poolBFbUrl")) != NULL) {
         nvs_config_set_string(NVS_CONFIG_POOLB_FB_URL, item->valuestring);
     }
@@ -1852,6 +1856,17 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddStringToObject(root, "poolBUser",
         GLOBAL_STATE->SYSTEM_MODULE.poolB_user ? GLOBAL_STATE->SYSTEM_MODULE.poolB_user : "");
     cJSON_AddNumberToObject(root, "poolBConnected", GLOBAL_STATE->SYSTEM_MODULE.poolB_connected);
+    /*
+     * poolBTLS was accepted by the settings handler and stored, but never
+     * reported back. The pool page reads it as `st.poolBTLS ?? 0`, so it came
+     * up off on every load regardless of what the miner was doing, and saving
+     * the page then wrote that back -- turning pool B's TLS off for anyone who
+     * opened the tab and pressed Save. The failover switch beside it was
+     * reported correctly all along, which is what made it look deliberate.
+     */
+    cJSON_AddNumberToObject(root, "poolBTLS", GLOBAL_STATE->SYSTEM_MODULE.poolB_tls);
+    cJSON_AddNumberToObject(root, "poolBExtranonceSubscribe",
+                            GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe);
     cJSON_AddStringToObject(root, "poolBFbUrl",
         GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_url ? GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_url : "");
     cJSON_AddNumberToObject(root, "poolBFbPort", GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_port);
