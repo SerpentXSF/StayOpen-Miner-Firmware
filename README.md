@@ -84,7 +84,7 @@ released.
 | Web UI builds | Yes, typechecked |
 | GPL compliance restored | Yes |
 | OTA tooling verified | Yes — round-trips the vendor's own image byte for byte |
-| BM1370 path free of the binary blob | Yes |
+| BM1370 path free of the binary blob | Yes from 2.0.26. **Releases 2.0.4 to 2.0.25 were not** — see [docs/ASIC-ABSTRACTION.md](docs/ASIC-ABSTRACTION.md) |
 | LT0051 path free of the binary blob | No — see [docs/ASIC-ABSTRACTION.md](docs/ASIC-ABSTRACTION.md) |
 | **Run on real hardware** | **Yes**, on a BC01 with a replacement LilyGO T-Display-S3 module. Boots, negotiates USB-PD, brings up the regulator and fan, detects the BM1370, ramps to 750 MHz, and connects to a pool. See [docs/BC01-BRINGUP.md](docs/BC01-BRINGUP.md) |
 | **Hashing on a BC01** | **Yes** — 1.71 TH/s at 750 MHz, 0 hardware errors, shares accepted, 24 W, 54 C. `ASIC_send_work()` had no BC01 case, so no work ever reached the ASIC; see [docs/BC01-BRINGUP.md](docs/BC01-BRINGUP.md) |

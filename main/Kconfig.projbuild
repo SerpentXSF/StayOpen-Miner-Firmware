@@ -48,6 +48,24 @@ menu "Stay Open Configuration"
             to. Board-specific: 10 on the BC01, 11 on the BC04. It must not
             collide with GPIO_I2C_SDA_1, which is GPIO11 on the BC01.
 
+    config STAYOPEN_ASIC_LT0051
+        bool "Support LT0051 ASIC boards (links a binary blob)"
+        default n
+        help
+            Compile the LT0051 driver, for the LOTTO and DC02/DC04/DC06
+            boards.
+
+            That driver is the only caller of components/a/liba.a, a
+            prebuilt archive this project has no source for. Turning this
+            on links it into the image whether or not the board ever runs
+            an LT0051, because the linker resolves references, not reachable
+            calls -- which is how it ended up in published BC01 and BC04
+            binaries that three documents described as blob-free.
+
+            Leave it off for BC boards. A binary built with it on contains
+            object code with no corresponding source and cannot be
+            distributed under the GPL.
+
     config STAYOPEN_OTA_OBFUSCATED
         bool "Use the obfuscated OTA update container"
         default y

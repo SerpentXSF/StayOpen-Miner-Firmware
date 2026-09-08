@@ -304,6 +304,8 @@ ships no PD driver, so on a BC01 it would never open the VBUS gate.
 ## Status of this repository
 
 Licensing restored, notices reinstated, security defects fixed, the BM1370
-path freed of the binary blob, and a BC01 mining at **1.6–1.7 TH/s** on
-rebuilt firmware. Changes here are GPL-3.0 and offered back under the same
+path freed of the binary blob as of 2.0.26 — releases 2.0.4 to 2.0.25 linked
+it despite this document saying otherwise, see
+[docs/ASIC-ABSTRACTION.md](ASIC-ABSTRACTION.md) — and a BC01 mining at
+**1.6–1.7 TH/s** on rebuilt firmware. Changes here are GPL-3.0 and offered back under the same
 terms.

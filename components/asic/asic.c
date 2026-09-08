@@ -3,7 +3,29 @@
 
 #include "bm1370.h"
 
+#ifdef CONFIG_STAYOPEN_ASIC_LT0051
 #include "lt0051.h"
+#else
+/*
+ * LT0051 support is compiled out, and with it the only caller of
+ * components/a/liba.a -- a prebuilt archive this project has no source for.
+ *
+ * The dispatch arms below are left in place rather than deleted: they are the
+ * record of which device models this driver would serve, and removing them
+ * would make the switches read as though those boards were never considered.
+ * They are unreachable on a BC board in any case, since device_model comes
+ * from NVS and no BC board reports an LT0051 part. What they must not do is
+ * reference the driver, because the linker resolves references whether or not
+ * the call can ever be made -- which is exactly how 82 sections of that
+ * archive ended up at live flash addresses in images documented as blob-free.
+ */
+#include "lt0051.h"
+#define LT0051_init_by_chain(state, chain, freq, count)     ((void)(state), (void)(chain), (void)(freq), (void)(count), ESP_FAIL)
+#define LT0051_set_max_baud_by_chain(state, chain)     ((void)(state), (void)(chain), 0)
+#define LT0051_process_work(state, chain)     ((void)(state), (void)(chain), (task_result *)NULL)
+#define LT0051_send_work(state, job, chain, workid)     ((void)(state), (void)(job), (void)(chain), (void)(workid))
+#define LT0051_send_hash_frequency(state, freq)     ((void)(state), (void)(freq), false)
+#endif
 #include "asic.h"
 #include "frequency_transition_bmXX.h"
 

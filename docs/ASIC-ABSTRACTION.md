@@ -12,11 +12,33 @@ This documents what it contains, what has been replaced, and what has not.
 
 | | |
 |---|---|
-| **BM1370 builds (BC01, BC02, BC04, BC06, BC08)** | **Blob-free.** Nothing in the BM1370 path links against it. |
+| **BM1370 builds (BC01, BC02, BC04, BC06, BC08)** | **Blob-free from 2.0.26.** Not before — see below. |
 | LT0051 builds (scrypt) | Still require it. See [What remains](#what-remains). |
 
-If you are running any BC-series miner, this firmware builds and runs
-entirely from source.
+If you are running any BC-series miner on 2.0.26 or later, this firmware
+builds and runs entirely from source.
+
+### Releases 2.0.4 to 2.0.25 were not blob-free
+
+This section said otherwise for a year of releases, and it was wrong.
+
+`lt0051.c` was compiled unconditionally, and it is the only caller of
+`liba.a`. No BC board ever executes it: the dispatch arms it sits behind are
+selected by device model, and no BC board reports an LT0051 part. But a
+linker resolves references, not reachable calls. Compiling the file was
+enough, and 82 sections of that archive were placed at live flash addresses
+in every published BC01 and BC04 image, adding about 20 KB.
+
+That was not a documentation slip alone. Those releases conveyed object code
+with no corresponding source, which is the same defect this project raises
+against the vendor. It was found by an external review of the link map in
+September 2026, not by us.
+
+From 2.0.26 the driver is behind `CONFIG_STAYOPEN_ASIC_LT0051`, off by
+default, and the dispatch arms resolve to stubs when it is off. The check
+that matters is the link map, not the source: after the change the map holds
+one `LOAD` line for the archive and no member extracted from it, and the
+image is 20,608 bytes smaller.
 
 ---
 
