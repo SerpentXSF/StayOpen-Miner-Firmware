@@ -65,8 +65,31 @@ why the TMP75, the EMC2302 and the I2C pull-ups, all on that rail, went with
 it. So the ordering was not merely confusing the software; it may well have
 been stressing the part every time. See
 [HARDWARE-SAFETY.md](HARDWARE-SAFETY.md) section 2.6, and note what is *not*
-established there: no log exists of this board on factory firmware, so the
-correlation is not proven on this unit.
+established there: no log exists of this board on factory firmware while it was
+healthy, so the correlation is not proven on this unit.
+
+**The ordering is the vendor's, not this fork's.** Worth stating plainly,
+because the obvious suspicion when a board dies under a third-party firmware is
+that the third party moved something. In Baichuan's own published source, the
+verbatim import at `878900f`:
+
+```
+main.c:293    network_init(&GLOBAL_STATE);
+main.c:320    ESP_ERROR_CHECK(init_all_peripherals(&GLOBAL_STATE));
+```
+
+The network comes up 27 lines before the hashboard is powered. Every BC04
+running factory firmware brings its W5500 up and then drops the core rail
+transient on top of it, on every boot. This fork inherited that ordering and
+later moved Ethernet after the transient, which reduces the exposure rather
+than creating it.
+
+Two things follow. The stress is a property of the product, so any BC04 that
+boots with a cable plugged in has been taking it since it left the factory.
+And a bench does more power cycles than a rack, so a board being worked on
+takes the same event more often -- the cause is the ordering, but the count is
+higher during development, and that is worth saying rather than leaving for
+someone else to point out.
 
 ```
 I (10658) vcore: Set ASIC voltage = 4.80V
