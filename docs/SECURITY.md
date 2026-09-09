@@ -289,6 +289,47 @@ To have GitHub drop the unreachable objects, open a support request naming the
 repository and asking them to run garbage collection. Do that *after*
 rotating, not instead of it.
 
+**Requested 2026-09-08.** Through the support portal's Virtual Agent, under
+Repositories -- the "Clear cached views" button, not the "Deletes" category.
+Deletes is the workflow for destroying a repository: it asks for the URL of the
+repo you want removed and makes you confirm a purge that cannot be reversed. It
+is not the route for cleaning up objects inside a live repository.
+
+The agent asked for the dangling commit URL, whether it appears in a pull
+request, and why the rewrite had not settled the matter. It then created a
+ticket: "we'll update you once we've clear the cached views."
+
+What was supplied, which is what GitHub's own documentation asks for:
+
+| | |
+|---|---|
+| Repository | `SerpentXSF/StayOpen-Miner-Firmware`, public |
+| Dangling commit | `26db064ef961c9c2dcf58b53071cb37651604b5f` |
+| Rewritten to | `28dff91736c9b07c9310d8c61ef5756c82b81086` |
+| Affected pull requests | 0 -- this repository has never had one |
+| Forks | 0 |
+| Orphaned LFS objects | none; LFS is not used here |
+
+The first-changed-commit pair came from `.git/filter-repo/first-changed-commits`,
+which the rewrite left sitting in the clone and which nobody had thought to
+look at until it was asked for.
+
+Confirmed still exposed at the moment of asking: the commit resolved through
+the Git Commits API and its tree returned 19 entries including
+`.api-password.txt`. To check whether it has since been collected:
+
+```
+gh api repos/SerpentXSF/StayOpen-Miner-Firmware/git/trees/26db064ef961c9c2dcf58b53071cb37651604b5f
+```
+
+A 404 means it is done.
+
+**Outcome not yet recorded.** Note it here when GitHub replies, including if
+they decline. Their agent opens by saying they assist "only in cases where we
+determine sensitive data can not be mitigated by rotating affected
+credentials", and this credential was rotated at the time, so a refusal is a
+reasonable answer and belongs in the record as much as a success would.
+
 ### The hook
 
 `.githooks/pre-commit` refuses to commit device credentials. Enable it once
