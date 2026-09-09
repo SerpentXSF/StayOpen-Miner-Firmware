@@ -19,6 +19,37 @@ firmware it arrives with, so there is a baseline that is not ours:
 - [ ] Keep that log. If anything goes wrong later, it is the only evidence of
       what the board was like before we touched it.
 
+### The one measurement worth the most, and only stock firmware can take it
+
+The last board's W5500 stopped answering about 70 ms after the core rail came
+up, every time, and eventually failed short across the 3.3 V rail. The boot
+order that stands the W5500 in front of that transient is the vendor's own --
+`network_init` at `main.c:293`, `init_all_peripherals` at `main.c:320` in their
+published source -- so a factory BC04 should do it too. Nobody has ever
+recorded it happening on factory firmware, because by the time the last board
+ran stock it was already dead.
+
+**Do this before flashing anything.**
+
+- [ ] Plug in Ethernet. Let the board boot on the firmware it arrived with and
+      reach the network — link up, an address, ideally a pool.
+- [ ] Watch for the moment the hashboard is energised, and whether Ethernet
+      survives it. Capture the serial log across that transition; the interface
+      keeps its IP either way, so the log matters more than the link light.
+- [ ] Note whether Ethernet still passes traffic afterwards: ping it, load the
+      interface over the cable, watch for the miner losing its pool.
+- [ ] Repeat two or three times, and also once with the cable unplugged during
+      boot, plugged in after the hashboard is up. If it survives that way and
+      not the other, the ordering is confirmed on a second unit.
+
+If it wedges on factory firmware, that is the same fault on a second board, on
+the vendor's own code — a far stronger statement than anything that can be said
+about a single unit, and the one thing the last RMA could not produce.
+
+If it does **not** wedge, that is worth just as much: it would mean the last
+board was already faulty in a way this one is not, and the ordering theory
+weakens rather than strengthens. Record whichever happens.
+
 ## 1. It boots and mines at all — 2.0.28
 
 - [ ] Flash `stay-open-bc04-*-full.bin` over USB with the web flasher.
