@@ -30,7 +30,7 @@ subset in one place.
 The working software paths converge on `miner_protection_handler()`: cut the
 core rail, fan to 100%, hold 100 seconds, restart.
 
-### The fan-fault protection does not work
+### The fan-fault protection did not work (rewritten in 2.0.28)
 
 **Correction, 2026-09-04, found by review.** This row previously read like the
 others. It should not have.
@@ -211,7 +211,7 @@ hashboard is not powered until ~14 s and the loop reset before that.
 
 Full write-up in [KNOWN-ISSUES.md](KNOWN-ISSUES.md).
 
-### 2.5 The core rail cannot be switched off once the bus is gone (open)
+### 2.5 The core rail cannot be switched off once the bus is gone (open, and no longer silent)
 
 **Not fixed. Raised by review on 2026-09-04 and worth knowing before it bites
 somebody.**
@@ -338,10 +338,11 @@ Honest summary. "Verified" means observed on hardware, not merely built.
 | Protection | Status |
 |---|---|
 | Voltage clamp refuses out-of-range | Verified by code path; never observed firing |
-| Hardware `VOUT_OV_FAULT_LIMIT` | Set at init; never observed firing |
+| Core-voltage ceiling per model | **Added in 2.0.28.** Four API fields and the boot-mode path checked `TPS546_VOUT_MAX` rather than the vendor's cap. Untested on hardware -- it changes nothing on a BC01 |
+| Hardware `VOUT_OV_FAULT_LIMIT` | **Not programmed.** The write is inside `#if 0`; the live init sets no fault limits. Whatever the TPS546 enforces is its factory NVM. See section 1 |
 | Over-temperature trip at 71 C | **Not verified.** Never reached -- peak observed on a BC04 was 65 C chip / 73 C VR at 106 W |
 | Unreadable-temperature trip (2.1) | **Not verified on hardware.** Needs a working board with an induced sensor failure |
-| Fan-fault trip | **Cannot fire** -- `force_fan_check` is never set. See section 1 |
+| Fan-fault trip | **Rewritten in 2.0.28.** The old one could not fire at all. The replacement is verified not to fire on a healthy miner; the trip itself has never been made to fire. See section 1 |
 | Ethernet stall watchdog (2.2) | Verified on a BC04 with a dead I2C bus, with and without WiFi |
 | Absent-WiFi-stack tolerance (2.3) | Verified on a BC04, Ethernet only |
 | PD negotiated before the radio (2.4) | Verified on a BC01: cold boot, no USB, no reboots across 30 polls |
