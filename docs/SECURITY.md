@@ -324,11 +324,30 @@ gh api repos/SerpentXSF/StayOpen-Miner-Firmware/git/trees/26db064ef961c9c2dcf58b
 
 A 404 means it is done.
 
-**Outcome not yet recorded.** Note it here when GitHub replies, including if
-they decline. Their agent opens by saying they assist "only in cases where we
-determine sensitive data can not be mitigated by rotating affected
-credentials", and this credential was rotated at the time, so a refusal is a
-reasonable answer and belongs in the record as much as a success would.
+**Collected 2026-09-09.** GitHub Support replied that they had run garbage
+collection and cleared the repository cache, there being no remaining
+references to the commit, and closed the ticket.
+
+Verified here rather than taken on trust, 2026-09-10:
+
+| Object | Before | After |
+|---|---|---|
+| tree `26db064e…`, which listed `.api-password.txt` | 19 entries | 404 |
+| commit `26db064e…` | resolved | 404 |
+| tree `42b61090…`, the commit's own tree | resolved | 404 |
+
+Worth noting for anyone who follows this path: their agent opens by saying they
+assist "only in cases where we determine sensitive data can not be mitigated by
+rotating affected credentials", and this credential *had* been rotated. The
+request said so plainly rather than hiding it, and they ran the collection
+anyway. So the caveat is not an automatic refusal, and there is no reason to
+misrepresent a rotation in order to get past it.
+
+The rest of the entry above stands unchanged, because none of it is undone by
+this: every clone and fork taken before 2026-09-03 still holds the value, and
+so does anyone who fetched the blob while it was reachable. **Rotation was the
+fix. This was tidying up after it**, and it took eleven days from the commit to
+the collection, all of them public.
 
 ### The hook
 
