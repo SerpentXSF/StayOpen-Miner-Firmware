@@ -132,7 +132,7 @@ void health_maintenance_task(void *pvParameters)
      */
     #define FAN_STALL_MIN_DUTY 30
     #define FAN_STALL_STRIKES  5
-    bool fan_tach_proven = false;
+    bool fan_tach_proven[MAX_PWM_CHANNEL] = {false};
     int fan_read_failures = 0;
     static uint8_t lotto_refresh_data_counter = 2;
 
@@ -272,20 +272,29 @@ void health_maintenance_task(void *pvParameters)
             {
                 if (healthModule->fan_rpm[ch] > 0)
                 {
-                    fan_tach_proven = true;
+                    fan_tach_proven[ch] = true;
                 }
             }
 
+            /*
+             * Latched per channel, not once for the whole board.
+             *
+             * A shared flag meant one working fan vouched for every other
+             * channel: a board reporting Fan0 0 RPM and Fan1 3688 -- which a
+             * BC04 on stock firmware does, either because only one fan is
+             * fitted or because that tachometer is not wired -- would have had
+             * channel 1 prove the tach "works" and then channel 0 read as a
+             * stall. That is a shutdown on a healthy miner, which is the one
+             * outcome this check must never produce.
+             */
             bool fan_stalled = false;
-            if (fan_tach_proven)
+            for (uint32_t ch = 0; ch < num_of_pwm_channel; ch++)
             {
-                for (uint32_t ch = 0; ch < num_of_pwm_channel; ch++)
+                if (fan_tach_proven[ch] &&
+                    healthModule->fan_percent[ch] >= FAN_STALL_MIN_DUTY &&
+                    healthModule->fan_rpm[ch] == 0)
                 {
-                    if (healthModule->fan_percent[ch] >= FAN_STALL_MIN_DUTY &&
-                        healthModule->fan_rpm[ch] == 0)
-                    {
-                        fan_stalled = true;
-                    }
+                    fan_stalled = true;
                 }
             }
 

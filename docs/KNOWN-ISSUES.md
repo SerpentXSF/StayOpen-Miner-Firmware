@@ -725,6 +725,27 @@ It only judges a channel that has reported a non-zero speed since boot. A
 board with no tachometer reads zero forever, and without that latch this
 would power one off ten seconds after it started.
 
+**Corrected 2026-09-11, before release, by a log from a working BC04.** That
+latch was a single flag for the whole board rather than one per channel, so
+one turning fan vouched for every other channel. A stock BC04 reports
+`Fan0: 0 RPM | Fan1: 3688 RPM` -- one fan fitted, or one tachometer not wired
+-- and under the original version Fan1 would have proved the tach "works" and
+Fan0's zero would then have read as a stall. A shutdown on a healthy miner,
+ten seconds in, which is the one outcome this check exists to avoid. Latched
+per channel now.
+
+**What this check still cannot see on a BC04.** `read_fan_rpm()` stores
+`EMC2302_get_fan_speed()`, and that returns the *larger* of the two channels.
+So one dead fan out of two is invisible: the survivor's reading is what
+reaches the health loop, and nothing looks wrong. The stall check only ever
+sees a board with no working fan at all.
+
+Fixing it means reporting both channels separately and deciding what a
+single-fan failure should do, which is a design question rather than a typo --
+on a board that may legitimately have one fan fitted, treating a zero as a
+fault is exactly the false positive corrected above. Left open deliberately,
+and recorded so nobody reads the entry above as more protection than it is.
+
 ## A BC04 cannot de-energise its own hashboard once I2C is gone (open, mitigated)
 
 **Where:** `main/device.c`, `power_off_hashboard()`.
