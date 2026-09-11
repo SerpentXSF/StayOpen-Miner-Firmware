@@ -19,6 +19,33 @@ firmware it arrives with, so there is a baseline that is not ours:
 - [ ] Keep that log. If anything goes wrong later, it is the only evidence of
       what the board was like before we touched it.
 
+### What the replacement actually arrived running (2026-09-11)
+
+Worth knowing before working through the rest of this, because it is not the
+firmware the list was written against.
+
+`VER: 3.0.2 20260802`, announcing itself as "Initializing THOR system". It is
+a rewrite, not a newer build of what this fork came from: `bmlib` for the
+ASIC, `thermal_pid`, `thor_cfg`, `net_w5500`, `WIFI_MANAGER`, `STORAGE`, tasks
+named `ASIC_RX` / `ASIC_TX` / `ASIC_WORK` / `SYS_MON`, and an embedded
+`web.tar` in place of a SPIFFS `www` partition. Its web bundle calls
+`/api/claw/*` — an LLM, WeChat login, Lua modules, file upload — none of which
+answered when probed over HTTP.
+
+Three things follow:
+
+- **Do not assume our OTA container applies.** It expects the old partition
+  layout and a separate www image.
+- **It runs the board at 4.65 V, not 4.80.** 760 MHz, 19.4 A, 90 W, about
+  5.3 TH/s, board 51 °C and regulator 58 °C, with no rejects and no hardware
+  errors. Our 480 ceiling is above what the vendor now uses.
+- **The boot order is unchanged.** `net_w5500` initialises at t=2710 and
+  `Enabling VCORE` lands at t=10890, so the rewrite still stands the W5500 in
+  front of the core rail transient.
+
+One observation to carry into any fan work: it reports `Fan0: 0 RPM |
+Fan1: 3688 RPM`. Either one fan is fitted or one tachometer is not wired.
+
 ### The one measurement worth the most, and only stock firmware can take it
 
 The last board's W5500 stopped answering about 70 ms after the core rail came
