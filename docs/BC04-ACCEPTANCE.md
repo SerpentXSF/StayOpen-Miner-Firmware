@@ -46,6 +46,47 @@ Three things follow:
 One observation to carry into any fan work: it reports `Fan0: 0 RPM |
 Fan1: 3688 RPM`. Either one fan is fitted or one tachometer is not wired.
 
+### Baseline captured 2026-09-12: seven hours on stock, healthy
+
+A cold boot ("Power on reset") left running overnight on WiFi, 81 telemetry
+samples across 6.9 hours:
+
+| | min | max | avg |
+|---|---|---|---|
+| Hashrate | 5070.9 | 5951.8 | 5746.8 GH/s |
+| Iout | 19.0 | 19.7 | 19.3 A |
+| Power | 88.1 | 91.1 | 89.3 W |
+| Board temp | 49.4 | 54.7 | 51.5 °C |
+| Regulator temp | 57.0 | 62.0 | 58.7 °C |
+| Fan1 | 3555 | 3766 | 3683 RPM |
+
+**7471 shares accepted, 0 rejected, 0 hardware errors.** Four chips, 760 MHz,
+4.64 V. Best difficulty 250216959. This is what a working BC04 looks like, and
+it is the comparison anything we flash later has to beat or match.
+
+`Fan0: 0 RPM` on all 81 samples — not a transient. One fan fitted, or one
+tachometer unwired.
+
+Three outbound HTTPS failures over the night, all from `btc_mkt` fetching a
+price feed, none touching mining. Worth knowing this firmware calls out to an
+external service on its own.
+
+### The hashboard is energised within ~100 ms of getting an IP
+
+Not a fixed delay from boot. Across two cold starts whose association times
+differ by three and a half seconds:
+
+| | got IP | `Enabling VCORE` | delta |
+|---|---|---|---|
+| 2026-09-11 | t=10740 | t=10890 | 150 ms |
+| 2026-09-12 | t=7277 | t=7367 | 90 ms |
+
+VCORE tracks the network event, not the clock. That matters for the test
+below: when Ethernet is the network path rather than WiFi, the W5500 will be
+linked, addressed and seconds out of DHCP at the instant the core rail steps
+up — the most active state it can be in, which is also the state the board
+that died was in.
+
 ### The one measurement worth the most, and only stock firmware can take it
 
 The last board's W5500 stopped answering about 70 ms after the core rail came
