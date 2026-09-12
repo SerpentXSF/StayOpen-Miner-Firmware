@@ -87,6 +87,13 @@ linked, addressed and seconds out of DHCP at the instant the core rail steps
 up — the most active state it can be in, which is also the state the board
 that died was in.
 
+> **Before the module is swapped, work through
+> [BC04-STOCK-SERIAL-SESSION.md](BC04-STOCK-SERIAL-SESSION.md).** It covers
+> what can only be collected from a working board on its original firmware
+> with a serial console attached — the linked-W5500 test, the eFuse state, and
+> the module that is the only real way back to stock. This page picks up after
+> that.
+
 ### The one measurement worth the most, and only stock firmware can take it
 
 The last board's W5500 stopped answering about 70 ms after the core rail came
