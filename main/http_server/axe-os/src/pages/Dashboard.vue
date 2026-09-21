@@ -893,19 +893,21 @@ const gaugeColor = computed(() => {
                 <div class="meter-fill" :style="{width: (statusProc.temp1 / statusProc.maxTemp) * 100 + '%', background: statusProc.temp1 >= modelCfg.temp_warn_c ? '#f97316' : ''}"></div>
               </div>
 
+              <!-- With one fan fitted this shows the effective reading, which is
+                   whichever header it is on. With two, each row is its own channel. -->
               <div class="metric-row" style="margin-top:4px;">
                 <span class="metric-label">{{ dstl('rpm_of_fan') }}</span>
-                <span class="metric-value">{{ appStore.statusRaw?.fanspeed || 0 }}% ({{ appStore.statusRaw?.fanrpm || 0 }} RPM)</span>
+                <span class="metric-value">{{ appStore.statusRaw?.fanspeed || 0 }}% ({{ (appStore.showSecondFan ? appStore.statusRaw?.fanrpm0 : appStore.statusRaw?.fanrpm) || 0 }} RPM)</span>
               </div>
               <div class="meter">
                 <div class="meter-fill" :style="{width: (appStore.statusRaw?.fanspeed || 0) + '%'}"></div>
               </div>
-              
-              <div class="metric-row" style="margin-top:4px;" v-if="appStore.hasSecondFan">
+
+              <div class="metric-row" style="margin-top:4px;" v-if="appStore.showSecondFan">
                 <span class="metric-label">{{ dstl('rpm_of_fan1') }}</span>
                 <span class="metric-value">{{ appStore.statusRaw?.fanspeed || 0 }}% ({{ appStore.statusRaw?.fanrpm1 || 0 }} RPM)</span>
               </div>
-              <div class="meter" v-if="appStore.hasSecondFan">
+              <div class="meter" v-if="appStore.showSecondFan">
                 <div class="meter-fill" :style="{width: (appStore.statusRaw?.fanspeed || 0) + '%'}"></div>
               </div>
             </div>

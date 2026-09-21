@@ -127,6 +127,8 @@ export interface MinerStatusData {
   autofanspeed: number,
   fanspeed: number,
   fanrpm: number,
+  /* Raw tachometer channels. One is 0 when only one fan is fitted. */
+  fanrpm0?: number,
   fanrpm1?: number,
   coreVoltageActual: number,
   coreVoltageActual1?: number,

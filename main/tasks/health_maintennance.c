@@ -133,6 +133,7 @@ void health_maintenance_task(void *pvParameters)
     #define FAN_STALL_MIN_DUTY 30
     #define FAN_STALL_STRIKES  5
     bool fan_tach_proven[MAX_PWM_CHANNEL] = {false};
+    bool fan_channels_reported = false;
     int fan_read_failures = 0;
     static uint8_t lotto_refresh_data_counter = 2;
 
@@ -198,7 +199,28 @@ void health_maintenance_task(void *pvParameters)
                 fan_read_failures = 0;
             }
 
-            ESP_LOGD(TAG, "fan %d %d", healthModule->fan_rpm[0], healthModule->fan_rpm[1]);
+            /*
+             * Both tachometer channels, once, at INFO.
+             *
+             * These boards have two fan headers and ship with one fan, so one
+             * channel reads zero on a healthy miner -- and three separate
+             * boards had to be compared by hand before that was established,
+             * because nothing in the log said which channel was which. Every
+             * owner log answers it from now on. Once and not every cycle,
+             * because this loop runs every two seconds.
+             */
+            if (!fan_channels_reported &&
+                (healthModule->fan_rpm_raw[0] > 0 || healthModule->fan_rpm_raw[1] > 0))
+            {
+                fan_channels_reported = true;
+                ESP_LOGI(TAG, "fan tachometers: ch0 %"PRIu16" RPM, ch1 %"PRIu16
+                              " RPM (a header with no fan fitted reads 0)",
+                         healthModule->fan_rpm_raw[0], healthModule->fan_rpm_raw[1]);
+            }
+
+            ESP_LOGD(TAG, "fan rpm ch0 %"PRIu16" ch1 %"PRIu16" (effective %"PRIu16")",
+                     healthModule->fan_rpm_raw[0], healthModule->fan_rpm_raw[1],
+                     healthModule->fan_rpm[0]);
 
             /*get the temperature from sensor.*/
             read_internal_temperature_sensor(&(healthModule->cpu_temperature));

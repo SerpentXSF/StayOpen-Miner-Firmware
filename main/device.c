@@ -664,14 +664,33 @@ esp_err_t read_fan_rpm(GlobalState *GLOBAL_STATE)
         esp_err_t ret = fan_pcnts_get_rpm(LEDC_CHANNEL_0, &pulses, window_ms);
         GLOBAL_STATE->HEALTH_MODULE.fan_rpm[0] = (uint16_t)pulses;
         GLOBAL_STATE->HEALTH_MODULE.fan_rpm[1] = 0;
+        /* One tachometer on this family; the second channel does not exist. */
+        GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[0] = (uint16_t)pulses;
+        GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[1] = 0;
         return ret;
     }
+
+    uint16_t ch1 = 0;
+    uint16_t ch2 = 0;
 
     /* Not ESP_ERROR_CHECK: this runs every two seconds in the health loop,
      * and a single I2C hiccup reading a tachometer is not worth aborting the
      * miner for. The caller already treats a bad read as a fan fault. */
     esp_err_t ret = ESP_ERROR_CHECK_WITHOUT_ABORT(
-                        EMC2302_get_fan_speed(GLOBAL_STATE->HEALTH_MODULE.fan_rpm));
+                        EMC2302_get_fan_speeds(&ch1, &ch2));
+
+    GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[0] = ch1;
+    GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[1] = ch2;
+
+    /*
+     * fan_rpm[0] stays the effective reading -- the higher of the two -- and
+     * is deliberately not switched to channel 1. Two headers, one fan fitted,
+     * and the populated header is not the same one on every board: assigning
+     * the raw first channel here would show 0 RPM on the display and, worse,
+     * leave fan_tach_proven[0] unlatched so the stall trip never arms, on any
+     * board whose fan is on the other header.
+     */
+    GLOBAL_STATE->HEALTH_MODULE.fan_rpm[0] = ch1 > ch2 ? ch1 : ch2;
     GLOBAL_STATE->HEALTH_MODULE.fan_rpm[1] = 0;
     return ret;
 }

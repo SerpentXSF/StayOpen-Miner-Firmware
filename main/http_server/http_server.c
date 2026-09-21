@@ -1916,6 +1916,15 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddNumberToObject(root, "autofanspeed", nvs_config_get_u16(NVS_CONFIG_AUTO_FAN_SPEED, 1));
     cJSON_AddNumberToObject(root, "fanspeed", GLOBAL_STATE->HEALTH_MODULE.fan_percent[0]);
     cJSON_AddNumberToObject(root, "fanrpm", GLOBAL_STATE->HEALTH_MODULE.fan_rpm[0]);
+    /*
+     * fanrpm above is the effective reading and keeps its meaning for every
+     * existing client. These two are the raw tachometer channels: two fan
+     * headers, one fan fitted as shipped, so one of them is zero on a healthy
+     * board and which one varies. Nothing should act on a zero here -- an
+     * empty header and a stalled fan read the same.
+     */
+    cJSON_AddNumberToObject(root, "fanrpm0", GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[0]);
+    cJSON_AddNumberToObject(root, "fanrpm1", GLOBAL_STATE->HEALTH_MODULE.fan_rpm_raw[1]);
 
     /*   
     if (GLOBAL_STATE->SYSTEM_MODULE.power_fault > 0) {

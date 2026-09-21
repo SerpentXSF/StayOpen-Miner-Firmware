@@ -42,5 +42,8 @@ esp_err_t EMC2302_set_fan_polarity(bool invert);
 esp_err_t EMC2302_set_fan_speed(uint8_t percent);
 esp_err_t EMC2302_get_fan_speed1(uint16_t *dst);
 esp_err_t EMC2302_get_fan_speed2(uint16_t *dst);
+/* Raw per-channel tachometers. Either pointer may be NULL. */
+esp_err_t EMC2302_get_fan_speeds(uint16_t *ch1, uint16_t *ch2);
+/* The higher of the two channels, written to a single uint16_t. */
 esp_err_t EMC2302_get_fan_speed(uint16_t *dst);
 #endif /* EMC2302_H_ */

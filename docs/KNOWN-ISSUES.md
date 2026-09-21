@@ -734,17 +734,43 @@ Fan0's zero would then have read as a stall. A shutdown on a healthy miner,
 ten seconds in, which is the one outcome this check exists to avoid. Latched
 per channel now.
 
-**What this check still cannot see on a BC04.** `read_fan_rpm()` stores
-`EMC2302_get_fan_speed()`, and that returns the *larger* of the two channels.
-So one dead fan out of two is invisible: the survivor's reading is what
-reaches the health loop, and nothing looks wrong. The stall check only ever
-sees a board with no working fan at all.
+**What the max() over two channels does and does not cost.** Revised
+2026-09-21, after an owner confirmed what the hardware actually is: **a BC04
+has two fan headers and ships with one fan fitted.** Three boards had shown
+`Fan0: 0 RPM` beside a healthy second channel; that is an empty header, not a
+fault, on any of them.
 
-Fixing it means reporting both channels separately and deciding what a
-single-fan failure should do, which is a design question rather than a typo --
-on a board that may legitimately have one fan fitted, treating a zero as a
-fault is exactly the false positive corrected above. Left open deliberately,
-and recorded so nobody reads the entry above as more protection than it is.
+That changes the assessment this entry used to carry. `read_fan_rpm()` stores
+the *larger* of the two channels, and an earlier version of this section
+called that a hole in the protection -- one dead fan out of two invisible
+behind the survivor's reading. On a board with **one** fan fitted the maximum
+*is* that fan: if it stops, both channels read zero, and the stall check
+fires exactly as intended. **The protection works for the shipped
+configuration.** The gap is narrower than it was written up as, and only opens
+for an owner who populates the spare header.
+
+**It also cannot be closed by detecting harder.** In
+`components/bc_hal/EMC2302.c`, `rpm_raw` saturates at 8191 for both "no fan
+connected" and "turning too slowly to measure", so an empty header and a
+stalled fan are the same reading at the tachometer. The EMC2302's own
+`STALL_STATUS` (0x25) carries the same ambiguity on a driven-but-empty
+channel, and this driver does not read it -- `EMC2302_FAN_STATUS`,
+`STALL_STATUS`, `SPIN_STATUS` and `DRIVE_STATUS` are all defined in
+`EMC2302.h` and used nowhere. Per-channel tripping would need the owner to
+declare how many fans are fitted. That is a setting, not a better driver.
+
+**What 2.0.28 does about it.** Both tachometers are now reported separately --
+`fanrpm0` and `fanrpm1` in `/api/system/info`, one INFO line at startup naming
+each channel, and a second fan row in the dashboard that appears when a second
+fan is actually turning. `fanrpm` keeps its existing meaning, the effective
+reading, so no client breaks and the display and stall check are untouched.
+
+**Still open, deliberately: nothing trips on a single channel.**
+`num_of_pwm_channel` remains 1, so the stall check still judges only the
+effective reading. Arming it per channel is untestable -- no board here has
+two fans fitted -- and shipping an untested fan trip is how the board-wide
+latch above nearly powered off a healthy miner. Reporting first; a trip only
+once there is hardware to prove it on.
 
 ## A BC04 cannot de-energise its own hashboard once I2C is gone (open, mitigated)
 

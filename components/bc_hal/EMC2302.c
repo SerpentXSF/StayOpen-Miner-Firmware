@@ -198,7 +198,7 @@ esp_err_t EMC2302_get_fan_speed2(uint16_t *dst)
     return ESP_OK;
 }
 
-esp_err_t EMC2302_get_fan_speed(uint16_t *dst)
+esp_err_t EMC2302_get_fan_speeds(uint16_t *ch1, uint16_t *ch2)
 {
     uint16_t rpm1 = 0;
     uint16_t rpm2 = 0;
@@ -218,12 +218,43 @@ esp_err_t EMC2302_get_fan_speed(uint16_t *dst)
      */
     esp_err_t err1 = EMC2302_get_fan_speed1(&rpm1);
     esp_err_t err2 = EMC2302_get_fan_speed2(&rpm2);
+    bool both_failed = (ESP_OK != err1 && ESP_OK != err2);
 
-    if (ESP_OK != err1 && ESP_OK != err2) {
-        *dst = 0;
-        return err1;
+    if (both_failed) {
+        rpm1 = 0;
+        rpm2 = 0;
     }
 
+    if (NULL != ch1) {
+        *ch1 = rpm1;
+    }
+    if (NULL != ch2) {
+        *ch2 = rpm2;
+    }
+
+    return both_failed ? err1 : ESP_OK;
+}
+
+/*
+ * The effective reading: the higher of the two channels.
+ *
+ * These boards carry two fan headers and ship with one fan fitted, so one
+ * tachometer reads zero on a healthy miner, and an unpopulated header is
+ * indistinguishable from a stopped fan -- rpm_raw saturates at 8191 for both.
+ * Taking the maximum is what makes one number mean "the fan that is actually
+ * turning" whichever header it is on. Callers that want the channels apart
+ * want EMC2302_get_fan_speeds().
+ *
+ * dst is one value, not an array. The self test calls this with the address
+ * of a single uint16_t, so this must never write past it.
+ */
+esp_err_t EMC2302_get_fan_speed(uint16_t *dst)
+{
+    uint16_t rpm1 = 0;
+    uint16_t rpm2 = 0;
+
+    esp_err_t ret = EMC2302_get_fan_speeds(&rpm1, &rpm2);
+
     *dst = rpm1 > rpm2 ? rpm1 : rpm2;
-    return ESP_OK;
+    return ret;
 }

@@ -108,7 +108,8 @@ export const statusData: MinerStatusData = {
     invertfanpolarity: 1,
     autofanspeed: 1,
     fanspeed: 80,
-    fanrpm: 1000,
+    fanrpm: 2000,
+    fanrpm0: 0,
     fanrpm1: 2000,
 
     chipData: [

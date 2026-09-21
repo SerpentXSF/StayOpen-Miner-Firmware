@@ -128,11 +128,13 @@ Once ours is on there, these answers are gone.
       this revision or whether our ceiling should come down.
 - [ ] **The frequency ramp.** 50 MHz → 760 MHz in about 11 seconds. Note the
       step size and dwell; ours ramps differently.
-- [ ] **The fan story.** `Fan0: 0 RPM` on all 81 baseline samples, `Fan1`
-      around 3683. Determine whether a second fan is physically fitted, whether
-      the header exists, and which EMC2302 channel drives which. Our
-      `read_fan_rpm` takes `max(ch1, ch2)` on a BC04, which would hide a
-      genuinely dead fan — this is the board that can settle it.
+- [x] ~~**The fan story.**~~ **Settled 2026-09-21, without this board.** An
+      owner confirmed the BC04 has **two fan headers and ships with one fan
+      fitted**, which is why `Fan0` read `0 RPM` on all 81 baseline samples
+      while `Fan1` ran at ~3683. An empty header, not a fault, and three
+      boards agree. 2.0.28 reports both channels separately so no future log
+      needs this worked out by hand. Still worth noting from the console if
+      it is cheap: which EMC2302 channel the fitted fan sits on.
 - [ ] **What the thermal PID does.** THOR has `thermal_pid`; ours has a step
       curve. Capture fan response against temperature over a range if the board
       will warm up enough.

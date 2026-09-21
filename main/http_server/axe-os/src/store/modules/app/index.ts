@@ -77,6 +77,18 @@ export const useAppStore = defineStore("app", {
         hasSecondFan(): boolean {
             return this.currentModelConfig.fan_count > 1;
         },
+        // These boards have two fan headers and ship with one fan fitted, so
+        // the model table cannot say how many are there. Show the second fan
+        // when its tachometer is actually turning: keying off a static count
+        // would print a permanent "Fan 2  0 RPM" on every stock board, and
+        // hiding it outright loses the reading for anyone who fits one.
+        secondFanTurning(state: AppState): boolean {
+            return (state.statusRaw?.fanrpm1 ?? 0) > 0
+                && (state.statusRaw?.fanrpm0 ?? 0) > 0;
+        },
+        showSecondFan(): boolean {
+            return this.hasSecondFan || this.secondFanTurning;
+        },
         hasFlipScreen(): boolean {
             return this.currentModelConfig.flip_screen;
         },
