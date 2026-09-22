@@ -937,7 +937,9 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     if (cJSON_IsString(item = cJSON_GetObjectItem(root, "ssid"))) {
         nvs_config_set_string(NVS_CONFIG_WIFI_SSID, item->valuestring);
     }
-    if (cJSON_IsString(item = cJSON_GetObjectItem(root, "wifiPass"))) {
+    /* Not a masked one -- see api_is_masked_secret(). */
+    if (cJSON_IsString(item = cJSON_GetObjectItem(root, "wifiPass")) &&
+        !api_is_masked_secret(item->valuestring)) {
         nvs_config_set_string(NVS_CONFIG_WIFI_PASS, item->valuestring);
         #ifdef SHOW_WIFI_PASSWORD_FEATURE
         if(NULL != GLOBAL_STATE->SYSTEM_MODULE.wifiPass){
