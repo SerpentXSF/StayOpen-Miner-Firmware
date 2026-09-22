@@ -772,6 +772,31 @@ two fans fitted -- and shipping an untested fan trip is how the board-wide
 latch above nearly powered off a healthy miner. Reporting first; a trip only
 once there is hardware to prove it on.
 
+## A masked password was stored as the password (fixed)
+
+**Where:** `main/api_helper.c`, `main/http_server/http_server.c`.
+
+The settings page shows a stored Wi-Fi password as asterisks and strips that
+mask before sending, so in normal use the firmware never received one. The
+check lived only in the page. Both firmware write paths stored whatever string
+they were handed, `*****` included.
+
+Any other client that reads the config, changes one unrelated field and writes
+it back -- a script, a backup and restore tool, a monitoring dashboard -- sends
+the mask through and takes the miner off its network. Not immediately: the
+existing association survives, so it keeps working until the next restart,
+whenever that happens to be, and comes up unable to join with nothing in the
+log connecting the two events.
+
+Found by doing exactly that from a test script against a live miner, then
+spending an hour blaming an unrelated firmware downgrade that had already been
+rolled back by the bootloader.
+
+**Fixed.** `api_is_masked_secret()` rejects a string of nothing but asterisks
+and both write paths ask it, keeping the stored password. An empty string is
+still treated as a real value -- open networks exist, and refusing to clear a
+password would be its own bug.
+
 ## Both interfaces could be set to one static IP (fixed)
 
 **Where:** `main/api_helper.c`, `main/http_server/http_server.c`,
