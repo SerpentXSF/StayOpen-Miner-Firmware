@@ -182,6 +182,7 @@ const lang = {
         require_netmask: 'Please enter the netmask.',
         require_dnsserver: 'Please enter the dns servers.',
         check_ip_fmt: 'Please enter the correct format.',
+        check_ip_duplicate: 'Wi-Fi and Ethernet cannot share one static IP. Use a different address, or set one to DHCP.',
         check_houstname_fmt: 'Hostname cannot contain \"-\"',
         notification_scan_error: 'Failed to scan WiFi networks.',
         warning: 'Compatible exclusively with 2.4GHz Wi-Fi networks.',

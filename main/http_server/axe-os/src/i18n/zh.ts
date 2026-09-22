@@ -180,6 +180,7 @@ const lang = {
         require_dnsserver: "请输入DNS服务地址.",
         check_houstname_fmt: '不能包含字符 \"-\"',
         check_ip_fmt: "请输入正确的格式.",
+        check_ip_duplicate: "Wi-Fi 与以太网不能使用同一个静态 IP。请更换地址，或将其中一个设为 DHCP。",
         notification_scan_error: '扫描WIFI网络失败.',
         warning: '仅支持 WiFi2.4G网络',
         // [新增] Network.vue 重构所需字段

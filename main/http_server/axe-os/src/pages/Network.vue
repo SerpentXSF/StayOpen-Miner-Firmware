@@ -165,7 +165,9 @@ const updateSys = async (values: any) => {
       showNotification(t('com.msg_save_success'), 'success')
       appStore.setInfo({ needsRestart: true });
     } else {
-      showNotification(t('com.msg_save_failed'), 'error')
+      /* The firmware sends a reason for a refused setting; a generic "Save
+       * failed" would throw it away and leave the cause on the device. */
+      showNotification(res.msg || t('com.msg_save_failed'), 'error')
     }
   } catch (err) {
     showNotification(t('com.msg_save_failed'), 'error')
@@ -230,6 +232,25 @@ watch(() => locale.value, () => {
 const ipValidator = (_: string, value: string, callback: Function) => {
   if (validatorIP(value)) callback();
   else callback(ncl("check_ip_fmt"));
+};
+
+// Two interfaces cannot share one static address: two MACs answering for one
+// IP on one subnet makes the ARP entry flap, and the page loads its title and
+// then stays blank while the miner carries on hashing. The firmware refuses to
+// store it; this is so nobody has to send it to find out.
+const duplicateIpValidator = (rule: any, value: string, callback: Function) => {
+  if (!validatorIP(value)) {
+    callback(ncl("check_ip_fmt"));
+    return;
+  }
+  const other = String(rule?.field || '').startsWith('wifi_')
+    ? {ip: formState.eth_ip, dhcp: isEthDhcp.value}
+    : {ip: formState.wifi_ip, dhcp: isWifiDhcp.value};
+  if (!other.dhcp && other.ip && other.ip === value) {
+    callback(ncl("check_ip_duplicate"));
+    return;
+  }
+  callback();
 };
 
 const hostnameValidator = (_: string, value: string, callback: Function) => {
@@ -411,7 +432,7 @@ onMounted(async () => {
                 
                 <template v-if="!isWifiDhcp">
                   <a-form-item :label="ncl('static_ip')" name="wifi_ip"
-                               :rules="[{required: true, message: t('com.rule_required')}, { validator: ipValidator }]">
+                               :rules="[{required: true, message: t('com.rule_required')}, { validator: duplicateIpValidator }]">
                     <a-input v-model:value="formState.wifi_ip"></a-input>
                   </a-form-item>
                   <a-form-item :label="ncl('subnet_mask')" name="wifi_mask"
@@ -450,7 +471,7 @@ onMounted(async () => {
                 
                 <template v-if="!isEthDhcp">
                   <a-form-item :label="ncl('static_ip')" name="eth_ip"
-                               :rules="[{required: true, message: t('com.rule_required')}, { validator: ipValidator }]">
+                               :rules="[{required: true, message: t('com.rule_required')}, { validator: duplicateIpValidator }]">
                     <a-input v-model:value="formState.eth_ip"></a-input>
                   </a-form-item>
                   <a-form-item :label="ncl('subnet_mask')" name="eth_mask"

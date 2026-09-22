@@ -111,10 +111,67 @@ cJSON *get_network_info_json()
     return root;
 }
 
+/* The string a nettype field carries when the interface is on a fixed address. */
+#define NETTYPE_STATIC "Static"
+
+static const char *conf_str(cJSON *conf, const char *key)
+{
+    cJSON *item = cJSON_GetObjectItem(conf, key);
+
+    return (cJSON_IsString(item) && item->valuestring != NULL) ? item->valuestring : NULL;
+}
+
+/*
+ * Both interfaces on one static address cannot work, so do not store it.
+ *
+ * An owner spent days on a miner whose web interface "went unresponsive after
+ * a while" while it hashed perfectly throughout. Wi-Fi and Ethernet were both
+ * set static to the same address: two MAC addresses answering for one IP on
+ * one subnet, so the ARP entry flaps and connections break mid-transfer. The
+ * signature is a page that loads its title and then stays blank -- the HTML
+ * arrives over one interface and the scripts it asks for go to the other.
+ *
+ * Nothing stopped that being saved. The settings page keeps the two
+ * configurations apart correctly, end to end, and faithfully stored exactly
+ * what was asked for.
+ *
+ * Checked before anything is written, because a config half-applied and then
+ * refused would be worse than the one being refused.
+ */
+static bool both_interfaces_share_one_static_ip(cJSON *network_conf)
+{
+    const char *wifi_type = conf_str(network_conf, "wifi_conf_nettype");
+    const char *eth_type  = conf_str(network_conf, "eth_conf_nettype");
+    const char *wifi_ip   = conf_str(network_conf, "wifi_conf_ipaddress");
+    const char *eth_ip    = conf_str(network_conf, "eth_conf_ipaddress");
+
+    if (wifi_type == NULL || eth_type == NULL || wifi_ip == NULL || eth_ip == NULL) {
+        return false;
+    }
+
+    if (strcmp(wifi_type, NETTYPE_STATIC) != 0 || strcmp(eth_type, NETTYPE_STATIC) != 0) {
+        return false;
+    }
+
+    /* Both empty is not a clash, it is an unconfigured pair of fields. */
+    if (strlen(wifi_ip) == 0 || strlen(eth_ip) == 0) {
+        return false;
+    }
+
+    return strcmp(wifi_ip, eth_ip) == 0;
+}
+
 esp_err_t set_network_conf_json(cJSON *network_conf)
 {
     esp_err_t ret = ESP_OK;
     cJSON * item;
+
+    if (both_interfaces_share_one_static_ip(network_conf)) {
+        ESP_LOGW(TAG, "refusing to set Wi-Fi and Ethernet to the same static "
+                      "address (%s) -- two interfaces on one IP cannot work",
+                 conf_str(network_conf, "wifi_conf_ipaddress"));
+        return ESP_ERR_INVALID_ARG;
+    }
 
     if ((item = cJSON_GetObjectItem(network_conf, "hostname")) != NULL){
         nvs_config_set_string(NVS_CONFIG_HOSTNAME, item->valuestring);

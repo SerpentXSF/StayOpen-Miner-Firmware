@@ -772,6 +772,45 @@ two fans fitted -- and shipping an untested fan trip is how the board-wide
 latch above nearly powered off a healthy miner. Reporting first; a trip only
 once there is hardware to prove it on.
 
+## Both interfaces could be set to one static IP (fixed)
+
+**Where:** `main/api_helper.c`, `main/http_server/http_server.c`,
+`main/http_server/axe-os/src/pages/Network.vue`.
+
+An owner reported a miner whose web interface "went unresponsive after a
+while" while it hashed perfectly throughout, for days. Wi-Fi and Ethernet were
+both set to a static `192.168.16.196`.
+
+Two MAC addresses answering for one IP on one subnet makes the switch's and
+the client's ARP entries flap between them. The signature is distinctive once
+you know it: **the page loads its title and then stays blank.** The HTML
+arrives over one interface, the scripts it then asks for are sent to the
+other, and they stall. It looks like a broken web server and it is a broken
+address.
+
+The settings kept the two configurations apart correctly at every layer --
+separate NVS keys (`staticIP` vs `ETHstaticIP`), separate reads, separate
+writes, separate form fields. Nothing was cross-wired. Nothing refused the
+combination either, so the firmware stored exactly what it was asked for.
+
+**Fixed.** `set_network_conf_json()` refuses a request that sets both
+interfaces static to the same non-empty address, and does so **before writing
+anything**, because a configuration half-applied and then refused would be
+worse than one refused outright. The settings page validates the same rule
+inline so it never has to be sent.
+
+Two things turned up alongside it and are fixed here too. The handler sent
+**no response at all** when the setter failed, so a rejected save left the
+browser waiting on a request that was never going to be answered -- there was
+simply no failure path before this, because nothing could fail. And the
+settings page discarded the server's `msg` in favour of a generic "Save
+failed", which would have thrown away the reason.
+
+**Not fixed, and out of scope:** a static address that clashes with a
+*different device* on the network. The same owner moved one interface to
+`.197` and reached a Lucky Miner's web interface there. Firmware cannot
+reasonably detect that; a DHCP reservation is the answer.
+
 ## A BC04 cannot de-energise its own hashboard once I2C is gone (open, mitigated)
 
 **Where:** `main/device.c`, `power_off_hashboard()`.

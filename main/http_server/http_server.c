@@ -3130,6 +3130,30 @@ esp_err_t set_network_conf_handler(httpd_req_t *req)
     if(ESP_OK == ret){
         const char *resp = "{\"code\": \"200\", \"msg\": \"\", \"data\":\"\"}";
         httpd_resp_send(req, resp, strlen(resp));
+    } else if (ESP_ERR_INVALID_ARG == ret) {
+        /*
+         * A rejected setting has to say so. Every other path out of
+         * set_network_conf_json() sent nothing at all, so the browser sat
+         * waiting on a request that was never going to be answered and the
+         * settings page showed neither success nor failure.
+         *
+         * Carried as a 200 with a non-200 code in the body because that is
+         * the envelope this API uses and the one the settings page reads; an
+         * HTTP error status makes the client throw before it can show the
+         * reason.
+         */
+        const char *resp =
+            "{\"code\": \"400\", \"msg\": \"Wi-Fi and Ethernet cannot both use "
+            "the same static IP address. Give one of them a different address, "
+            "or set one to DHCP.\", \"data\":\"\"}";
+        httpd_resp_send(req, resp, strlen(resp));
+        ret = ESP_OK; /* the request was answered; the setting was not applied */
+    } else {
+        const char *resp =
+            "{\"code\": \"500\", \"msg\": \"Could not apply the network "
+            "settings.\", \"data\":\"\"}";
+        httpd_resp_send(req, resp, strlen(resp));
+        ret = ESP_OK;
     }
 
     if(NULL != root){
