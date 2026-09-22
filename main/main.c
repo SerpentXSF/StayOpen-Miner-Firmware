@@ -523,7 +523,16 @@ void app_main(void)
      */
     xTaskCreate(eth_stall_watchdog, "eth-stall", 3072, &GLOBAL_STATE, 3, NULL);
 
-    ESP_ERROR_CHECK(init_all_peripherals(&GLOBAL_STATE));
+    /*
+     * Not ESP_ERROR_CHECK. The only failure this reports is a voltage
+     * regulator that did not answer, and it has already logged that, raised
+     * the error and left the hashboard unpowered. Aborting here would restore
+     * the reboot loop that change exists to remove.
+     */
+    if (ESP_OK != init_all_peripherals(&GLOBAL_STATE)) {
+        ESP_LOGE(TAG, "hashboard peripherals did not initialise; carrying on "
+                      "so the miner stays reachable");
+    }
 
     /* The hashboard rail has just come up and settled.
      *

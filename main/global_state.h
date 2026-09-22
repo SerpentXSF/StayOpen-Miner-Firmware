@@ -78,6 +78,7 @@ typedef enum{
 	WIFI_CONNETION_ERROR,
 	NETWORK_ERROR,	/*could not connect to the pool.*/
 	BOARD_MISMATCH_ERROR, /*image built for a different board's pinout.*/
+	POWER_BOARD_ERROR, /*the voltage regulator did not answer on I2C.*/
 	SYSTEM_ERROR_MAX_NUM
 }SYSTEM_ERROR;
 

@@ -757,8 +757,45 @@ esp_err_t init_all_peripherals(GlobalState *GLOBAL_STATE)
 
     //SYSTEM_get_config_by_boot_mode(GLOBAL_STATE);
 
-    /*vcore related sensor init*/
-    ESP_ERROR_CHECK(VCORE_init(GLOBAL_STATE));
+    /*
+     * A regulator that does not answer is a fault to report, not a reason to
+     * abort.
+     *
+     * This was ESP_ERROR_CHECK. On a board whose TPS546 is absent -- which is
+     * where both of this project's BC04s ended up, with the whole I2C domain
+     * gone -- VCORE_init() retries for about a hundred seconds, fails, and
+     * the check aborts. The board reboots and does it again, forever, on a
+     * roughly two hundred second cycle. A miner that reboots every three
+     * minutes cannot be inspected, cannot serve its interface, and cannot
+     * tell its owner what is wrong.
+     *
+     * The vendor's firmware does not do this. A BC04 in exactly that state
+     * reported the missing devices, put "Power Board Error" on the display
+     * and stayed up. Staying up is the more useful behaviour.
+     *
+     * Third time this pattern has turned up here, after read_fan_rpm() and
+     * EMC2302_get_fan_speed(): ESP_ERROR_CHECK wrapped around a hardware read
+     * that is allowed to fail.
+     */
+    ret = VCORE_init(GLOBAL_STATE);
+    if (ESP_OK != ret) {
+        ESP_LOGE(TAG, "VCORE init failed (%s): the voltage regulator is not "
+                      "responding. NOT powering the hashboard -- without the "
+                      "regulator its voltage cannot be set or limited. The "
+                      "miner stays up so it can be reached and diagnosed.",
+                 esp_err_to_name(ret));
+        SYSTEM_notify_error_info(GLOBAL_STATE, POWER_BOARD_ERROR, NULL);
+
+        /*
+         * Release the Ethernet watchdog now instead of making it wait out its
+         * timeout. It defers Ethernet until the core rail is up, because a
+         * linked W5500 across that transient stops answering for good -- but
+         * the rail is never coming up on this board, so the hazard it guards
+         * against cannot occur and there is nothing left to wait for.
+         */
+        GLOBAL_STATE->interface_initalized = true;
+        return ret;
+    }
 
     /*init the power.*/
     power_on_hashboard(GLOBAL_STATE);
