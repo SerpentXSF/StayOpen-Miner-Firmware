@@ -5,7 +5,7 @@ import { default as langZh } from '@/i18n/zh.ts'
  * 当前 Web 版本号
  * 详细变更记录请查阅: src/CHANGELOG.md
  */
-const WEB_VERSION = '1.6.2 20260908';
+const WEB_VERSION = '1.6.2.1 20260922';
 
 // [新增] 机型配置接口
 export interface ModelConfig {
@@ -36,6 +36,12 @@ export interface ModelConfig {
     ref_freq_mhz: number;         // 频率 REF 标记位置
 
     max_voltage_v: number;        // 电压表盘最大刻度
+    // The highest core voltage the settings page will let you enter, when
+    // that differs from the dial's top of scale. A BC04's dial runs to 5.20
+    // because the regulator does, but the vendor caps the chips at 4.80 and
+    // the firmware refuses anything above it -- without this the box would
+    // accept a number that is silently discarded.
+    max_settable_voltage_v?: number;
     ref_voltage_v: number;        // 电压 REF 标记位置
 
     // 告警阈值
@@ -297,7 +303,8 @@ const DEVICE_MODELS_INFO: Record<string, ModelConfig> = {
         ref_freq_mhz: 750,
 
         max_voltage_v: 5.20,
-        ref_voltage_v: 4.90,
+        max_settable_voltage_v: 4.80,   // vendor cap; the firmware enforces it
+        ref_voltage_v: 4.65,
 
         temp_warn_c: 70,
         default_volts_mv: 4900,
@@ -333,7 +340,8 @@ const DEVICE_MODELS_INFO: Record<string, ModelConfig> = {
         ref_freq_mhz: 750,
 
         max_voltage_v: 6.00,
-        ref_voltage_v: 4.90,
+        max_settable_voltage_v: 4.80,   // vendor cap; the firmware enforces it
+        ref_voltage_v: 4.65,
 
         temp_warn_c: 70,
         default_volts_mv: 4900,

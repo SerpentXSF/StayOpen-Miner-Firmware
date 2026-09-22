@@ -556,6 +556,41 @@ int read_power_temp(void)
     return VCORE_get_temp();
 }
 
+/*
+ * One ceiling, asked for in every place a voltage is set.
+ *
+ * The vendor caps BC04 and BC08 at 4.80 V and nvs_device.c applied that to
+ * the startup default -- but only there. CONFIG_TPS546_VOUT_MAX is 5.20 on a
+ * BC04, and both of the other ways in checked against that instead: the boot
+ * mode config lifts asic_vol_default to whatever asicnormalvol holds, and the
+ * coreVoltage PATCH accepted anything inside min..max and applied it live. So
+ * the cap the vendor put on four BM1370s in series could be stepped over by
+ * writing one NVS key or sending one request -- 1.30 V a chip instead of
+ * 1.20.
+ *
+ * Whether 1.30 V damages a BM1370 is not something this repository can
+ * answer. That the cap existed and did not hold is answerable, and is the
+ * defect.
+ */
+uint16_t device_core_voltage_ceiling(GlobalState * GLOBAL_STATE)
+{
+    uint16_t ceiling = GLOBAL_STATE->asic_vol_max;
+
+    switch (GLOBAL_STATE->device_model) {
+        case DEVICE_BC04:
+        case DEVICE_BC08:
+            /* Four and eight BM1370 in series; the vendor's figure. */
+            if (ceiling > 480) {
+                ceiling = 480;
+            }
+            break;
+        default:
+            break;
+    }
+
+    return ceiling;
+}
+
 esp_err_t set_fan_pwm(GlobalState *GLOBAL_STATE, uint8_t pwm_percent)
 {
     if (device_is_bc01_family(GLOBAL_STATE->device_model)) {

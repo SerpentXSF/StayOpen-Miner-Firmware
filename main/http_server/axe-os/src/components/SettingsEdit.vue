@@ -311,7 +311,14 @@ const workModes = computed(() => {
 
 // [新增] 硬件限制计算
 const maxFreq = computed(() => appStore?.currentModelConfig?.max_freq_mhz || 2600);
-const maxVolt = computed(() => Math.round((appStore?.currentModelConfig?.max_voltage_v || 1.4) * 100));
+const maxVolt = computed(() => {
+  const cfg = appStore?.currentModelConfig;
+  // The settable cap where the model has one, the dial's top of scale
+  // otherwise. On a BC04 they differ: the regulator reaches 5.20 V, the
+  // vendor caps the chips at 4.80, and the firmware discards anything above
+  // it -- so offering 5.20 here meant a value that saved and did nothing.
+  return Math.round((cfg?.max_settable_voltage_v || cfg?.max_voltage_v || 1.4) * 100);
+});
 
 const freqRules = computed(() => [
   { required: true, message: t('com.rule_required') }
