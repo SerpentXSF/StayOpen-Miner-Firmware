@@ -134,6 +134,7 @@ void health_maintenance_task(void *pvParameters)
     #define FAN_STALL_STRIKES  5
     bool fan_tach_proven[MAX_PWM_CHANNEL] = {false};
     bool fan_channels_reported = false;
+    uint32_t fan_samples = 0;
     int fan_read_failures = 0;
     static uint8_t lotto_refresh_data_counter = 2;
 
@@ -209,7 +210,15 @@ void health_maintenance_task(void *pvParameters)
              * owner log answers it from now on. Once and not every cycle,
              * because this loop runs every two seconds.
              */
-            if (!fan_channels_reported &&
+            fan_samples++;
+
+            /*
+             * Not the first reading. On the BC01 path that one is discarded
+             * upstream, and a tachometer coming out of spin-up is not worth
+             * quoting as the board's answer either -- this line exists to be
+             * trusted in somebody else's log, so it waits for a settled one.
+             */
+            if (!fan_channels_reported && fan_samples > 3 &&
                 (healthModule->fan_rpm_raw[0] > 0 || healthModule->fan_rpm_raw[1] > 0))
             {
                 fan_channels_reported = true;

@@ -659,9 +659,31 @@ esp_err_t read_fan_rpm(GlobalState *GLOBAL_STATE)
                 window_ms = (uint32_t)elapsed_ms;
             }
         }
+
+        bool first_sample = (last_us == 0);
         last_us = now_us;
 
         esp_err_t ret = fan_pcnts_get_rpm(LEDC_CHANNEL_0, &pulses, window_ms);
+
+        /*
+         * The first sample is not a measurement.
+         *
+         * The counter has been accumulating since the driver came up, and
+         * there is no previous call to measure the interval against, so the
+         * count gets divided by the 1000 ms default and comes out several
+         * times too high -- 20430 RPM on a fan that turns at 5300. It reached
+         * the dashboard and the startup log line before anyone noticed.
+         *
+         * The call above still has to happen: it clears the counter and sets
+         * the baseline that makes every later sample correct. Only the value
+         * is discarded. Reporting zero here is safe because fan_tach_proven[]
+         * is not latched by a zero, so the stall check stays disarmed for the
+         * one extra cycle this costs.
+         */
+        if (first_sample) {
+            pulses = 0;
+        }
+
         GLOBAL_STATE->HEALTH_MODULE.fan_rpm[0] = (uint16_t)pulses;
         GLOBAL_STATE->HEALTH_MODULE.fan_rpm[1] = 0;
         /* One tachometer on this family; the second channel does not exist. */
