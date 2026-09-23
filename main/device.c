@@ -780,6 +780,27 @@ esp_err_t init_all_peripherals(GlobalState *GLOBAL_STATE)
 
 	init_all_i2c_dev(GLOBAL_STATE);
 
+    /*
+     * Say so when the hashboard is not there.
+     *
+     * An empty bus is conclusive: the regulator, the fan controller and the
+     * temperature sensor all live on it, so if nothing answered at any address
+     * the hashboard is absent or unpowered. The firmware knew this seconds
+     * ago -- the scan logs it -- and told nobody who was not reading the
+     * serial console.
+     *
+     * Measured on a BC04 with a dead hashboard domain: the dashboard showed
+     * 0 GH/s, 0 W, 0 V, "-- C", a green "Excellent" network badge and not one
+     * word about a fault, while /api/get_err returned NULL. The vendor's
+     * firmware managed "Power Board Error" on the display from the same
+     * information.
+     */
+    if (0 == bc_i2c_devices_found()) {
+        ESP_LOGE(TAG, "no I2C devices at all: the hashboard is absent or "
+                      "unpowered. Reporting a power board fault.");
+        SYSTEM_notify_error_info(GLOBAL_STATE, POWER_BOARD_ERROR, NULL);
+    }
+
     //SYSTEM_get_config_by_boot_mode(GLOBAL_STATE);
 
     /*

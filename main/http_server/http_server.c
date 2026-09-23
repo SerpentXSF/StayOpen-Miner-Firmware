@@ -1917,6 +1917,19 @@ static esp_err_t GET_system_info(httpd_req_t * req)
 
     cJSON_AddNumberToObject(root, "autofanspeed", nvs_config_get_u16(NVS_CONFIG_AUTO_FAN_SPEED, 1));
     cJSON_AddNumberToObject(root, "fanspeed", GLOBAL_STATE->HEALTH_MODULE.fan_percent[0]);
+    /*
+     * The current fault, as a string, or "" when there is none.
+     *
+     * SYSTEM_notify_error_info() has always set this and nothing outside the
+     * serial console could see it: a miner with a dead hashboard served a
+     * dashboard of zeros and a green network badge with no indication that
+     * anything was wrong. /api/get_err existed but returns text/plain on its
+     * own endpoint, so the dashboard never asked.
+     */
+    cJSON_AddStringToObject(root, "systemError",
+        GLOBAL_STATE->SYSTEM_MODULE.system_error ?
+        GLOBAL_STATE->SYSTEM_MODULE.system_error : "");
+
     cJSON_AddNumberToObject(root, "fanrpm", GLOBAL_STATE->HEALTH_MODULE.fan_rpm[0]);
     /*
      * fanrpm above is the effective reading and keeps its meaning for every

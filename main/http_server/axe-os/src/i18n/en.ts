@@ -74,6 +74,7 @@ const lang = {
     },
     dashboard: {
         alert: {
+            system_fault: 'Hardware fault',
             overheated: 'Device has overheated - See settings.',
             power_fault: 'Check your Power Supply.',
             low_freq: 'Frequency is set low - See settings.'

@@ -531,6 +531,10 @@ const gaugeColor = computed(() => {
     <a-row :gutter="[0, 20]">
       <a-col :span="24" v-if="showWarningWrap">
         <a-space direction="vertical" style="width: 100%">
+          <!-- First, because a hardware fault explains the zeros below it. A
+               miner with a dead hashboard used to show 0 GH/s, 0 W and a green
+               network badge with nothing saying why. -->
+          <a-alert v-if="appStore.statusRaw?.systemError" :showIcon="true" type="error" :message="`${dal('system_fault')}: ${appStore.statusRaw?.systemError}`" class="db-alert"></a-alert>
           <a-alert v-if="appStore.statusRaw?.overheat_mode" :showIcon="true" type="error" :message="dal('overheated')" class="db-alert"></a-alert>
           <a-alert v-if="appStore.statusRaw?.power_fault" :showIcon="true" type="error" :message="`${appStore.statusRaw?.power_fault} ${dal('power_fault')}`" class="db-alert"></a-alert>
           <a-alert v-if="!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400" :showIcon="true" type="warning" :message="dal('low_freq')" class="db-alert"></a-alert>

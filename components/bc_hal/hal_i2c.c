@@ -169,9 +169,29 @@ void hammer_gpio_bridge_test(void)
 
 void hammer_gpio_pullup_survey(void)
 {
-    /* Every GPIO broken out on the module that this firmware does not
-     * already claim for the display, UART or bus 0. */
-    static const int candidates[] = { 2, 3, 10, 11, 12, 13, 14, 16, 21, 43, 44 };
+    /*
+     * Every GPIO broken out on the module that this firmware does not
+     * already claim for the display, UART or bus 0.
+     *
+     * GPIO14 was in this list and should not have been: it is the NEXT
+     * button, so the premise above does not hold for it. Surveying it cost
+     * two things and bought nothing.
+     *
+     * It bought nothing because the button's own pull-up is on the module.
+     * The survey therefore reported "EXTERNAL PULL-UP <-- candidate bus line"
+     * on GPIO14 no matter what, and it still does with no hashboard attached
+     * at all -- measured, 2026-09-23. A constant is not a measurement, and
+     * that one was read as evidence of a hashboard connection more than once.
+     *
+     * It cost the button. gpio_config() clears a pin's interrupt type unless
+     * given one, dev_display_init() has already registered the button's
+     * negative-edge interrupt by the time this runs, and the note further up
+     * this file records exactly that silently stopping the button changing
+     * pages. This survey only runs when the bus scan found nothing -- which
+     * is precisely the board whose owner wants to page the display to find
+     * out why.
+     */
+    static const int candidates[] = { 2, 3, 10, 11, 12, 13, 16, 21, 43, 44 };
 
     ESP_LOGI(TAG, "GPIO pull-up survey (external pull-up implies a bus line)");
 

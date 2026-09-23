@@ -74,6 +74,7 @@ const lang = {
     },
     dashboard: {
         alert: {
+            system_fault: "硬件故障",
             overheated: '设备过热 - 请查看设置',
             power_fault: '请检查电源供应',
             low_freq: '频率设置过低 - 请查看设置'
