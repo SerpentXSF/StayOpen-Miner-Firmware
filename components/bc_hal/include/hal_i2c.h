@@ -63,6 +63,10 @@ int bc_i2c_devices_found(void);
 /* Report which GPIOs carry an external pull-up. Inputs only; drives
  * nothing. Used to locate a second I2C bus. */
 void hammer_gpio_pullup_survey(void);
+
+/* Drive each hashboard-facing pin low in turn and report any other pin that
+ * follows it. Finds solder bridges; cannot find open joints. */
+void hammer_gpio_bridge_test(void);
 esp_err_t bc_i2c_add_device(uint8_t device_address, i2c_master_dev_handle_t * dev_handle, const char *device_tag);
 esp_err_t bc_i2c_get_bus_handle(i2c_master_bus_handle_t * dev_handle);
 esp_err_t bc_i2c_register_read(i2c_master_dev_handle_t dev_handle, uint8_t reg_addr, uint8_t * read_buf, size_t len);

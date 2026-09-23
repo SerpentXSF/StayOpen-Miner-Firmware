@@ -54,6 +54,119 @@ static esp_err_t log_on_error(esp_err_t err, i2c_master_dev_handle_t handle)
  * own pull-down has something external holding it up. This only ever
  * configures inputs, so it cannot contend with an output on the carrier.
  */
+/*
+ * Look for solder bridges between the pins that reach the hashboard.
+ *
+ * Written for hand-soldered headers on a replacement T-Display module, where
+ * a bridge between two adjacent pins is the most likely mistake and the one
+ * hardest to see. It needs no hashboard attached -- in fact it is cleaner
+ * without one, because the only thing that should pull a pin low is another
+ * pin it is bridged to.
+ *
+ * Each pin in turn is driven low while every other pin sits input-with-pull-up.
+ * A pin that follows the driven one down shares a net with it. On a correctly
+ * soldered module nothing follows anything.
+ *
+ * What it cannot find is an open joint. Nothing here reaches past the header,
+ * so a pin soldered to nothing looks exactly like a pin soldered correctly to
+ * a hashboard that is not answering. Only hardware that would otherwise reply
+ * can prove continuity.
+ *
+ * GPIO14 is read but never driven. It is the NEXT button, and driving it means
+ * gpio_config(), which clears the negative-edge interrupt dev_display_init()
+ * registered on it -- see the note further up this file, where exactly that
+ * silently stopped the button changing pages. Reading a pin someone else has
+ * configured is free, so a bridge onto 14 still shows up when its neighbour is
+ * the one being driven.
+ *
+ * Only called where the bus scan found nothing, so there is no powered
+ * hashboard driving these lines against us.
+ */
+void hammer_gpio_bridge_test(void)
+{
+    /* Same lines as the survey, minus GPIO14: driven, not merely read. */
+    static const int drivers[] = { 2, 3, 10, 11, 12, 13, 16, 21, 43, 44 };
+    /* Everything worth watching, GPIO14 included. */
+    static const int watched[] = { 2, 3, 10, 11, 12, 13, 14, 16, 21, 43, 44 };
+
+    const size_t n_drv = sizeof(drivers) / sizeof(drivers[0]);
+    const size_t n_wat = sizeof(watched) / sizeof(watched[0]);
+    int bridges = 0;
+
+    ESP_LOGI(TAG, "GPIO bridge test (each pin driven low in turn; nothing "
+                  "should follow it)");
+
+    /* Every driveable line idle, input with a pull-up, so only a bridge can
+     * take one down. */
+    for (size_t i = 0; i < n_drv; i++) {
+        gpio_config_t up = {
+            .pin_bit_mask = (1ULL << drivers[i]),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        };
+        gpio_config(&up);
+    }
+    esp_rom_delay_us(5000);
+
+    for (size_t i = 0; i < n_drv; i++) {
+        int drive = drivers[i];
+
+        gpio_config_t out = {
+            .pin_bit_mask = (1ULL << drive),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        };
+        gpio_config(&out);
+        gpio_set_level(drive, 0);
+        esp_rom_delay_us(3000);
+
+        for (size_t j = 0; j < n_wat; j++) {
+            int watch = watched[j];
+            if (watch == drive) {
+                continue;
+            }
+            if (0 == gpio_get_level(watch)) {
+                ESP_LOGE(TAG, "  BRIDGE: GPIO%d follows GPIO%d low -- these "
+                              "two share a net", watch, drive);
+                bridges++;
+            }
+        }
+
+        /* Back to idle before the next one is driven. */
+        gpio_config_t up = {
+            .pin_bit_mask = (1ULL << drive),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        };
+        gpio_config(&up);
+        esp_rom_delay_us(3000);
+    }
+
+    /* Leave them as the survey does: floating, claiming nothing. */
+    for (size_t i = 0; i < n_drv; i++) {
+        gpio_config_t off = {
+            .pin_bit_mask = (1ULL << drivers[i]),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        };
+        gpio_config(&off);
+    }
+
+    if (0 == bridges) {
+        ESP_LOGI(TAG, "  no bridges: every pin stayed high while its "
+                      "neighbours were pulled down");
+    } else {
+        ESP_LOGE(TAG, "  %d bridged pin pair(s) -- each is reported twice, "
+                      "once from each end", bridges);
+    }
+    ESP_LOGW(TAG, "  this finds shorts, not opens. A pin soldered to nothing "
+                  "reads the same as a good one.");
+}
+
 void hammer_gpio_pullup_survey(void)
 {
     /* Every GPIO broken out on the module that this firmware does not
@@ -377,6 +490,7 @@ void bc_i2c_scan(void)
          */
         ESP_LOGW(TAG, "  surveying the bus pins to tell 'unpowered' from 'dead'");
         hammer_gpio_pullup_survey();
+        hammer_gpio_bridge_test();
     } else {
         ESP_LOGI(TAG, "  %d device(s) found", found);
     }
