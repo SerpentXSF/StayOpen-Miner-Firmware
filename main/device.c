@@ -448,6 +448,31 @@ esp_err_t init_all_i2c_dev(GlobalState *GLOBAL_STATE)
     ret = TMP75_init(profile->primary_addr, 0);
     ret = TMP75_installed(0);
     if (ESP_OK != ret) {
+        /*
+         * A silent sensor only means "wrong model" if the bus is alive.
+         *
+         * When it is not, nothing answers at any address, so every model in
+         * turn looks wrong and each one adopts the next. A BC04 with a dead
+         * hashboard domain sat in exactly that loop: BC04 -> BC08 -> BC04,
+         * twelve times in 170 seconds, writing NVS on every pass. Two costs,
+         * neither obvious from the outside. The stored model ends up
+         * whichever the loop stopped on, so a board that is later repaired
+         * may come up believing it is a different miner with a different ASIC
+         * count and voltage domain. And one NVS key is rewritten every
+         * fourteen seconds for as long as it stays powered.
+         *
+         * The scan already knows. It runs in bc_i2c_init(), before this, and
+         * says how many devices answered.
+         */
+        if (0 == bc_i2c_devices_found()) {
+            ESP_LOGE(TAG, "DEVICE model %s: temperature sensor silent, and "
+                          "nothing at all answered the bus scan. Keeping the "
+                          "stored model -- an empty bus says the hashboard is "
+                          "absent, not that this is a different miner.",
+                     profile->name);
+            return ret;
+        }
+
         if (NULL != profile->fallback) {
             ESP_LOGE(TAG, "DEVICE model %s identify mismatch, reset model to %s",
                      profile->name, profile->fallback);

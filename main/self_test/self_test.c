@@ -12,6 +12,7 @@
 #include "vcore.h"
 #include "asic.h"
 #include "device.h"
+#include "hal_i2c.h"
 #include "pwm_fan.h"
 #include "ip_reporter.h"
 #include "network.h"
@@ -266,6 +267,23 @@ esp_err_t test_external_temperature_sensor(int8_t *t)
     if (ESP_OK == ret) {
         *t = TMP75_read_temperature(0);
         ESP_LOGI(TAG, "external_temperature_sensor Temperature: %d C", *t);
+    } else if (0 == bc_i2c_devices_found()) {
+        /*
+         * Same guard as device.c. A silent sensor only means "wrong model"
+         * when the bus is alive; with nothing answering at any address every
+         * model looks wrong in turn and each adopts the next. A BC04 with a
+         * dead hashboard domain ran BC04 -> BC08 -> BC04 indefinitely,
+         * rewriting NVS every fourteen seconds, and would leave a repaired
+         * board believing it was a different miner.
+         *
+         * This is the copy that actually fires on a BC04 -- the one in
+         * device.c is reached on other paths -- so both need it.
+         */
+        ESP_LOGE(TAG, "DEVICE model %s: no temperature sensor at 0x%02x, and "
+                      "nothing at all answered the bus scan. Keeping the "
+                      "stored model -- an empty bus means the hashboard is "
+                      "absent, not that this is a different miner.",
+                 GLOBAL_STATE->device_model_str, primary);
     } else if (NULL != fallback) {
         ESP_LOGE(TAG, "DEVICE model %s identify mismatch, reset model to %s",
                  GLOBAL_STATE->device_model_str, fallback);

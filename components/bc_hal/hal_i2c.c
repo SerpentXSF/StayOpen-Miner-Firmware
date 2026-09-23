@@ -312,6 +312,19 @@ static void bc_i2c_identify(uint8_t addr)
  * turns that into an answer rather than a guess, and it costs one pass at
  * boot.
  */
+/*
+ * How many devices answered the last bus scan, or -1 before one has run.
+ *
+ * Kept because "the bus is empty" and "this device is not at that address"
+ * lead to opposite conclusions, and only the scan can tell them apart.
+ */
+static int s_devices_found = -1;
+
+int bc_i2c_devices_found(void)
+{
+    return s_devices_found;
+}
+
 void bc_i2c_scan(void)
 {
     int found = 0;
@@ -341,6 +354,8 @@ void bc_i2c_scan(void)
     }
 
     esp_log_level_set("i2c.master", prev);
+
+    s_devices_found = (int)found;
 
     if (found == 0) {
         ESP_LOGE(TAG, "  no devices found -- check hashboard power and wiring");
