@@ -179,6 +179,9 @@ typedef struct
     bool is_sleep_mode;
     uint16_t boot_mode;
     char * system_error;
+    /* Which error system_error describes, so a recovery can tell what it
+     * actually proves. SYSTEM_ERROR_MAX_NUM means "none". */
+    SYSTEM_ERROR system_error_code;
     SYSTEM_SATUS system_status;
     bool is_network_error;      // NETWORK_ERROR 时置 true，跳过 HASHRATE_ERROR 误报
     char *sn[MAX_CHAIN_NUM];

@@ -194,7 +194,11 @@ const statusProc = computed((): MinerStatusDataProc => {
 });
 
 const showWarningWrap = computed(() => {
-  return appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
+  // systemError belongs here too: this gates the whole alert column, so an
+  // alert added below without a matching condition here is simply never
+  // rendered. A hardware fault reported by the firmware and shown nowhere is
+  // the exact failure this column exists to prevent.
+  return appStore.statusRaw?.systemError || appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
 })
 
 const hashrateInfo = computed(() => {
