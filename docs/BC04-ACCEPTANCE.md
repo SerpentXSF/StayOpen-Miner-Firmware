@@ -36,7 +36,46 @@ Three things follow:
 
 - **Do not assume our OTA container applies.** It expects the old partition
   layout and a separate www image.
-- **It runs the board at 4.65 V, not 4.80.** 760 MHz, 19.4 A, 90 W, about
+### Firmware 3.0.5 moved the profiles, and ships below its own top one
+
+A third BC04 arrived 2026-09-24 on **3.0.5 20260909**, SN `ALBC04ACA7041FD1F8`,
+and its profile table is not the one the older boards had:
+
+| | older firmware | 3.0.5 |
+|---|---|---|
+| Normal | 640 MHz @ 460 | **600 MHz @ 450** |
+| Over-frequency | 750 MHz @ 470 | **750 MHz @ 480** |
+| Customize | -- | **750 MHz @ 460** |
+
+It shipped on **Customize, `boot_mode` 2**, at 750 MHz / 460 -- measured
+4.590 V, 6.36 TH/s, 97.5 W, 21.4 A, board 59.6 °C, regulator 67.8 °C.
+
+Two things follow. Their over-frequency profile now sits **at** our 480
+ceiling rather than below it, so "the vendor never goes that high" is no
+longer true of this firmware. And they shipped this unit on a custom setting
+*below* their own over-frequency profile, which reads as de-rating.
+
+### THOR serves a `/v2` API, and it is usable
+
+Found by watching the miner's own web UI rather than probing it:
+
+```
+GET /v2/device/info     device_model, firmware_version, serial_number,
+                        detected_chips_count, runningPartition
+GET /v2/device/status   uptime_seconds, cpu_temp, wifi_rssi, eth_link_up, ip
+GET /v2/miner/status    current_hashrate (H/s), temp_board, temp_vcore,
+                        core_voltage_actual (V), input_voltage, power,
+                        frequency, boot_mode, the three profiles, share and
+                        error counters
+GET /v2/miner/hashrate?range=15m
+```
+
+No authentication on any of them. `detected_chips_count` is the field that
+matters for the failure this project keeps seeing: it is the vendor's own
+count of the hashboard, and it going to zero is the event worth catching.
+`tools/soak_monitor.py` speaks this and normalises it to our units.
+
+- **Older THOR ran the board at 4.65 V, not 4.80.** 760 MHz, 19.4 A, 90 W, about
   5.3 TH/s, board 51 °C and regulator 58 °C, with no rejects and no hardware
   errors. Our 480 ceiling is above what the vendor now uses.
 - **The boot order is unchanged.** `net_w5500` initialises at t=2710 and

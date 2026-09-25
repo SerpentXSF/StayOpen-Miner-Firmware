@@ -38,8 +38,65 @@ import time
 import urllib.error
 import urllib.request
 
-# Tried once, in order: ours first, then the AxeOS shape this fork came from.
-CANDIDATES = ["/api/system/info", "/api/system/statistics/dashboard"]
+# A provider is the set of endpoints one firmware serves, plus the conversion
+# from its field names and units into the canonical ones below. Discovery tries
+# each provider's probe path once and keeps the first that answers.
+#
+# Units are normalised so one CSV compares across firmwares: hashrate in GH/s,
+# voltages and currents in millivolts and milliamps, matching our own API.
+
+
+def _thor(payloads):
+    """Stock Hammer THOR, /v2. Discovered by watching its own web UI, since
+    blind probing an owner's miner is how you fill their log with 404s."""
+    d = {}
+    for body in payloads:
+        if isinstance(body, dict) and isinstance(body.get("data"), dict):
+            d.update(body["data"])
+
+    def scale(key, factor):
+        v = d.get(key)
+        return None if v is None else v * factor
+
+    return {
+        "uptimeSeconds": d.get("uptime_seconds"),
+        "hashRate": scale("current_hashrate", 1e-9),      # H/s -> GH/s
+        "temp": d.get("temp_board"),
+        "vrTemp": d.get("temp_vcore"),
+        "coreVoltageActual": scale("core_voltage_actual", 1000.0),
+        "coreVoltage": d.get("coreVoltage"),
+        "frequency": d.get("frequency"),
+        "power": d.get("power_consumption"),
+        "voltage": scale("input_voltage", 1000.0),
+        "current": scale("core_current_actual", 1000.0),
+        "fanrpm": d.get("fan_speed_rpm"),
+        "fanspeed": d.get("fan_target_speed"),
+        "sharesAccepted": d.get("shares_accepted"),
+        "sharesRejected": d.get("shares_rejected"),
+        # The count the vendor itself reports. This going to zero is the whole
+        # reason this script exists.
+        "asicCount": d.get("detected_chips_count"),
+        "asicDetected": d.get("detected_chips_count"),
+        "wifiRSSI": d.get("wifi_rssi"),
+        "hwErrorCount": d.get("nonce_mismatch_errors"),
+        "uartCrcErrors": d.get("uart_crc_errors"),
+        "queueDropErrors": d.get("queue_drop_errors"),
+        "staleShareErrors": d.get("stale_share_errors"),
+        "ethLinkUp": d.get("eth_link_up"),
+        "bootMode": d.get("boot_mode"),
+    }
+
+
+def _ours(payloads):
+    """This firmware: one endpoint, already in canonical names and units."""
+    body = payloads[0] if payloads else None
+    return dict(body) if isinstance(body, dict) else {}
+
+
+PROVIDERS = [
+    ("stay-open", ["/api/system/info"], _ours),
+    ("thor-v2", ["/v2/device/status", "/v2/miner/status", "/v2/device/info"], _thor),
+]
 
 # Recorded when present. A miner that does not report one leaves the cell empty,
 # which is why every board can share one file format.
@@ -49,6 +106,9 @@ FIELDS = [
     "fanrpm0", "fanrpm1", "fanspeed", "sharesAccepted", "sharesRejected",
     "hwErrorCount", "asicCount", "asicDetected", "wifiRSSI", "systemError",
     "power_fault", "overheat_mode",
+    # Stock THOR reports these and ours does not; they stay empty on ours.
+    "uartCrcErrors", "queueDropErrors", "staleShareErrors", "ethLinkUp",
+    "bootMode",
 ]
 
 
@@ -79,22 +139,38 @@ def login(host, password, log):
 
 
 def discover(host, token, log):
-    """Find the one endpoint that answers. Once, and never again."""
-    for path in CANDIDATES:
+    """Find which firmware this is. Once, and never again."""
+    for name, paths, _ in PROVIDERS:
         try:
-            status, body = http_get("http://%s%s" % (host, path), token)
+            status, body = http_get("http://%s%s" % (host, paths[0]), token)
             if status == 200:
                 json.loads(body)
-                log("telemetry endpoint: %s" % path)
-                return path
+                log("firmware looks like '%s'; polling %s"
+                    % (name, ", ".join(paths)))
+                return name
         except urllib.error.HTTPError as exc:
-            log("  %s -> HTTP %s" % (path, exc.code))
+            log("  %s -> HTTP %s" % (paths[0], exc.code))
         except Exception as exc:
-            log("  %s -> %s" % (path, type(exc).__name__))
-    log("no telemetry endpoint answered; falling back to a reachability check "
-        "only. Restarts and hardware faults will NOT be visible -- only whether "
-        "it is still there.")
+            log("  %s -> %s" % (paths[0], type(exc).__name__))
+    log("nothing recognised; falling back to a reachability check only. "
+        "Restarts and hardware faults will NOT be visible -- only whether it "
+        "is still there.")
     return None
+
+
+def sample(host, provider, token):
+    """One reading, canonical. Raises if the first endpoint cannot be reached."""
+    paths, normalise = next((p, n) for nm, p, n in PROVIDERS if nm == provider)
+    payloads = []
+    for i, path in enumerate(paths):
+        try:
+            status, body = http_get("http://%s%s" % (host, path), token)
+            payloads.append(json.loads(body) if status == 200 else None)
+        except Exception:
+            if i == 0:
+                raise       # the miner is unreachable, not merely partial
+            payloads.append(None)
+    return normalise([p for p in payloads if p is not None])
 
 
 def tcp_alive(host, port=80, timeout=5):
@@ -149,7 +225,7 @@ def main():
     log("telemetry -> %s" % csv_path)
 
     token = login(args.host, password, log)
-    path = discover(args.host, token, log)
+    provider = discover(args.host, token, log)
 
     csv_fh = open(csv_path, "a", newline="", encoding="utf-8")
     writer = csv.writer(csv_fh)
@@ -168,12 +244,10 @@ def main():
         data = None
         reachable = False
 
-        if path:
+        if provider:
             try:
-                status, body = http_get("http://%s%s" % (args.host, path), token)
-                if status == 200:
-                    data = json.loads(body)
-                    reachable = True
+                data = sample(args.host, provider, token)
+                reachable = True
             except urllib.error.HTTPError as exc:
                 # Sessions live in RAM, so a restart invalidates them. A 401
                 # after a good run is itself a hint that it rebooted.
