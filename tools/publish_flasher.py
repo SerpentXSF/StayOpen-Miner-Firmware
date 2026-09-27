@@ -2,6 +2,14 @@
 
     python tools/publish_flasher.py bc01              # build the branch
     python tools/publish_flasher.py bc01 bc04 --push  # both boards, pushed
+    python tools/publish_flasher.py bc01 --version 2.0.27.1 --push
+
+The version is not normally passed in: it is read from the sdkconfig this tree
+would build, so the flasher cannot advertise something the source does not
+describe. dist/ accumulates every version ever packaged, and picking "whatever
+is in there" either breaks when there is more than one or silently publishes
+the wrong one. --version overrides it for the case where you are deliberately
+republishing an older release, and says so when you do.
 
 Every board named is published together, each with its own image and its own
 manifest-<board>.json, because the page offers a choice between them and a
@@ -23,6 +31,7 @@ this never touches the working tree, the index, or the current branch.
 """
 import os
 import subprocess
+import json
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,9 +86,73 @@ def mktree(entries):
     return git("mktree", data=spec.encode())
 
 
+def project_version():
+    """The version this tree builds, from sdkconfig.
+
+    Same rule ship.py states: the version comes from the build rather than
+    from an argument, so the flasher and the release cannot end up describing
+    different things.
+    """
+    path = os.path.join(ROOT, "sdkconfig")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("CONFIG_APP_PROJECT_VER="):
+                    raw = line.split("=", 1)[1].strip().strip('"')
+                    return raw.split()[0]      # "2.0.28 20260922" -> "2.0.28"
+    except OSError as exc:
+        sys.exit("could not read %s: %s" % (path, exc))
+    sys.exit("no CONFIG_APP_PROJECT_VER in sdkconfig")
+
+
+def check_manifest(path, board, image):
+    """A manifest that disagrees with its image is worse than no manifest.
+
+    esp-web-tools fetches whatever parts[].path names. If that is a file this
+    publish is not shipping, the flash fails at the download; if it names a
+    different version than the manifest claims, the page tells the owner one
+    thing and writes another. Neither is visible from the page itself, so it
+    is checked here.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            m = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.exit("dist/manifest-%s.json is unreadable: %s" % (board, exc))
+
+    try:
+        named = m["builds"][0]["parts"][0]["path"]
+    except (KeyError, IndexError, TypeError):
+        sys.exit("dist/manifest-%s.json has no builds[0].parts[0].path" % board)
+
+    if named != image:
+        sys.exit("dist/manifest-%s.json points at %r but this publish carries "
+                 "%r -- re-run tools/make_release.py %s"
+                 % (board, named, image, board))
+
+    stated = m.get("version")
+    if stated and stated not in image:
+        sys.exit("dist/manifest-%s.json says version %r, which is not the "
+                 "version in %r -- re-run tools/make_release.py %s"
+                 % (board, stated, image, board))
+
+
 def main():
-    boards = [a.lower() for a in sys.argv[1:] if not a.startswith("-")] or ["bc01"]
-    push = "--push" in sys.argv
+    argv = sys.argv[1:]
+    boards = [a.lower() for a in argv if not a.startswith("-")] or ["bc01"]
+    push = "--push" in argv
+
+    version = None
+    if "--version" in argv:
+        i = argv.index("--version")
+        if i + 1 >= len(argv):
+            sys.exit("--version needs a value, e.g. --version 2.0.27.1")
+        version = argv[i + 1]
+        boards = [b for b in boards if b != version]
+        print("publishing %s because --version was given; the source tree "
+              "builds %s" % (version, project_version()))
+    else:
+        version = project_version()
 
     if not os.path.isdir(SRC):
         sys.exit("no %s to publish" % SRC)
@@ -93,18 +166,23 @@ def main():
     # than not publishing: the page offers a flash that cannot work.
     images = {}
     for board in boards:
-        found = [f for f in os.listdir(DIST)
-                 if f.startswith("stay-open-%s-" % board)
-                 and f.endswith("-full.bin")] if os.path.isdir(DIST) else []
-        if len(found) != 1:
-            sys.exit("expected exactly one stay-open-%s-*-full.bin in dist/, "
-                     "found %d -- run tools/make_release.py %s first"
-                     % (board, len(found), board))
+        image = "stay-open-%s-%s-full.bin" % (board, version)
+        if not os.path.exists(os.path.join(DIST, image)):
+            have = []
+            if os.path.isdir(DIST):
+                have = sorted(f for f in os.listdir(DIST)
+                              if f.startswith("stay-open-%s-" % board)
+                              and f.endswith("-full.bin"))
+            msg = "dist/%s is missing -- run tools/make_release.py %s first." % (image, board)
+            if have:
+                msg += "  dist/ currently has: " + ", ".join(have)
+            sys.exit(msg)
         manifest = os.path.join(DIST, "manifest-%s.json" % board)
         if not os.path.exists(manifest):
             sys.exit("dist/manifest-%s.json is missing -- run "
                      "tools/make_release.py %s first" % (board, board))
-        images[board] = (found[0], manifest)
+        check_manifest(manifest, board, image)
+        images[board] = (image, manifest)
 
     flasher = []
     for name in sorted(os.listdir(SRC)):
