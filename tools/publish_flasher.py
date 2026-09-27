@@ -207,7 +207,14 @@ def main():
     commit = git("commit-tree", tree, "-m",
                  "Publish flasher for %s"
                  % ", ".join("%s (%s)" % (b, images[b][0]) for b in boards))
-    git("update-ref", "refs/heads/" + BRANCH, commit)
+    if push:
+        # Only a real publish moves the branch. A dry run used to move it
+        # too, leaving the local ref holding an unpublished build -- one
+        # `git push` away from serving firmware nobody released. The
+        # commit is written to the object store either way, so there is
+        # still something to inspect; it just is not what gh-pages points
+        # at.
+        git("update-ref", "refs/heads/" + BRANCH, commit)
 
     print("built %s as a single orphan commit %s" % (BRANCH, commit[:12]))
     for mode, _, _, name in root:
@@ -221,7 +228,10 @@ def main():
         git("push", "--force", "origin", BRANCH)
         print("\npushed %s" % BRANCH)
     else:
-        print("\nnot pushed. re-run with --push")
+        print("")
+        print("not pushed, and refs/heads/%s was left alone." % BRANCH)
+        print("Re-run with --push to publish. To inspect this build:")
+        print("    git ls-tree -r %s" % commit[:12])
 
 
 if __name__ == "__main__":
