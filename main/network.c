@@ -7,6 +7,7 @@
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
@@ -561,6 +562,132 @@ esp_err_t network_eth_start(void)
     }
 
     return ESP_OK;
+}
+
+/*
+ * Mid-run health for the W5500.
+ *
+ * network_eth_start() and network_eth_recover() both run once, from main(),
+ * right after the hashboard comes up. That covers the transient this project
+ * actually measured -- a BC04 whose socket commands all began timing out
+ * ~500 ms after the core rail stepped up -- and nothing else. Once boot is
+ * over nothing watches the controller at all, so an interface that wedges an
+ * hour later keeps its IP, passes nothing, and says nothing.
+ *
+ * An owner's log prompted this: three lines at 16:55:13, mid-run, on a BC04
+ * with Ethernet.
+ *
+ *   E w5500.mac: w5500_spi_write(142): spi transmit failed
+ *   E w5500.mac: w5500_write_buffer(260): write TX buffer failed
+ *   E w5500.mac: emac_w5500_transmit(652): write frame failed
+ *
+ * That one recovered by itself and needed nothing. The point is that if it had
+ * not, this firmware would not have noticed.
+ *
+ * The driver reports these failures only by logging them, so the log hook is
+ * the one place they are visible. It calls network_eth_note_driver_error(),
+ * which does nothing but count -- it must not log, or allocate, or take a
+ * lock, because it runs inside the logging path and anything it emits comes
+ * straight back to it.
+ *
+ * The decision is left to this task instead. A single failed frame is noise:
+ * one transmit failure produces three of these lines, and the owner's board
+ * shrugged one off. A wedged controller produces them continuously, because
+ * every retry fails the same way. So the trigger is a sustained burst, not an
+ * event.
+ */
+#define ETH_ERR_WINDOW_MS      60000   /* how far back the count looks */
+#define ETH_ERR_TRIGGER        30      /* ~10 failed frames in that window */
+#define ETH_ERR_COOLDOWN_MS    600000  /* 10 min before trying again */
+#define ETH_ERR_MAX_ATTEMPTS   3       /* then stop and leave it alone */
+
+static volatile uint32_t s_eth_driver_errors = 0;
+
+void network_eth_note_driver_error(void)
+{
+    /* Called from the logging path. Counts, and does nothing else. */
+    s_eth_driver_errors++;
+}
+
+static void eth_health_task(void *arg)
+{
+    (void) arg;
+
+    uint32_t window_start_count = s_eth_driver_errors;
+    int64_t  window_start_us    = esp_timer_get_time();
+    int64_t  last_recover_us    = 0;
+    int      attempts           = 0;
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+
+        int64_t now_us = esp_timer_get_time();
+        uint32_t count = s_eth_driver_errors;
+        uint32_t in_window = count - window_start_count;
+
+        if ((now_us - window_start_us) >= (int64_t) ETH_ERR_WINDOW_MS * 1000) {
+            /* Roll the window forward; a slow trickle must never accumulate
+             * into a trigger. */
+            window_start_count = count;
+            window_start_us = now_us;
+            continue;
+        }
+
+        if (in_window < ETH_ERR_TRIGGER) {
+            continue;
+        }
+
+        if (attempts >= ETH_ERR_MAX_ATTEMPTS) {
+            continue;   /* already said everything useful; see below */
+        }
+
+        if (last_recover_us != 0 &&
+            (now_us - last_recover_us) < (int64_t) ETH_ERR_COOLDOWN_MS * 1000) {
+            continue;
+        }
+
+        ESP_LOGE(TAG, "Ethernet controller reported %"PRIu32" driver errors in "
+                      "under %d s -- it is not passing traffic. Restarting it.",
+                 in_window, ETH_ERR_WINDOW_MS / 1000);
+
+        attempts++;
+        last_recover_us = now_us;
+        window_start_count = s_eth_driver_errors;
+        window_start_us = esp_timer_get_time();
+
+        if (ESP_OK != network_eth_recover()) {
+            /*
+             * network_eth_recover() refuses to start a controller it could not
+             * stop, because doing so panics the miner into a reboot loop. So a
+             * failure here means Ethernet is down and staying down, and the
+             * useful thing left is to say so plainly rather than keep trying.
+             */
+            ESP_LOGE(TAG, "could not restart Ethernet. It is down until this "
+                          "miner is power cycled. WiFi, if configured, is "
+                          "unaffected.");
+        }
+
+        if (attempts >= ETH_ERR_MAX_ATTEMPTS) {
+            ESP_LOGE(TAG, "Ethernet has needed restarting %d times. Not trying "
+                          "again -- something is wrong with the controller or "
+                          "its supply, and repeated restarts will not fix it.",
+                     attempts);
+        }
+    }
+}
+
+void network_eth_start_health_watch(void)
+{
+    static bool started = false;
+
+    /* Only where there is a controller to watch. A BC01 has no W5500 and must
+     * never grow a task that waits for one. */
+    if (started || NULL == s_eth_handle) {
+        return;
+    }
+    started = true;
+    xTaskCreate(eth_health_task, "eth-health", 3072, NULL, 3, NULL);
+    ESP_LOGI(TAG, "watching the Ethernet controller for mid-run failures");
 }
 
 esp_err_t network_eth_recover(void)

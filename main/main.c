@@ -545,6 +545,10 @@ void app_main(void)
         if (network_eth_start() != ESP_OK) {
             network_eth_recover();
         }
+        /* Both of those run once and never again. From here on the controller
+         * is watched, because one that wedges an hour later keeps its IP,
+         * passes nothing, and reports nothing. */
+        network_eth_start_health_watch();
     }
 
     /*Serial Init and detect the asic.*/

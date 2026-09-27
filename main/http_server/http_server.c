@@ -115,6 +115,20 @@ int log_to_queue(const char * format, va_list args)
 
     printf("%s", raw_buffer);
 
+    /*
+     * The Ethernet driver reports its failures by logging them and in no other
+     * way, so this is the only place they can be seen. Counting here and
+     * deciding elsewhere is deliberate: anything this function logs comes
+     * straight back into this function.
+     *
+     * strstr over a line that has already been formatted, only for lines that
+     * carry the driver's tag. Cheap enough at the rate logs are produced, and
+     * the alternative is patching esp_eth.
+     */
+    if (NULL != strstr(raw_buffer, "w5500")) {
+        network_eth_note_driver_error();
+    }
+
     // 获取时间戳
     char time_str[32] = {0};
     struct timeval tv;

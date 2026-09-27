@@ -35,4 +35,12 @@ esp_err_t network_eth_start(void);
 
 esp_err_t network_eth_recover(void);
 
+/* Count one Ethernet driver failure. Called from the logging path, so it only
+ * counts -- it must not log, allocate or block. */
+void network_eth_note_driver_error(void);
+
+/* Start watching the controller for mid-run failures. Safe to call on boards
+ * with no Ethernet, and safe to call more than once. */
+void network_eth_start_health_watch(void);
+
 #endif /* NETWORK_H_ */
