@@ -772,6 +772,46 @@ two fans fitted -- and shipping an untested fan trip is how the board-wide
 latch above nearly powered off a healthy miner. Reporting first; a trip only
 once there is hardware to prove it on.
 
+## Two paths still stand the W5500 in front of the core rail (open)
+
+Found by an external review of this repository, 2026-09-28, and **both
+confirmed against the source here**. They matter more than most entries in
+this file, because standing a live W5500 through the core-rail transient is
+the one mechanism this project has direct evidence for: the first BC04's
+Ethernet controller stopped answering ~70 ms after that step and later failed
+short across the 3.3 V rail, taking the I2C domain with it.
+
+`network_init()` defers Ethernet until the hashboard is powered, and that is
+correct. These two get around it.
+
+**1. The first-boot self test brings Ethernet up before the rail.** Inside
+`self_test()`, `test_eth()` runs at one point and `test_power_on()` well
+after it -- so the W5500 is initialised, linked and holding a DHCP lease, and
+*then* the core voltage is switched on. `config.bc04.cvs.example` ships
+`selftest,data,u16,0`, so this runs **on the first boot after every full
+flash**, which is what the web flasher does.
+
+With no cable the Ethernet test fails and the routine returns before
+`test_power_on()` is ever reached, so the hazard needs a cable present. That
+is the only reason it has not been hit here: the BC04 flashed 2026-09-27 was
+deliberately on WiFi only.
+
+**2. The stall watchdog can start Ethernet before the regulator has finished
+trying.** `ETH_STALL_TIMEOUT_MS` is 90 s (`main/main.c`), and it exists to
+start Ethernet once the hashboard is judged never to be coming. But
+`TPS546_init()` retries 100 times at 2 s intervals -- **200 s**. A regulator
+that answers between those two figures, which a marginal connector after a
+move would do, gets a rail that steps up with Ethernet already live. The
+comment above the watchdog says Ethernet starts "either after the hashboard is
+up, or after we know it is never coming up. Never in between." The numbers
+allow exactly in between.
+
+**Also worth doing, from the same review and not yet confirmed here:** nothing
+holds the W5500's reset line low across the transient. Deferring the driver
+does not depower the chip -- it stays on its own supply and can link by
+itself. Holding reset until the rail has settled would protect the part rather
+than merely the software's view of it.
+
 ## A masked password was stored as the password (fixed)
 
 **Where:** `main/api_helper.c`, `main/http_server/http_server.c`.
