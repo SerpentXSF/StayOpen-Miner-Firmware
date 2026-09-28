@@ -581,34 +581,6 @@ void self_test(GlobalState *global_state)
         logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
     }
 
-    /*
-     * The BC01 family has no W5500, so there is no Ethernet to test. The
-     * network stack already knows this and carries on without one; the self
-     * test did not, and spent forty seconds polling for a link on hardware
-     * that has no socket before declaring the board faulty.
-     *
-     * Absent hardware is not a failed test. It is reported as not applicable
-     * rather than as a pass.
-     */
-    char ip[24];
-    if (device_is_bc01_family(GLOBAL_STATE->device_model)) {
-        ESP_LOGI(TAG, "No Ethernet on this board; skipping ETH test");
-        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, "ETH n/a\n");
-        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
-    }
-    else if((ret = test_eth(ip)) != ESP_OK){
-        ESP_LOGI(TAG, "ETH test failed, %d, %s", ret, esp_err_to_name(ret));
-        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, "ETH fail!\n");
-        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
-        tests_done(GLOBAL_STATE, false);
-        return;
-    }
-    else
-    {
-        sprintf(test_item_str,"ETH IP %s\n",ip);
-        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, test_item_str);
-        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
-    }
 
     /*
      * Skip when the gate already brought the regulator up. bc_i2c_add_device()
@@ -663,6 +635,45 @@ void self_test(GlobalState *global_state)
     else
     {
         sprintf(test_item_str,"hashboard OK, asic=%d\n",GLOBAL_STATE->asic_count[0]);
+        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, test_item_str);
+        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
+    }
+
+    /*
+     * Ethernet last, after the core rail is up -- not before it.
+     *
+     * This block used to run ahead of test_power_on(), so the W5500 was
+     * initialised, linked and holding a DHCP lease at the moment the core
+     * voltage stepped up. That is the one failure mechanism this project has
+     * direct evidence for: the first BC04 lost its Ethernet controller ~70 ms
+     * after that step, and the part later failed short across the 3.3 V rail,
+     * taking the I2C domain with it.
+     *
+     * network_init() defers Ethernet for exactly this reason. The self test
+     * went around it, and ran on the first boot after every full flash,
+     * because config.<board>.cvs.example ships selftest=0 and a web flash is
+     * a full flash. It only ever bit with a cable connected: with none, the
+     * test failed and the routine returned before the rail was switched on.
+     *
+     * Moving it here costs nothing. Nothing above depends on the interface,
+     * and a failure is still reported the same way.
+     */
+    char ip[24];
+    if (device_is_bc01_family(GLOBAL_STATE->device_model)) {
+        ESP_LOGI(TAG, "No Ethernet on this board; skipping ETH test");
+        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, "ETH n/a\n");
+        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
+    }
+    else if((ret = test_eth(ip)) != ESP_OK){
+        ESP_LOGI(TAG, "ETH test failed, %d, %s", ret, esp_err_to_name(ret));
+        strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, "ETH fail!\n");
+        logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
+        tests_done(GLOBAL_STATE, false);
+        return;
+    }
+    else
+    {
+        sprintf(test_item_str,"ETH IP %s\n",ip);
         strcat(GLOBAL_STATE->SELF_TEST_MODULE.message, test_item_str);
         logMessage(GLOBAL_STATE->SELF_TEST_MODULE.message);
     }

@@ -72,7 +72,28 @@ void show_mining_screen(void)
  * Ninety seconds leaves room for a slow board without leaving a broken one
  * unreachable for longer than it has to be.
  */
-#define ETH_STALL_TIMEOUT_MS (90 * 1000)
+/*
+ * Longer than the regulator can take to give up, which 90 s was not.
+ *
+ * This fires to start Ethernet once the hashboard is judged never to be
+ * coming. The thing that decides that is TPS546_init(), which retries 100
+ * times at 2 s apart -- 200 s. At 90 s it was entirely possible for a
+ * regulator to answer *after* the watchdog had already started Ethernet, so
+ * the core rail then stepped up with the W5500 live: the exact ordering the
+ * deferral exists to prevent, and the one mechanism this project has direct
+ * evidence for. A marginal connector after a board is moved is how a
+ * regulator comes up slow.
+ *
+ * The comment this replaces promised Ethernet starts "either after the
+ * hashboard is up, or after we know it is never coming up. Never in between."
+ * The numbers allowed in between. These ones do not.
+ *
+ * The cost is that a board whose hashboard really is dead stays unreachable
+ * for four minutes rather than ninety seconds. That is the right trade: being
+ * slow to reach a broken board is an inconvenience, and energising a rail
+ * underneath a live W5500 is how boards die.
+ */
+#define ETH_STALL_TIMEOUT_MS (240 * 1000)
 
 static void eth_stall_watchdog(void *arg)
 {
