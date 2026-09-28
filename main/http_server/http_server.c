@@ -2235,8 +2235,20 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
         return ESP_OK;
     }
 
-    // Erase the entire www partition before writing
-    ESP_ERROR_CHECK(esp_partition_erase_range(www_partition, 0, www_partition->size));
+    /*
+     * A failed erase is an update that cannot proceed, not a reason to abort.
+     * This runs with the hashboard powered and the miner hashing, so aborting
+     * takes a working miner down over a flash error -- and tells whoever
+     * started the update nothing at all, because the response never arrives.
+     */
+    esp_err_t erase_ret = esp_partition_erase_range(www_partition, 0, www_partition->size);
+    if (ESP_OK != erase_ret) {
+        ESP_LOGE(TAG, "could not erase the www partition: %s",
+                 esp_err_to_name(erase_ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Could not erase the web interface partition");
+        return ESP_OK;
+    }
 
     // 使用嵌入的SHA256哈希值进行文件完整性校验
     mbedtls_sha256_context sha256_ctx;
@@ -2630,8 +2642,20 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
         return ESP_OK;
     }
 
-    // Erase the entire www partition before writing
-    ESP_ERROR_CHECK(esp_partition_erase_range(www_partition, 0, www_partition->size));
+    /*
+     * A failed erase is an update that cannot proceed, not a reason to abort.
+     * This runs with the hashboard powered and the miner hashing, so aborting
+     * takes a working miner down over a flash error -- and tells whoever
+     * started the update nothing at all, because the response never arrives.
+     */
+    esp_err_t erase_ret = esp_partition_erase_range(www_partition, 0, www_partition->size);
+    if (ESP_OK != erase_ret) {
+        ESP_LOGE(TAG, "could not erase the www partition: %s",
+                 esp_err_to_name(erase_ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Could not erase the web interface partition");
+        return ESP_OK;
+    }
 
     static char client_sha256[65] = {0};
     client_sha256[64] = '\0';
@@ -2757,7 +2781,21 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
     int remaining = req->content_len;
 
     const esp_partition_t * ota_partition = esp_ota_get_next_update_partition(NULL);
-    ESP_ERROR_CHECK(esp_ota_begin(ota_partition, OTA_SIZE_UNKNOWN, &ota_handle));
+    if (NULL == ota_partition) {
+        ESP_LOGE(TAG, "no OTA partition available to write to");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "No update partition available");
+        return ESP_OK;
+    }
+    /* Same reasoning as the erase above: refusing an update beats rebooting a
+     * miner that is currently hashing. */
+    esp_err_t begin_ret = esp_ota_begin(ota_partition, OTA_SIZE_UNKNOWN, &ota_handle);
+    if (ESP_OK != begin_ret) {
+        ESP_LOGE(TAG, "esp_ota_begin failed: %s", esp_err_to_name(begin_ret));
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Could not start the update");
+        return ESP_OK;
+    }
 
     while (remaining > 0) {
         int recv_len = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));

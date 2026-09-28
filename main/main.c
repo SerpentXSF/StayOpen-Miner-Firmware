@@ -633,7 +633,13 @@ void app_main(void)
     /*create system task*/
     xTaskCreate(system_task, "system task", 4096, (void*)&GLOBAL_STATE, 4, NULL);
 
-    AsicParam chain_param[2] = {{.chain_num = 0, .p_global_state = &GLOBAL_STATE}, {.chain_num = 1, .p_global_state = &GLOBAL_STATE}};
+    /*
+     * static, because its address is handed to tasks that outlive this
+     * function. app_main() is allowed to return -- ESP-IDF deletes the main
+     * task when it does -- and the moment it did, every ASIC task would be
+     * holding a pointer into a stack frame that no longer exists.
+     */
+    static AsicParam chain_param[2] = {{.chain_num = 0, .p_global_state = &GLOBAL_STATE}, {.chain_num = 1, .p_global_state = &GLOBAL_STATE}};
     for(uint32_t i = 0; i < MAX_CHAIN_NUM; i++)
     {
         if(GLOBAL_STATE.chain_pluged[i]){
