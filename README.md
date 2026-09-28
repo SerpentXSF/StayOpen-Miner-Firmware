@@ -372,7 +372,12 @@ an issue — getting the credit right is the point of this repository.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+GPL-3.0. See [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+
+This said "GPL-3.0-or-later" until 2026-09-28, which claimed a grant the
+upstream never made and which the rest of this repository does not make
+either: `LICENSE` is the plain GPL-3.0 text and `NOTICE.md` records every
+upstream as GPL-3.0.
 
 Copyright of the upstream portions remains with the ESP-Miner, NerdQAxe+,
 and LVGL authors.

@@ -73,7 +73,23 @@ export default defineConfig({
                 pure_funcs: ['console.log', 'console.info'], // 进一步移除无用函数
             },
             format: {
-                comments: false, // 移除注释
+                /*
+                 * Keep licence banners, drop everything else.
+                 *
+                 * This was `comments: false`, which stripped the @license and
+                 * @preserve headers out of Vue, ant-design-vue, axios, uplot
+                 * and the rest. They are MIT, BSD, ISC and Apache-2.0 -- all
+                 * compatible with GPL-3.0, and all requiring their notice to
+                 * ship with the binary that contains them. Removing those
+                 * notices is a licence violation, which is a poor look for a
+                 * project that exists because somebody shipped GPL code
+                 * without its source.
+                 *
+                 * 'some' keeps @license, @preserve and /*! banners and drops
+                 * ordinary comments, so the size cost is only the notices
+                 * themselves.
+                 */
+                comments: 'some',
             },
         },
         /*

@@ -17,6 +17,46 @@ be distributed under the same terms, with complete corresponding source.
 | [BC01 firmware](https://github.com/baichuan-org/BC01) | Chengdu Baichuan, for Hammer | GPL-3.0 (derived; no LICENSE supplied) | Source of the USB-PD stage this tree needs for the BC01. `components/bc_hal/HUSB238A.c` and `.h` are imported verbatim; the PD bring-up in `main/device.c` and the BC01 GPIO and voltage configuration come from it. Imported at commit `8dab8f4`. |
 | SerpentX Dual Pool Mining (BitAxe / NerdAxe) | SerpentX | GPL-3.0 | Origin of the dual-pool work. `components/dual_pool/` is imported from it; the pool B session and the create_jobs / asic_result hooks are ported to this tree's task layout. |
 
+## Fonts compiled into the firmware
+
+Converted to LVGL C arrays under `main/displays/images/`; the originals are in
+`main/displays/images/fonts_originals/`. They ship inside the binary, so their
+licences travel with it.
+
+| Font | Licence | Where |
+|---|---|---|
+| VT323 | SIL Open Font License 1.1 | `ui_font_*` display faces |
+| Open Sans Bold | Apache License 2.0 | `ui_font_OpenSansBold*` |
+| DigitalNumbers Regular | **not established** | `ui_font_DigitalNumbers*` |
+
+DigitalNumbers arrived without a licence file and one has not been traced. It
+is recorded here as unresolved rather than assumed permissive: that is the
+honest state, and it is the kind of gap this repository exists to point out in
+other people's releases.
+
+## Web interface dependencies
+
+Bundled into `www.bin` and therefore shipped in the firmware. All MIT, which
+is compatible with GPL-3.0 and requires the notice to travel with the binary.
+
+| Package | Licence |
+|---|---|
+| vue | MIT |
+| ant-design-vue | MIT |
+| axios | MIT |
+| pinia | MIT |
+| vue-router | MIT |
+| vue-i18n | MIT |
+| uplot | MIT |
+| js-cookie | MIT |
+| js/sha256.min.js | MIT |
+
+The build stripped these notices out of the bundle until 2026-09-28:
+`vite.config.ts` set `comments: false`, which removes `@license` banners along
+with everything else. It is `comments: 'some'` now, so the banners ship.
+Removing them was a licence violation, and a poor one for a project that
+exists because somebody shipped GPL code without its source.
+
 ## Why this file exists
 
 The vendor's release at `github.com/baichuan-org/BC04` shipped **no license
