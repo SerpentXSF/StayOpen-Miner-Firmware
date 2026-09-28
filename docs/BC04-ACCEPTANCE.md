@@ -47,13 +47,20 @@ and its profile table is not the one the older boards had:
 | Over-frequency | 750 MHz @ 470 | **750 MHz @ 480** |
 | Customize | -- | **750 MHz @ 460** |
 
-It shipped on **Customize, `boot_mode` 2**, at 750 MHz / 460 -- measured
+It arrived set to **Customize, `boot_mode` 2**, at 750 MHz / 460 -- measured
 4.590 V, 6.36 TH/s, 97.5 W, 21.4 A, board 59.6 °C, regulator 67.8 °C.
 
-Two things follow. Their over-frequency profile now sits **at** our 480
-ceiling rather than below it, so "the vendor never goes that high" is no
-longer true of this firmware. And they shipped this unit on a custom setting
-*below* their own over-frequency profile, which reads as de-rating.
+**That was not a factory setting.** The unit arrived dusty, with clear signs
+of having been run before. So "Customize 750 / 460" is whoever had it last,
+not the vendor shipping de-rated -- an earlier draft of this section read it
+the second way and was wrong. A used replacement tells you nothing about what
+leaves the factory, and its operating history is unknown, which is worth
+holding onto if this board also fails.
+
+What does still follow from the firmware itself: the over-frequency profile on
+3.0.5 sits **at** our 480 ceiling rather than below it, so "the vendor never
+goes that high" is not true of this firmware. That comes from the profile
+table the miner reports, not from how this particular unit was set.
 
 ### THOR serves a `/v2` API, and it is usable
 
@@ -177,7 +184,32 @@ weakens rather than strengthens. Record whichever happens.
 If any of that fails, stop and compare against the stock-firmware baseline
 before assuming our firmware caused it.
 
-## 2. The core-voltage ceiling — 2.0.28, never exercised
+## 2. The core-voltage ceiling — VERIFIED 2026-09-28 on 2.0.27.1
+
+Run on a healthy BC04 (`ALBC04ACA7041FD1F8`) mining at 640 MHz / 460, with a
+control first so a refusal could not be mistaken for a broken request:
+
+| request | HTTP | result |
+|---|---|---|
+| `coreVoltage=460` (legal) | 200 | applied — proves the route and method |
+| `coreNormalVoltage=485` | 200 | ignored |
+| `coreOverVoltage=485` | 200 | ignored |
+| `asicovervdef=485` | 200 | ignored |
+| `coreVoltage=485` | 200 | ignored |
+
+485 rather than 520 deliberately: one step over the 480 cap, so a failure
+would have cost 0.05 V instead of 0.40 V. The regulator measured 4.588–4.590 V
+throughout and `coreVoltage` never left 460.
+
+**Wart worth knowing:** the API answers **200 even when it refuses the value**,
+so nothing tells the caller it was ignored. The firmware logs
+`v0l 485 is not valid` and moves on. A settings page that showed "saved" here
+would be lying.
+
+Still untested: `asicnormalvol` set to 520 directly in NVS followed by a
+restart, which is the path that does not go through this handler at all.
+
+## 2b. The original checklist for this section
 
 This is the one with real consequences if it is wrong, because it governs
 what the firmware will command across four chips in series.
