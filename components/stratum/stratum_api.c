@@ -157,6 +157,26 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
     }
     buflen = strlen(json_rpc_buffer);
     tok = strtok(json_rpc_buffer, "\n");
+    /*
+     * strtok() returns NULL when the buffer holds nothing but delimiters, so
+     * a pool sending a bare newline landed in strdup(NULL). The loop above
+     * exits as soon as it sees a newline, which a blank line satisfies, so
+     * getting here with nothing to tokenise needs no misbehaviour from the
+     * pool beyond an empty line.
+     *
+     * The reentrant copy used for pool B does not have this -- it splits on
+     * the newline it found and checks the result -- which is why only the
+     * primary pool could take the miner down this way.
+     *
+     * The caller already treats NULL as a dropped connection and reconnects,
+     * which is the right answer to a pool talking nonsense.
+     */
+    if (tok == NULL) {
+        ESP_LOGW(TAG, "pool sent a line with no content; dropping the "
+                      "connection rather than parsing nothing");
+        strcpy(json_rpc_buffer, "");
+        return NULL;
+    }
     line = strdup(tok);
     int len = strlen(line);
     if (buflen > len + 1)
@@ -164,6 +184,19 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
     else
         strcpy(json_rpc_buffer, "");
     return line;
+}
+
+/*
+ * One array element as a string, or NULL if it is not there or is not one.
+ *
+ * Everything this file parses arrives from a pool, and cJSON_GetArrayItem()
+ * answers NULL for an index that does not exist. Reaching straight through it
+ * for ->valuestring is how a short params array became a crash.
+ */
+static const char * str_at(cJSON * array, int index)
+{
+    cJSON * item = cJSON_IsArray(array) ? cJSON_GetArrayItem(array, index) : NULL;
+    return (cJSON_IsString(item) && item->valuestring != NULL) ? item->valuestring : NULL;
 }
 
 void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
@@ -310,23 +343,68 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
 
     if (message->method == MINING_NOTIFY) {
 
-        mining_notify * new_work = malloc(sizeof(mining_notify));
-        // new_work->difficulty = difficulty;
+        /*
+         * Everything here comes off the wire from a pool, and none of it was
+         * checked. cJSON_GetArrayItem() returns NULL for a short or missing
+         * params array and every one of these dereferenced it straight away,
+         * so a malformed mining.notify took the miner down. Worse, a params
+         * array with more than MAX_MERKLE_BRANCHES entries called abort() --
+         * a remote party deciding to reboot somebody's miner.
+         *
+         * A pool that sends nonsense gets its job ignored. The method is reset
+         * to STRATUM_UNKNOWN, which both callers already skip, so a bad job is
+         * dropped rather than mined or crashed on.
+         */
         cJSON * params = cJSON_GetObjectItem(json, "params");
-        new_work->job_id = strdup(cJSON_GetArrayItem(params, 0)->valuestring);
-        new_work->prev_block_hash = strdup(cJSON_GetArrayItem(params, 1)->valuestring);
-        new_work->coinbase_1 = strdup(cJSON_GetArrayItem(params, 2)->valuestring);
-        new_work->coinbase_2 = strdup(cJSON_GetArrayItem(params, 3)->valuestring);
+        const char * p_job   = str_at(params, 0);
+        const char * p_prev  = str_at(params, 1);
+        const char * p_cb1   = str_at(params, 2);
+        const char * p_cb2   = str_at(params, 3);
+        cJSON * merkle_branch = cJSON_IsArray(params) ? cJSON_GetArrayItem(params, 4) : NULL;
 
-        cJSON * merkle_branch = cJSON_GetArrayItem(params, 4);
-        new_work->n_merkle_branches = cJSON_GetArraySize(merkle_branch);
-        if (new_work->n_merkle_branches > MAX_MERKLE_BRANCHES) {
-            printf("Too many Merkle branches.\n");
-            abort();
+        if (NULL == p_job || NULL == p_prev || NULL == p_cb1 || NULL == p_cb2 ||
+            !cJSON_IsArray(merkle_branch)) {
+            ESP_LOGW(TAG, "ignoring a malformed mining.notify: params missing "
+                          "or not strings");
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
         }
-        new_work->merkle_branches = malloc(HASH_SIZE * new_work->n_merkle_branches);
-        for (size_t i = 0; i < new_work->n_merkle_branches; i++) {
-            hex2bin(cJSON_GetArrayItem(merkle_branch, i)->valuestring, new_work->merkle_branches + HASH_SIZE * i, HASH_SIZE);
+
+        int n_branches = cJSON_GetArraySize(merkle_branch);
+        if (n_branches < 0 || n_branches > MAX_MERKLE_BRANCHES) {
+            ESP_LOGW(TAG, "ignoring a mining.notify with %d merkle branches; "
+                          "the limit is %d", n_branches, MAX_MERKLE_BRANCHES);
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
+        }
+
+        for (int i = 0; i < n_branches; i++) {
+            if (NULL == str_at(merkle_branch, i)) {
+                ESP_LOGW(TAG, "ignoring a mining.notify: merkle branch %d is "
+                              "not a string", i);
+                message->method = STRATUM_UNKNOWN;
+                cJSON_Delete(json);
+                return;
+            }
+        }
+
+        mining_notify * new_work = malloc(sizeof(mining_notify));
+        if (NULL == new_work) {
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
+        }
+        new_work->job_id = strdup(p_job);
+        new_work->prev_block_hash = strdup(p_prev);
+        new_work->coinbase_1 = strdup(p_cb1);
+        new_work->coinbase_2 = strdup(p_cb2);
+        new_work->n_merkle_branches = n_branches;
+        new_work->merkle_branches = malloc(HASH_SIZE * (n_branches ? n_branches : 1));
+        for (int i = 0; i < n_branches; i++) {
+            hex2bin(str_at(merkle_branch, i),
+                    new_work->merkle_branches + HASH_SIZE * i, HASH_SIZE);
         }
 
         new_work->version = strtoul(cJSON_GetArrayItem(params, 5)->valuestring, NULL, 16);
