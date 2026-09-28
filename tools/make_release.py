@@ -206,6 +206,13 @@ def main():
 
     # The parts an update needs, which is every region except the settings.
     #
+    # Verified on a BC01 by writing exactly these five parts at these offsets,
+    # which is what esp-web-tools does: the miner rejoined WiFi on its own
+    # credentials, accepted its stored API password, and came back mining to
+    # the same pool and worker. Every field compared identical -- SSID, WiFi
+    # password, pool URL and port, payout address, fallback pool, frequency,
+    # core voltage, hostname, auth.
+    #
     # -full.bin is written at offset 0 and spans the whole flash, so it
     # necessarily includes nvs at 0xE000 -- and the nvs image inside it comes
     # from config.<board>.cvs.example. Flashing it to update therefore replaces
