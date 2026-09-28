@@ -204,6 +204,32 @@ def main():
         "--pad", "69cc74aeaf0ce683229d422f54428a54",
         "-o", os.path.join(DIST, base + "-www-ota.bin")])
 
+    # The parts an update needs, which is every region except the settings.
+    #
+    # -full.bin is written at offset 0 and spans the whole flash, so it
+    # necessarily includes nvs at 0xE000 -- and the nvs image inside it comes
+    # from config.<board>.cvs.example. Flashing it to update therefore replaces
+    # the owner's WiFi credentials, pool, payout address and API password with
+    # placeholders. An owner did exactly that and their miner came back
+    # authorising as REPLACE-WITH-YOUR-BTC-ADDRESS.
+    #
+    # Shipping the regions separately lets the flasher write all of them except
+    # 0xE000, so settings survive. esp-web-tools takes any number of parts.
+    update_parts = [
+        (0x0,      os.path.join(build, "bootloader", "bootloader.bin"),        "bootloader"),
+        (0xD000,   os.path.join(build, "partition_table", "partition-table.bin"), "partitions"),
+        # 0xE000 is nvs, and is deliberately absent.
+        (0x16000,  os.path.join(build, "ota_data_initial.bin"),                "otadata"),
+        (0x20000,  os.path.join(build, "stayopen-miner.bin"),                  "app"),
+        (0x9E0000, os.path.join(build, "www.bin"),                             "www"),
+    ]
+    parts_json = []
+    for offset, src, tag in update_parts:
+        name = "%s-%s.bin" % (base, tag)
+        if tag not in ("app", "www"):       # those two are already in dist
+            shutil.copy(src, os.path.join(DIST, name))
+        parts_json.append({"path": name, "offset": offset})
+
     manifest = {
         "name": "SerpentX / Stay Open (%s)" % board.upper(),
         "version": ver,
@@ -214,6 +240,23 @@ def main():
             "parts": [{"path": base + "-full.bin", "offset": 0}],
         }],
     }
+
+    # A second manifest for the same release, keeping the settings.
+    update_manifest = {
+        "name": "SerpentX / Stay Open (%s) -- update, keeps settings" % board.upper(),
+        "version": ver,
+        "home_assistant_domain": None,
+        # Erasing is exactly what this manifest exists to avoid.
+        "new_install_prompt_erase": False,
+        "builds": [{
+            "chipFamily": "ESP32-S3",
+            "parts": parts_json,
+        }],
+    }
+    with open(os.path.join(DIST, "manifest-%s-update.json" % board), "w",
+              encoding="utf-8", newline="\n") as fh:
+        json.dump(update_manifest, fh, indent=2)
+        fh.write("\n")
     # Per board. One manifest.json could only ever describe one board, so
     # publishing a second silently replaced the first and the flasher offered
     # whichever was released last under both names.

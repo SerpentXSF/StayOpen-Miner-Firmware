@@ -159,6 +159,12 @@
     unattended.</p>
   </div>
 
+  <div class="picker" role="group" aria-label="Choose install or update" style="margin-top:1.5rem">
+    <button type="button" data-mode="install" aria-pressed="true">New install</button>
+    <button type="button" data-mode="update" aria-pressed="false">Update</button>
+  </div>
+  <p class="note" id="mode-note" style="text-align:center;margin:-.5rem 0 1rem"></p>
+
   <div class="cta">
     <esp-web-install-button id="installer" manifest="manifest-bc01.json">
       <button slot="activate" style="background:var(--gold);color:#050910;border:0;border-radius:999px;padding:.85rem 2rem;font-size:1rem;font-weight:700;cursor:pointer">
@@ -217,29 +223,68 @@
   const esptoolFile = document.getElementById('esptool-file');
   const names = { bc01: 'Hammer BC01', bc04: 'Hammer BC04' };
 
+  const modeNote = document.getElementById('mode-note');
+  let mode = 'install';
+  let board = 'bc01';
+
+  /* New install writes the whole flash, settings partition included, which is
+     what a board arriving on vendor firmware needs -- and what wipes an
+     owner's pool, payout address and WiFi if they use it to update.
+
+     Update writes every region except 0xE000, so those survive. It is not the
+     default, because a board that has never run this firmware has no settings
+     of ours to keep and would be left holding the vendor's. */
+  const MODE_NOTE = {
+    install: 'Writes the whole flash. Use this the first time, or to recover a '
+           + 'board. It erases your WiFi, pool, payout address and API password.',
+    update:  'Keeps your settings. Only for a miner already running Stay Open.'
+  };
+
   async function pick(board) {
-    document.querySelectorAll('.picker button').forEach(function (b) {
+    /* Scoped to the board buttons. Unscoped, this also swept the mode
+       buttons, whose dataset.board is undefined -- so every board change
+       silently un-pressed both of them. */
+    document.querySelectorAll('.picker button[data-board]').forEach(function (b) {
       b.setAttribute('aria-pressed', String(b.dataset.board === board));
     });
     document.querySelectorAll('.board-only').forEach(function (el) {
       el.classList.toggle('on', el.dataset.board === board);
     });
     badge.textContent = names[board];
-    installer.setAttribute('manifest', 'manifest-' + board + '.json');
+    installer.setAttribute('manifest', manifestFor(board, mode));
 
     /* Name the artifact that is actually published rather than a hardcoded
        filename, so the manual instructions cannot drift from the release. */
     try {
-      const r = await fetch('manifest-' + board + '.json', { cache: 'no-store' });
+      const r = await fetch(manifestFor(board, mode), { cache: 'no-store' });
       const m = await r.json();
       const path = m.builds && m.builds[0] && m.builds[0].parts[0].path;
       if (path) { esptoolFile.textContent = path; }
     } catch (e) { /* leave the fallback text */ }
   }
 
-  document.querySelectorAll('.picker button').forEach(function (b) {
-    b.addEventListener('click', function () { pick(b.dataset.board); });
+  function manifestFor(b, m) {
+    return m === 'update'
+      ? 'manifest-' + b + '-update.json'
+      : 'manifest-' + b + '.json';
+  }
+
+  document.querySelectorAll('.picker button[data-board]').forEach(function (b) {
+    b.addEventListener('click', function () { board = b.dataset.board; pick(board); });
   });
+
+  document.querySelectorAll('.picker button[data-mode]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      mode = b.dataset.mode;
+      document.querySelectorAll('.picker button[data-mode]').forEach(function (o) {
+        o.setAttribute('aria-pressed', String(o.dataset.mode === mode));
+      });
+      modeNote.textContent = MODE_NOTE[mode];
+      pick(board);
+    });
+  });
+
+  modeNote.textContent = MODE_NOTE.install;
   pick('bc01');
 </script>
 </body>

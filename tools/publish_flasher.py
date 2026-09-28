@@ -182,7 +182,36 @@ def main():
             sys.exit("dist/manifest-%s.json is missing -- run "
                      "tools/make_release.py %s first" % (board, board))
         check_manifest(manifest, board, image)
-        images[board] = (image, manifest)
+
+        # The update manifest and its parts, which let an owner update without
+        # losing their settings. Optional, so a release built before this
+        # existed still publishes -- but if the manifest is there, every file
+        # it names has to be too, or the flash dies partway through with the
+        # miner's flash already half written.
+        update_manifest = os.path.join(DIST, "manifest-%s-update.json" % board)
+        update_parts = []
+        if os.path.exists(update_manifest):
+            try:
+                with open(update_manifest, encoding="utf-8") as fh:
+                    um = json.load(fh)
+                update_parts = [p["path"] for p in um["builds"][0]["parts"]]
+            except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+                sys.exit("dist/manifest-%s-update.json is unusable: %s"
+                         % (board, exc))
+            missing = [n for n in update_parts
+                       if not os.path.exists(os.path.join(DIST, n))]
+            if missing:
+                sys.exit("manifest-%s-update.json names files dist/ does not "
+                         "have: %s -- re-run tools/make_release.py %s"
+                         % (board, ", ".join(missing), board))
+            if um.get("version") and um["version"] not in image:
+                sys.exit("manifest-%s-update.json says version %r, which is "
+                         "not the version being published (%r)"
+                         % (board, um["version"], image))
+        else:
+            update_manifest = None
+
+        images[board] = (image, manifest, update_manifest, update_parts)
 
     flasher = []
     for name in sorted(os.listdir(SRC)):
@@ -190,11 +219,23 @@ def main():
         if os.path.isfile(full) and not name.endswith(".bin") \
                 and not name.startswith("manifest"):
             flasher.append(("100644", "blob", blob(full), name))
+    seen = set()
     for board in boards:
-        image, manifest = images[board]
+        image, manifest, update_manifest, update_parts = images[board]
         flasher.append(("100644", "blob", blob(os.path.join(DIST, image)), image))
         flasher.append(("100644", "blob", blob(manifest),
                         "manifest-%s.json" % board))
+        if update_manifest:
+            flasher.append(("100644", "blob", blob(update_manifest),
+                            "manifest-%s-update.json" % board))
+            for name in update_parts:
+                # Two boards can legitimately name the same file; a tree may
+                # not list it twice.
+                if name in seen:
+                    continue
+                seen.add(name)
+                flasher.append(("100644", "blob",
+                                blob(os.path.join(DIST, name)), name))
     flasher.sort(key=lambda e: e[3])
 
     root = [
