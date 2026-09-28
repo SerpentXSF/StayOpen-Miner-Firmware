@@ -257,6 +257,27 @@ esp_err_t network_config_eth_static_ip(void)
         char* str_dns = nvs_config_get_string(NVS_CONFIG_ETH_DNS, "192.168.2.1");
     
         esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("ETH_DEF");
+        /*
+         * There may be no Ethernet interface to configure.
+         * esp_netif_get_handle_from_ifkey() answers NULL when one was never
+         * created -- a W5500 that did not initialise, or Ethernet still
+         * deferred -- and the ESP_ERROR_CHECK calls below then abort on
+         * ESP_ERR_ESP_NETIF_INVALID_PARAMS.
+         *
+         * That is a reboot loop, and a cruel one: it happens after the
+         * hashboard is powered, so every cycle takes the core rail up and
+         * down again. A board with a dead Ethernet controller and a static IP
+         * configured would do it forever, and the static IP is exactly what
+         * somebody sets after their miner starts going unreachable.
+         */
+        if (NULL == sta_netif) {
+            ESP_LOGW(TAG, "static Ethernet IP is configured but there is no "
+                          "Ethernet interface to apply it to; leaving it "
+                          "unset rather than restarting");
+            free(str_static_ip); free(str_subnet_mask);
+            free(str_gateway); free(str_dns);
+            return ret;
+        }
         esp_netif_dhcpc_stop(sta_netif);
 
         esp_netif_ip_info_t ip_info;
@@ -787,11 +808,21 @@ void network_init(void * globalState)
 
 	if((netWork_Info.wifi_on == 0) && (netWork_Info.eth_on == 0))
 	{
-		/* Neither interface asked for: Ethernet is the last resort, and
-		 * there is no hashboard power-up to wait for that would help. */
-		network_eth_init();
-		network_config_eth_static_ip();
-		vTaskDelay(pdMS_TO_TICKS(200));
+		/*
+		 * Neither interface asked for, so Ethernet is the last resort -- but
+		 * it still waits for the hashboard.
+		 *
+		 * This used to call network_eth_init() right here, on the reasoning
+		 * that there was "no hashboard power-up to wait for that would help".
+		 * That reasoning was wrong: main() powers the hashboard regardless of
+		 * what the network settings say, so this brought the W5500 up and
+		 * then stepped the core rail underneath it -- the one ordering the
+		 * deferral exists to prevent, reached by the path least likely to be
+		 * tested.
+		 */
+		eth_deferred = true;
+		ESP_LOGI(TAG, "No interface configured; Ethernet deferred until the "
+		              "hashboard is powered, then brought up as a last resort");
 	}
 
 	/*

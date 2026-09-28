@@ -562,13 +562,21 @@ void app_main(void)
      * Otherwise the controller has been running all along and, on a BC04, has
      * already stopped answering; try restarting it. Boards with no Ethernet,
      * or nothing deferred, return ESP_ERR_INVALID_STATE and are unaffected. */
-    if (network_get_info().eth_on) {
-        if (network_eth_start() != ESP_OK) {
+    /*
+     * Unconditional, because network_init() can defer Ethernet even when
+     * eth_on is 0 -- that is the last-resort path for a board with neither
+     * interface configured. network_eth_start() answers ESP_ERR_INVALID_STATE
+     * when nothing was deferred, so this is a no-op on a board without it.
+     */
+    {
+        esp_err_t eth_started = network_eth_start();
+        if (ESP_OK != eth_started && network_get_info().eth_on) {
             network_eth_recover();
         }
         /* Both of those run once and never again. From here on the controller
          * is watched, because one that wedges an hour later keeps its IP,
-         * passes nothing, and reports nothing. */
+         * passes nothing, and reports nothing. Safe on boards with no
+         * controller: it returns without starting anything. */
         network_eth_start_health_watch();
     }
 
