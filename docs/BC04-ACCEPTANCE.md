@@ -351,3 +351,23 @@ Not defects in the replacement board if you see them:
 
 - A BC04 cannot switch its own hashboard off once the I²C bus has gone. That
   is a hardware fact about this board, not a firmware bug.
+
+## What the 2.0.28 soak actually covers
+
+The 26 h BC04 soak ran on the tree at `18e6504`. The release is tagged one
+commit later, at the fix for the kernel-log download, which was pulled forward
+after an owner hit it: the download button was a plain browser navigation, so
+it carried no Authorization header and the firmware refused it — to a user who
+was signed in, on the page already streaming that log over an authenticated
+socket.
+
+That commit changes three files, all of them web-UI source. **No firmware
+source differs between the soaked tree and the released tag**, so the
+application image is the one that soaked; only `www.bin` is rebuilt. The
+endpoint side needed no change and was confirmed against a running 2.0.28
+miner: the same GET answers 401 with no header and 200 with one.
+
+Worth being precise about, because "we soaked it for 26 hours" is only worth
+something if it names the thing that was soaked. Anything landing after that
+tag — the W5500 reset hold, the two concurrency fixes, the licence and source
+offer in releases — is 2.0.29 and gets its own soak.
