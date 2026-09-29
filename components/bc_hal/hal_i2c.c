@@ -109,6 +109,30 @@ void hammer_gpio_bridge_test(void)
     }
     esp_rom_delay_us(5000);
 
+    /*
+     * Baseline first: with every line idle and pulled up, anything already
+     * reading low is being held there by the board.
+     *
+     * Such a pin reads 0 whichever line is driven, so without this pass it is
+     * reported as sharing a net with every one of them. That is not a
+     * hypothetical -- a BC04 with three stuck pins produced 28 "bridged pin
+     * pairs", none of which were bridges, in evidence meant for an RMA.
+     * Naming them once and leaving them out of the pairs is the difference
+     * between a report that localises a fault and one that buries it.
+     */
+    bool stuck[sizeof(watched) / sizeof(watched[0])];
+    int n_stuck = 0;
+
+    for (size_t j = 0; j < n_wat; j++) {
+        stuck[j] = (0 == gpio_get_level(watched[j]));
+        if (stuck[j]) {
+            n_stuck++;
+            ESP_LOGE(TAG, "  GPIO%d is held low with nothing driving it -- "
+                          "excluded from the pairs below, it would follow "
+                          "everything", watched[j]);
+        }
+    }
+
     for (size_t i = 0; i < n_drv; i++) {
         int drive = drivers[i];
 
@@ -124,7 +148,7 @@ void hammer_gpio_bridge_test(void)
 
         for (size_t j = 0; j < n_wat; j++) {
             int watch = watched[j];
-            if (watch == drive) {
+            if (watch == drive || stuck[j]) {
                 continue;
             }
             if (0 == gpio_get_level(watch)) {
@@ -162,6 +186,11 @@ void hammer_gpio_bridge_test(void)
     } else {
         ESP_LOGE(TAG, "  %d bridged pin pair(s) -- each is reported twice, "
                       "once from each end", bridges);
+    }
+    if (n_stuck) {
+        ESP_LOGW(TAG, "  %d pin(s) held low before anything was driven. That "
+                      "is a finding in itself -- a collapsed rail or a shorted "
+                      "part will do it -- but it is not a bridge.", n_stuck);
     }
     ESP_LOGW(TAG, "  this finds shorts, not opens. A pin soldered to nothing "
                   "reads the same as a good one.");
