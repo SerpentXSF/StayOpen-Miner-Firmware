@@ -152,6 +152,81 @@ def build_config(board):
     sh([sys.executable, gen, "generate", src, out, "0x6000"])
 
 
+REPO_URL = "https://github.com/SerpentXSF/StayOpen-Miner-Firmware"
+
+
+def source_offer(ver):
+    """Write dist/LICENSE and dist/SOURCE.txt beside the binaries.
+
+    Deliberately board-neutral: one release carries every board, and both are
+    built from the same commit, so a per-board copy of this file would only
+    give the last board packaged the final word on what the whole release was
+    built from.
+
+    These images are a GPL-3.0 work conveyed in object form, so the licence
+    has to travel with them and a recipient has to be able to find the exact
+    source they were built from. A public repository is not on its own enough:
+    it says where the project lives, not which commit produced the file in
+    front of them, and "the latest main" stops being that commit as soon as
+    anything else lands.
+
+    Naming the commit costs nothing here and is the whole difference between a
+    recipient who can rebuild these binaries and one who can only get close.
+    """
+    shutil.copy(os.path.join(ROOT, "LICENSE"), os.path.join(DIST, "LICENSE"))
+
+    try:
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
+        dirty = bool(subprocess.check_output(
+            ["git", "status", "--porcelain"], cwd=ROOT).decode().strip())
+    except Exception:
+        commit, dirty = "unknown", False
+
+    text = """Stay Open miner firmware %(ver)s
+
+Corresponding source
+--------------------
+These binaries were built from:
+
+    %(url)s
+    commit %(commit)s%(dirty)s
+
+    git clone %(url)s.git
+    git checkout %(commit)s
+    python tools/build_board.py <board>
+    python tools/make_release.py <board>
+
+where <board> is the one named in the filename of the image you have -- bc01
+or bc04. They are not interchangeable: the boards do not share an ASIC pinout,
+and an image flashed to the wrong one boots, serves its interface, detects the
+chip and never returns a share.
+
+Licence
+-------
+GNU General Public License, version 3 or later. The full text is in the
+LICENSE file published alongside these binaries.
+
+This firmware is a fork of ESP-Miner / AxeOS, which is GPL-3.0, by way of the
+Baichuan/Hammer BC-series vendor firmware. Attribution and the history of what
+came from where are in NOTICE.md and docs/PROVENANCE.md in the source tree.
+
+You are entitled to the complete source for these binaries, to modify it and
+to redistribute it under the same licence. Everything needed to rebuild them
+is in the repository above at the commit named; nothing is withheld and no
+part of the build depends on anything unpublished.
+""" % {
+        "ver": ver,
+        "url": REPO_URL,
+        "commit": commit,
+        "dirty": "\n    (built from a tree with uncommitted changes)" if dirty else "",
+    }
+
+    with open(os.path.join(DIST, "SOURCE.txt"), "w",
+              encoding="utf-8", newline="\n") as fh:
+        fh.write(text)
+
+
 def main():
     board = (sys.argv[1] if len(sys.argv) > 1 else "bc01").lower()
     build = os.path.join(ROOT, "build", board)
@@ -273,9 +348,13 @@ def main():
         json.dump(manifest, fh, indent=2)
         fh.write("\n")
 
+    source_offer(ver)
+
     lines = []
     for name in sorted(os.listdir(DIST)):
-        if name in ("SHA256SUMS", "config-dist.bin") or not name.endswith(
+        if name in ("SHA256SUMS", "config-dist.bin"):
+            continue
+        if name not in ("LICENSE", "SOURCE.txt") and not name.endswith(
                 (".bin", ".json")):
             continue
         with open(os.path.join(DIST, name), "rb") as fh:

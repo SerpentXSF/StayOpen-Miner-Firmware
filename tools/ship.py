@@ -158,8 +158,12 @@ def main():
             sys.exit("%s is already released. Bump CONFIG_APP_PROJECT_VER rather "
                      "than replacing a published release's files." % tag)
 
+        # LICENSE and SOURCE.txt are not optional extras: the binaries are a
+        # GPL-3.0 work being conveyed, so the licence travels with them and
+        # SOURCE.txt names the commit they were built from.
         assets = sorted(f for f in os.listdir(DIST)
-                        if f.endswith(".bin") or f == "SHA256SUMS")
+                        if f.endswith(".bin")
+                        or f in ("SHA256SUMS", "LICENSE", "SOURCE.txt"))
         for board in boards:
             if not any(("-%s-" % board) in a for a in assets):
                 sys.exit("no %s artifacts in dist/ -- refusing to cut a release "
