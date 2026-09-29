@@ -799,6 +799,24 @@ deliberately on WiFi only.
 **Fixed.** `test_eth()` now runs after `test_power_on()` and
 `test_hashboard()`, so the self test takes the same ordering as a normal boot.
 
+**This changes what an already-stored result means, and stored results are
+sticky.** `should_test()` reads `selftest` from NVS and does not re-run a test
+that has already reported: 1 is a pass, 2 a failure that is deliberately not
+repeated, 3 a run skipped for lack of main power. Only a full flash clears it.
+
+So a miner that ran its self test under earlier firmware can be carrying a 2
+that means nothing worse than *no Ethernet cable was plugged in* -- the
+Ethernet test ran first and returned before the power and hashboard tests were
+ever reached, so the parts that matter went untested and the board has been
+skipping the test ever since on the strength of that result. A 2 written by
+this firmware or later does mean the power and hashboard tests were reached.
+
+There is no way to tell the two apart from the stored value, because nothing
+records which firmware wrote it. An owner who wants the real answer has to
+reflash, which resets `selftest` to 0 and runs the test again in the correct
+order. Worth doing on any board whose self test failed before 2.0.28 and whose
+hashboard has never been confirmed another way.
+
 **2. The stall watchdog could start Ethernet before the regulator had finished
 trying.** `ETH_STALL_TIMEOUT_MS` was 90 s (`main/main.c`), and it exists to
 start Ethernet once the hashboard is judged never to be coming. But
