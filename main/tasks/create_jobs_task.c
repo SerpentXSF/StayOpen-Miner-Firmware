@@ -100,9 +100,38 @@ void create_jobs_task(void *pvParameters)
                                 extranonce_2_B = 0;
                             }
 
+                            /*
+                             * Pool B has to still be there, not merely to have
+                             * sent something once. poolb_notification keeps the
+                             * last notify for as long as the miner runs, so on
+                             * its own it stays true across a disconnect and the
+                             * scheduler carries on handing pool B its share of
+                             * the slices -- building work against a job that
+                             * cannot be submitted, on an extranonce that will
+                             * not survive the reconnect. Any nonce found
+                             * against it reaches the submit path, finds
+                             * transportB NULL and is dropped.
+                             *
+                             * Nothing reports that. jobs_served[POOL_B] keeps
+                             * counting, so the miner looks like it is splitting
+                             * work as configured while dual_ratio_b of the
+                             * hashrate produces nothing at all, until pool B
+                             * happens to come back.
+                             *
+                             * transportB is published only once the connection
+                             * is up and cleared when it goes down, so it is the
+                             * honest test. Read it under its own lock: the pool
+                             * B task can swap it at any moment.
+                             */
+                            bool poolb_up = false;
+                            pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
+                            poolb_up = (GLOBAL_STATE->transportB != NULL);
+                            pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
+
                             uint8_t chosen = pool_scheduler_select(&scheduler, esp_timer_get_time());
                             GLOBAL_STATE->jobs_selected[chosen]++;
-                            if (chosen == POOL_B && poolb_notification != NULL) {
+                            if (chosen == POOL_B && poolb_notification != NULL &&
+                                poolb_up) {
                                 pool_id = POOL_B;
                             }
                             /* chosen but not served means the job went to the
