@@ -226,6 +226,35 @@ what the firmware will command across four chips in series.
 - [ ] Set `asicnormalvol` in NVS to 520 and restart. The board should come up
       at 480, and log that the stored voltage was over the ceiling.
 
+## 2c. Dual fan reporting — VERIFIED 2026-09-29 on 2.0.28
+
+First BC04 to run the per-channel reporting. Every sample, settled:
+
+```
+fanrpm 2440   (ch0 0   ch1 2440)
+```
+
+**The fitted fan is on EMC2302 channel 1. Channel 0 is the empty header.**
+That confirms on our own hardware what an owner reported: two headers, one fan
+fitted.
+
+It also settles a design decision made without a board to check it against.
+`read_fan_rpm()` keeps `fan_rpm[0]` as the *higher* of the two channels rather
+than raw channel 0. Had it used raw channel 0 -- the obvious reading of "report
+the channels separately" -- this board would show **0 RPM** on the display and
+in `fanrpm`, and `fan_tach_proven[0]` would never latch, which silently
+disarms the stall trip. The reasoning for keeping the maximum is in
+`main/device.c`; this is the measurement behind it.
+
+`systemError` stayed empty throughout, which is correct for a healthy board
+and the first confirmation that the fault reporting does not false-positive.
+
+Also visible on this board and worth its own look: the rail comes up at the
+480 default and steps down to the configured 460 over about 100 seconds, on
+every boot. The vendor's firmware sets its target directly at ~7 s. A board
+configured to run gently still spends its first minute and a half at the
+ceiling.
+
 ## 3. The fan trip — 2.0.28, positive case never tested
 
 Only the *no false positive* half has been proven, on a BC01. The trip itself
