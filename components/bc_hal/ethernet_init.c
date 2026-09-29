@@ -9,6 +9,8 @@
 #include "esp_mac.h"
 #include "driver/gpio.h"
 #include "sdkconfig.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #if CONFIG_ETH_USE_SPI_ETHERNET
 #include "driver/spi_master.h"
 #endif // CONFIG_ETH_USE_SPI_ETHERNET
@@ -262,8 +264,84 @@ err:
 }
 #endif // CONFIG_EXAMPLE_USE_SPI_ETHERNET
 
+/*
+ * Hold the W5500 in hardware reset across the core-rail transient.
+ *
+ * Deferring the driver keeps this firmware from touching the part. It does
+ * nothing to the part itself: the W5500 has its own 3.3 V supply, leaves
+ * power-on reset by itself, and is clocking, linked and answering on the wire
+ * long before anything here opens the SPI bus. That is the state the first
+ * BC04's controller was in when the core rail stepped up to power the
+ * hashboard -- it stopped answering about 70 ms later, never recovered, and
+ * the part was afterwards found shorted across 3.3 V.
+ *
+ * So the ordering fix protects the software's view of the controller, not the
+ * controller. This protects the controller: RSTn is active low and the W5500
+ * may be held there indefinitely, with its PHY and internal regulator off.
+ *
+ * Released by example_eth_init(), which every path into the driver goes
+ * through -- the normal deferred start, the self test, and the mid-run
+ * recovery. Where Ethernet is switched off the part is simply left in reset,
+ * which is the safer of the two states and costs nothing: Ethernet is brought
+ * up at boot, so enabling it takes a restart either way.
+ */
+#define ETH_PHY_RST_GPIO    CONFIG_EXAMPLE_ETH_SPI_PHY_RST0_GPIO
+
+static bool s_phy_held_in_reset = false;
+
+esp_err_t eth_phy_hold_in_reset(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << ETH_PHY_RST_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+
+    esp_err_t ret = gpio_config(&io);
+    if (ESP_OK != ret) {
+        ESP_LOGW(TAG, "could not claim GPIO%d to hold the W5500 in reset (%s); "
+                      "continuing with it live", ETH_PHY_RST_GPIO,
+                 esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = gpio_set_level(ETH_PHY_RST_GPIO, 0);
+    if (ESP_OK != ret) {
+        ESP_LOGW(TAG, "could not drive GPIO%d low (%s); continuing with the "
+                      "W5500 live", ETH_PHY_RST_GPIO, esp_err_to_name(ret));
+        return ret;
+    }
+
+    s_phy_held_in_reset = true;
+    ESP_LOGI(TAG, "W5500 held in reset on GPIO%d until the core rail settles",
+             ETH_PHY_RST_GPIO);
+    return ESP_OK;
+}
+
+void eth_phy_release_reset(void)
+{
+    if (!s_phy_held_in_reset) {
+        return;
+    }
+    s_phy_held_in_reset = false;
+
+    gpio_set_level(ETH_PHY_RST_GPIO, 1);
+    /*
+     * The W5500 needs its PLL to lock before the SPI interface answers. The
+     * datasheet asks for 1 ms; this runs once per boot, so there is no reason
+     * to be tight about it. The PHY driver then runs its own reset sequence on
+     * the same pin, which is harmless on a part already out of reset.
+     */
+    vTaskDelay(pdMS_TO_TICKS(50));
+    ESP_LOGI(TAG, "W5500 released from reset");
+}
+
 esp_err_t example_eth_init(esp_eth_handle_t *eth_handles_out[], uint8_t *eth_cnt_out)
 {
+    eth_phy_release_reset();
+
     esp_err_t ret = ESP_OK;
     esp_eth_handle_t *eth_handles = NULL;
     uint8_t eth_cnt = 0;

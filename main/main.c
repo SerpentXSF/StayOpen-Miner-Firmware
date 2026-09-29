@@ -22,6 +22,7 @@
 #include "global_state.h"
 #include "miner.h"
 #include "self_test.h"
+#include "ethernet_init.h"
 #include "serial.h"
 #include "asic.h"
 #include "system.h"
@@ -432,6 +433,22 @@ void app_main(void)
     dev_display_init(&GLOBAL_STATE);
 
 	ESP_ERROR_CHECK(bc_i2c_init());
+
+    /*
+     * Before anything switches the core rail on -- the self test below does it
+     * directly, the normal boot does it in init_all_peripherals() -- take the
+     * Ethernet controller out of the path of that step.
+     *
+     * Deferring the driver was only ever half of it. The W5500 runs from its
+     * own supply and is live and linked whether or not this firmware has
+     * opened the SPI bus, which is exactly how the first BC04's controller was
+     * sitting when it stopped answering 70 ms into the transient.
+     *
+     * The BC01 family has no W5500; leave its GPIO alone.
+     */
+    if (!device_is_bc01_family(GLOBAL_STATE.device_model)) {
+        eth_phy_hold_in_reset();
+    }
 
     #if 1
     if(should_test()){

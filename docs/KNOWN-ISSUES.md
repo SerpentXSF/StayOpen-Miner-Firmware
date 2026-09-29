@@ -772,45 +772,71 @@ two fans fitted -- and shipping an untested fan trip is how the board-wide
 latch above nearly powered off a healthy miner. Reporting first; a trip only
 once there is hardware to prove it on.
 
-## Two paths still stand the W5500 in front of the core rail (open)
+## Three paths stood the W5500 in front of the core rail (fixed)
 
-Found by an external review of this repository, 2026-09-28, and **both
-confirmed against the source here**. They matter more than most entries in
-this file, because standing a live W5500 through the core-rail transient is
-the one mechanism this project has direct evidence for: the first BC04's
-Ethernet controller stopped answering ~70 ms after that step and later failed
-short across the 3.3 V rail, taking the I2C domain with it.
+Found by an external review of this repository, 2026-09-28, and all three
+confirmed against the source here. They matter more than most entries in this
+file, because standing a live W5500 through the core-rail transient is the one
+mechanism this project has direct evidence for: the first BC04's Ethernet
+controller stopped answering ~70 ms after that step and later failed short
+across the 3.3 V rail, taking the I2C domain with it.
 
 `network_init()` defers Ethernet until the hashboard is powered, and that is
-correct. These two get around it.
+correct. These three got around it.
 
-**1. The first-boot self test brings Ethernet up before the rail.** Inside
-`self_test()`, `test_eth()` runs at one point and `test_power_on()` well
-after it -- so the W5500 is initialised, linked and holding a DHCP lease, and
-*then* the core voltage is switched on. `config.bc04.cvs.example` ships
-`selftest,data,u16,0`, so this runs **on the first boot after every full
+**1. The first-boot self test brought Ethernet up before the rail.** Inside
+`self_test()`, `test_eth()` ran at one point and `test_power_on()` well after
+it -- so the W5500 was initialised, linked and holding a DHCP lease, and *then*
+the core voltage was switched on. `config.bc04.cvs.example` ships
+`selftest,data,u16,0`, so this ran **on the first boot after every full
 flash**, which is what the web flasher does.
 
 With no cable the Ethernet test fails and the routine returns before
-`test_power_on()` is ever reached, so the hazard needs a cable present. That
-is the only reason it has not been hit here: the BC04 flashed 2026-09-27 was
+`test_power_on()` is ever reached, so the hazard needed a cable present. That
+is the only reason it was never hit here: the BC04 flashed 2026-09-27 was
 deliberately on WiFi only.
 
-**2. The stall watchdog can start Ethernet before the regulator has finished
-trying.** `ETH_STALL_TIMEOUT_MS` is 90 s (`main/main.c`), and it exists to
+**Fixed.** `test_eth()` now runs after `test_power_on()` and
+`test_hashboard()`, so the self test takes the same ordering as a normal boot.
+
+**2. The stall watchdog could start Ethernet before the regulator had finished
+trying.** `ETH_STALL_TIMEOUT_MS` was 90 s (`main/main.c`), and it exists to
 start Ethernet once the hashboard is judged never to be coming. But
 `TPS546_init()` retries 100 times at 2 s intervals -- **200 s**. A regulator
-that answers between those two figures, which a marginal connector after a
-move would do, gets a rail that steps up with Ethernet already live. The
-comment above the watchdog says Ethernet starts "either after the hashboard is
+that answered between those two figures, which a marginal connector after a
+move would do, got a rail that stepped up with Ethernet already live. The
+comment above the watchdog said Ethernet starts "either after the hashboard is
 up, or after we know it is never coming up. Never in between." The numbers
-allow exactly in between.
+allowed exactly in between.
 
-**Also worth doing, from the same review and not yet confirmed here:** nothing
-holds the W5500's reset line low across the transient. Deferring the driver
-does not depower the chip -- it stays on its own supply and can link by
-itself. Holding reset until the rail has settled would protect the part rather
-than merely the software's view of it.
+**Fixed.** The timeout is 240 s, which is past the regulator's own last retry,
+so the two can no longer overlap.
+
+**3. Nothing held the W5500's reset line low across the transient.** Deferring
+the driver protects the software's view of the controller, not the controller.
+The W5500 has its own 3.3 V supply, leaves power-on reset by itself, and is
+clocking and linked whether or not this firmware has opened the SPI bus --
+which is exactly the state the first BC04's part was in when it stopped
+answering.
+
+**Fixed.** `eth_phy_hold_in_reset()` drives GPIO13 low from `app_main()`,
+before either path that switches the rail on -- the self test directly, or
+`init_all_peripherals()` on a normal boot -- so the part sits with its PHY and
+internal regulator off through the step. `example_eth_init()` releases it, and
+every path into the driver goes through there: the deferred start, the self
+test, and the mid-run recovery. The BC01 family has no W5500 and its GPIO is
+left alone. Where Ethernet is switched off the part is simply left in reset,
+which is the safer of the two states and costs nothing, since Ethernet is
+brought up at boot and enabling it takes a restart either way.
+
+**How far this is verified.** The ordering is confirmed on hardware: on a BC04
+the hold logs at 1729 ms, ahead of the self-test decision and the Ethernet
+deferral, with the boot otherwise unchanged. The **release** half is not
+verified on hardware -- a bare display module has no W5500, so
+`example_eth_init()` is never reached there, and the only working BC04
+available is deliberately running on WiFi. Confirming it needs a working board
+with a cable in, which is also the test that would show whether holding reset
+actually protects the part.
 
 ## A masked password was stored as the password (fixed)
 
