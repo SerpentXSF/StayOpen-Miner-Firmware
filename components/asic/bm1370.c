@@ -409,17 +409,28 @@ void BM1370_send_work(void * pvParameters, bm_job * next_bm_job)
     memcpy(job.prev_block_hash, next_bm_job->prev_block_hash_be, 32);
     memcpy(&job.version, &next_bm_job->version, 4);
 
-    if (GLOBAL_STATE->ASIC_TASK_MODULE[0].active_jobs[job.job_id] != NULL) {
-        free_bm_job(GLOBAL_STATE->ASIC_TASK_MODULE[0].active_jobs[job.job_id]);
-    }
-
-    GLOBAL_STATE->ASIC_TASK_MODULE[0].active_jobs[job.job_id] = next_bm_job;
-
+    /*
+     * Free and replace the slot under valid_jobs_lock, not beside it. The
+     * result task reads active_jobs[] under this lock and copies out what a
+     * share needs; doing the free outside it let a nonce that had just passed
+     * the valid_jobs check be scored and submitted from memory this call had
+     * already handed back to the heap. Freeing the displaced job after the
+     * unlock is safe, because nothing can still reach it: the slot no longer
+     * points at it, and any reader that held the lock has finished copying.
+     */
     pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[0]);
+
+    bm_job * displaced = GLOBAL_STATE->ASIC_TASK_MODULE[0].active_jobs[job.job_id];
+    GLOBAL_STATE->ASIC_TASK_MODULE[0].active_jobs[job.job_id] = next_bm_job;
     GLOBAL_STATE->valid_jobs[0][job.job_id] = 1;
     /* remember whose work this slot holds; see job_pool in global_state.h */
     GLOBAL_STATE->job_pool[0][job.job_id] = next_bm_job->pool_id;
+
     pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[0]);
+
+    if (displaced != NULL) {
+        free_bm_job(displaced);
+    }
 
     //debug sent jobs - this can get crazy if the interval is short
     #if BM1370_DEBUG_JOBS

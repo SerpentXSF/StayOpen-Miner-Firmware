@@ -39,38 +39,75 @@ void ASIC_result_task(void *pvParameters)
 
         uint8_t job_id = asic_result->job_id;
 
-        if (GLOBAL_STATE->valid_jobs[chain_num][job_id] == 0)
+        /*
+         * Take everything this share needs while holding valid_jobs_lock.
+         *
+         * active_jobs[] is rewritten by whichever task sends work, and that
+         * task frees the job already in the slot before storing the new one,
+         * outside this lock -- the caveat already recorded on job_pool in
+         * global_state.h, which is why pool ownership is kept in its own array
+         * rather than read back through these pointers. Scoring and submitting
+         * a share read them anyway.
+         *
+         * This is not a narrow window. job_id comes back from the ASIC, and
+         * BM1370_send_work walks the slots in steps of 24 modulo 128, so only
+         * sixteen are ever used and each is recycled every sixteen jobs. A
+         * nonce arriving for a slot that is being reused is an ordinary event,
+         * and reading the pointer out here unlocked meant scoring and
+         * submitting a share from freed memory.
+         *
+         * jobid and extranonce2 are the only fields that point outside the
+         * job, so they are copied and everything else is taken by value. That
+         * keeps the lock off the socket writes below, which must not be held
+         * across a pool that has stopped reading.
+         */
+        pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+        bm_job * job = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id];
+        if (GLOBAL_STATE->valid_jobs[chain_num][job_id] == 0 || job == NULL)
         {
+            pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
             ESP_LOGW(TAG, "Invalid job nonce found, 0x%02X", job_id);
             continue;
         }
 
-        // check the nonce difficulty
-        double nonce_diff = test_nonce_value(
-            GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id],
-            asic_result->nonce,
-            asic_result->rolled_version);
+        double nonce_diff = test_nonce_value(job, asic_result->nonce,
+                                             asic_result->rolled_version);
+
+        uint32_t job_version   = job->version;
+        uint32_t job_ntime     = job->ntime;
+        uint32_t job_pool_diff = job->pool_diff;
+        uint8_t  job_pool_id   = job->pool_id;
+        char *   job_jobid     = job->jobid       ? strdup(job->jobid)       : NULL;
+        char *   job_en2       = job->extranonce2 ? strdup(job->extranonce2) : NULL;
+
+        pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+        if (job_jobid == NULL || job_en2 == NULL) {
+            ESP_LOGW(TAG, "Out of memory copying job 0x%02X; share dropped", job_id);
+            free(job_jobid);
+            free(job_en2);
+            continue;
+        }
 
         //log the ASIC response
         /* Job id first: with two pools running it is what ties a nonce back to
          * the pool that issued the work it was found against. */
         ESP_LOGD(TAG, "ID: %s, ASIC nr: %d, Core: %d/%d, ver: %08" PRIX32 " Nonce %08" PRIX32 " diff %.1f of %ld.",
-            GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->jobid,
+            job_jobid,
             asic_result->asic_nr, asic_result->core_id, asic_result->small_core_id,
             asic_result->rolled_version, asic_result->nonce, nonce_diff,
-            GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->pool_diff);
+            job_pool_diff);
 
-        if (nonce_diff >= GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->pool_diff)
+        if (nonce_diff >= job_pool_diff)
         {
-            bm_job * job = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id];
-
             /*
              * A share belongs to the pool that issued its job. Sending pool B's
              * work to pool A gets it rejected as an unknown job id, and would
              * also credit the wrong pool. The job carries pool_id for exactly
              * this reason.
              */
-            if (GLOBAL_STATE->dual_enable && job->pool_id == POOL_B) {
+            if (GLOBAL_STATE->dual_enable && job_pool_id == POOL_B) {
                 /* Hold transportB_lock across the write: the pool B task can be
                  * tearing this handle down at any moment. */
                 pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
@@ -79,11 +116,11 @@ void ASIC_result_task(void *pvParameters)
                         GLOBAL_STATE->transportB,
                         GLOBAL_STATE->send_uidB++,
                         GLOBAL_STATE->SYSTEM_MODULE.poolB_user,
-                        job->jobid,
-                        job->extranonce2,
-                        job->ntime,
+                        job_jobid,
+                        job_en2,
+                        job_ntime,
                         asic_result->nonce,
-                        asic_result->rolled_version ^ job->version);
+                        asic_result->rolled_version ^ job_version);
                     if (retB < 0) {
                         ESP_LOGW(TAG, "Unable to write share to pool B. Ret: %d", retB);
                     }
@@ -98,11 +135,11 @@ void ASIC_result_task(void *pvParameters)
                     GLOBAL_STATE->transport,
                     GLOBAL_STATE->send_uid++,
                     user,
-                    job->jobid,
-                    job->extranonce2,
-                    job->ntime,
+                    job_jobid,
+                    job_en2,
+                    job_ntime,
                     asic_result->nonce,
-                    asic_result->rolled_version ^ job->version);
+                    asic_result->rolled_version ^ job_version);
 
                 if (ret < 0) {
                     ESP_LOGI(TAG, "Unable to write share to transport. Closing connection. Ret: %d", ret);
@@ -117,6 +154,9 @@ void ASIC_result_task(void *pvParameters)
         }else{
             SYSTEM_notify_found_nonce(GLOBAL_STATE, nonce_diff, job_id, chain_num, asic_result->chip_id, asic_result->core_id);           
         }
+
+        free(job_jobid);
+        free(job_en2);
     }
 }
 
@@ -140,8 +180,32 @@ void ASIC_ltc_result_task(void *pvParameters)
 
         uint8_t job_id = asic_result->job_id;
 
-        if (GLOBAL_STATE->valid_jobs[chain_num][job_id] == 0)
+        /*
+         * Take everything this share needs while holding valid_jobs_lock.
+         *
+         * active_jobs[] is rewritten by whichever task sends work, and that
+         * task frees the job already in the slot before storing the new one,
+         * outside this lock -- the caveat already recorded on job_pool in
+         * global_state.h, which is why pool ownership is kept in its own array
+         * rather than read back through these pointers. Scoring and submitting
+         * a share read them anyway.
+         *
+         * This is not a narrow window. job_id comes back from the ASIC, and
+         * the sender walks the slots in steps of 24 modulo 128, so only
+         * sixteen are ever used and each is recycled every sixteen jobs. A
+         * nonce arriving for a slot that is being reused is an ordinary event.
+         *
+         * jobid and extranonce2 are the only fields that point outside the
+         * job, so they are copied and everything else is taken by value. That
+         * keeps the lock off the socket write below, which must not be held
+         * across a pool that has stopped reading.
+         */
+        pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+        bm_job * job = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id];
+        if (GLOBAL_STATE->valid_jobs[chain_num][job_id] == 0 || job == NULL)
         {
+            pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
             ESP_LOGW(TAG, "Invalid job nonce found, 0x%02X", job_id);
             
             #ifdef STATISTIC_SYSTEM_FEATURE            
@@ -151,16 +215,31 @@ void ASIC_ltc_result_task(void *pvParameters)
             continue;
         }
 
-        // check the nonce difficulty
         nonce_diff = test_ltc_nonce_value(
-            GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id],
-            asic_result->nonce, asic_result->chip_id, asic_result->core_id, chain_num, job_id);
+            job, asic_result->nonce, asic_result->chip_id,
+            asic_result->core_id, chain_num, job_id);
+        uint32_t job_version   = job->version;
+        uint32_t job_ntime     = job->ntime;
+        uint32_t job_pool_diff = job->pool_diff;
+        uint8_t  job_pool_id   = job->pool_id;
+        char *   job_jobid     = job->jobid       ? strdup(job->jobid)       : NULL;
+        char *   job_en2       = job->extranonce2 ? strdup(job->extranonce2) : NULL;
+
+        pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+        if (job_jobid == NULL || job_en2 == NULL) {
+            ESP_LOGW(TAG, "Out of memory copying job 0x%02X; share dropped", job_id);
+            free(job_jobid);
+            free(job_en2);
+            continue;
+        }
+
 
         //log the ASIC response
         ESP_LOGD(TAG, "Nonce %08" PRIX32 " diff %.1f of %ld.", asic_result->nonce, nonce_diff, 
-            GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->pool_diff);
+            job_pool_diff);
 
-        if (nonce_diff >= GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->pool_diff)
+        if (nonce_diff >= job_pool_diff)
         {
             char * user = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? \
                 GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
@@ -170,9 +249,9 @@ void ASIC_ltc_result_task(void *pvParameters)
                 GLOBAL_STATE->transport,
                 GLOBAL_STATE->send_uid++,
                 user,
-                GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->jobid,
-                GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->extranonce2,
-                GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[job_id]->ntime,
+                job_jobid,
+                job_en2,
+                job_ntime,
                 asic_result->nonce
             );
             #ifdef STATISTIC_SYSTEM_FEATURE 
@@ -203,6 +282,9 @@ void ASIC_ltc_result_task(void *pvParameters)
                 chain_num, asic_result->chip_id, asic_result->core_id, ASIC_get_small_core_count(GLOBAL_STATE));
             #endif            
         }
+
+        free(job_jobid);
+        free(job_en2);
     }
 }
 

@@ -847,14 +847,26 @@ void LT0051_send_work(GlobalState * GLOBAL_STATE, bm_job * next_bm_job, uint32_t
     /*construct the hashjob1*/
     pack_ms_job_hashJob1(cmd_buf, 1, 0, 1, 0, workid, job1_data, 0x00000000);
 
-    if(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] != NULL){
-        free_bm_job(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid]);
-    }
-    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
-
+    /*
+     * Free and replace the slot under valid_jobs_lock, not beside it. The
+     * result task reads active_jobs[] under this lock and copies out what a
+     * share needs; doing the free outside it let a nonce that had just passed
+     * the valid_jobs check be scored and submitted from memory this call had
+     * already handed back to the heap. Freeing the displaced job after the
+     * unlock is safe, because nothing can still reach it: the slot no longer
+     * points at it, and any reader that held the lock has finished copying.
+     */
     pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    bm_job * displaced = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid];
+    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
     GLOBAL_STATE->valid_jobs[chain_num][workid] = 1;
+
     pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    if (displaced != NULL) {
+        free_bm_job(displaced);
+    }
 
     SERIAL_send(chain_num, cmd_buf, MS_HASHJOB1_LEN, true);
 }
@@ -882,14 +894,26 @@ void LT0051_send_work_by_chip(
     prettyHex(job1_data, MS_HASHJOB_DATA_LEN);
     #endif
 
-    if(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] != NULL){
-        free_bm_job(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid]);
-    }
-    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
-
+    /*
+     * Free and replace the slot under valid_jobs_lock, not beside it. The
+     * result task reads active_jobs[] under this lock and copies out what a
+     * share needs; doing the free outside it let a nonce that had just passed
+     * the valid_jobs check be scored and submitted from memory this call had
+     * already handed back to the heap. Freeing the displaced job after the
+     * unlock is safe, because nothing can still reach it: the slot no longer
+     * points at it, and any reader that held the lock has finished copying.
+     */
     pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    bm_job * displaced = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid];
+    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
     GLOBAL_STATE->valid_jobs[chain_num][workid] = 1;
+
     pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    if (displaced != NULL) {
+        free_bm_job(displaced);
+    }
 
     for(uint16_t asic_index = 0; asic_index < asic_count; asic_index++){
         uint16_t asic_addr = asic_index * addr_interval;
@@ -923,14 +947,26 @@ void LT0051_send_work_by_cores_group(
     prettyHex(job1_data, MS_HASHJOB_DATA_LEN);
     #endif
 
-    if(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] != NULL){
-        free_bm_job(GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid]);
-    }
-    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
-
+    /*
+     * Free and replace the slot under valid_jobs_lock, not beside it. The
+     * result task reads active_jobs[] under this lock and copies out what a
+     * share needs; doing the free outside it let a nonce that had just passed
+     * the valid_jobs check be scored and submitted from memory this call had
+     * already handed back to the heap. Freeing the displaced job after the
+     * unlock is safe, because nothing can still reach it: the slot no longer
+     * points at it, and any reader that held the lock has finished copying.
+     */
     pthread_mutex_lock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    bm_job * displaced = GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid];
+    GLOBAL_STATE->ASIC_TASK_MODULE[chain_num].active_jobs[workid] = next_bm_job;
     GLOBAL_STATE->valid_jobs[chain_num][workid] = 1;
+
     pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain_num]);
+
+    if (displaced != NULL) {
+        free_bm_job(displaced);
+    }
 
     for(uint8_t core_index = 0; core_index < core_groups; core_index++){
         /*construct the hashjob1*/
