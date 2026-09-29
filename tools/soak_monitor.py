@@ -78,6 +78,7 @@ def _thor(payloads):
         "asicCount": d.get("detected_chips_count"),
         "asicDetected": d.get("detected_chips_count"),
         "wifiRSSI": d.get("wifi_rssi"),
+        "freeHeap": d.get("free_heap"),
         "hwErrorCount": d.get("nonce_mismatch_errors"),
         "uartCrcErrors": d.get("uart_crc_errors"),
         "queueDropErrors": d.get("queue_drop_errors"),
@@ -106,6 +107,13 @@ FIELDS = [
     "fanrpm0", "fanrpm1", "fanspeed", "sharesAccepted", "sharesRejected",
     "hwErrorCount", "asicCount", "asicDetected", "wifiRSSI", "systemError",
     "power_fault", "overheat_mode",
+    # The reason a soak runs for a day rather than an hour. Everything else
+    # here shows the miner is working now; free heap is the one figure that
+    # shows whether it will still be working tomorrow, because a slow leak
+    # looks exactly like a healthy miner until it does not. Left out of the
+    # first three soaks, which is why none of them can answer the question
+    # they were run to answer.
+    "freeHeap",
     # Stock THOR reports these and ours does not; they stay empty on ours.
     "uartCrcErrors", "queueDropErrors", "staleShareErrors", "ethLinkUp",
     "bootMode",
