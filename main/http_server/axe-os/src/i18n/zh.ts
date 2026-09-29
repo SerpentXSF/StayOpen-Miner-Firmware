@@ -303,6 +303,8 @@ const lang = {
         esp_idf_version: 'ESP-IDF版本',
         bord_version: '硬件版本',
         kernel_log: '内核日志',
+        downloadFailed: '无法下载日志。',
+        downloadUnauthorised: '登录已过期 —— 请重新登录后下载日志。',
         log_list: "日志文件列表",
         log_content: "日志信息",
         ws_connecting: "正在连接...",

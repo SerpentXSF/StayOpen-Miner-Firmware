@@ -305,6 +305,8 @@ const lang = {
         esp_idf_version: 'ESP-IDF Version',
         bord_version: 'Board Version',
         kernel_log: 'Kernel Log',
+        downloadFailed: 'Could not download the log.',
+        downloadUnauthorised: 'Session expired -- sign in again to download the log.',
         log_list: "Log List",
         log_content: "Log Information",
         ws_connecting: "Connecting...",

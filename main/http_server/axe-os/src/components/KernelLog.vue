@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, watch, computed } from "vue";
 import { useI18n } from "vue-i18n";
+import { message } from "ant-design-vue";
 import { DownloadOutlined, PauseCircleOutlined, PlayCircleOutlined } from "@ant-design/icons-vue";
 import { useAppStore } from "@/store";
 import { storeToRefs } from "pinia";
@@ -61,9 +62,43 @@ const formattedLogContent = computed(() => {
     .join('');
 });
 
-// --- 下载日志 (直接通过浏览器下载) ---
-const downloadLogFile = () => {
-    window.location.href = URL.downloadLog;
+/*
+ * Download the log.
+ *
+ * This used to be window.location.href = URL.downloadLog, which is a top-level
+ * navigation: the browser asks for the file itself and sends no Authorization
+ * header, because the token lives in localStorage and is attached by the HTTP
+ * layer rather than stored as a cookie. The endpoint requires authentication,
+ * so it answered "Authentication required" -- to a signed-in user, on the page
+ * that was streaming the very same log over an authenticated socket.
+ *
+ * Fetch it with the header and hand the browser a blob instead. Deliberately
+ * not a token in the query string: it would leak the credential into history,
+ * logs and the address bar.
+ */
+const downloadLogFile = async () => {
+    const token = localStorage.getItem("auth_token");
+    try {
+        const res = await fetch(URL.downloadLog, {
+            headers: token ? { Authorization: "Bearer " + token } : {},
+        });
+        if (!res.ok) {
+            message.error(res.status === 401 ? ll("downloadUnauthorised")
+                                             : ll("downloadFailed"));
+            return;
+        }
+        const blob = await res.blob();
+        const href = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = href;
+        a.download = "kernel-log.txt";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(href);
+    } catch {
+        message.error(ll("downloadFailed"));
+    }
 };
 
 onMounted(async () => {
