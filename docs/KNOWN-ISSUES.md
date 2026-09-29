@@ -847,14 +847,35 @@ left alone. Where Ethernet is switched off the part is simply left in reset,
 which is the safer of the two states and costs nothing, since Ethernet is
 brought up at boot and enabling it takes a restart either way.
 
-**How far this is verified.** The ordering is confirmed on hardware: on a BC04
-the hold logs at 1729 ms, ahead of the self-test decision and the Ethernet
-deferral, with the boot otherwise unchanged. The **release** half is not
-verified on hardware -- a bare display module has no W5500, so
-`example_eth_init()` is never reached there, and the only working BC04
-available is deliberately running on WiFi. Confirming it needs a working board
-with a cable in, which is also the test that would show whether holding reset
-actually protects the part.
+**How far this is verified.** Both halves have now run on a real BC04, the
+dead one, on 2.0.28 with no USB attached:
+
+    I (4682)   example_eth_init: W5500 held in reset on GPIO13 until the core
+                                 rail settles
+    E (253372) serpentx: Peripheral init has not finished in 240 s -- the
+                         hashboard is not coming up. Starting Ethernet anyway
+    I (253422) example_eth_init: W5500 released from reset
+
+The hold lands after the I2C scan and the pin survey, so it does not disturb
+either, and the release runs 50 ms after the deferred start. The 240 s stall
+watchdog is visible in the same log doing what it was widened for: firing
+past the regulator's last retry rather than in the middle of them.
+
+What this does **not** establish is that the part actually leaves reset. The
+driver then read chip ID 0x00 and refused the controller -- and 0x00 is what a
+W5500 gives whether it is dead or still held in reset, so this board, whose
+W5500 failed short across 3.3 V, cannot tell the two apart. The reason to
+think it is the dead part rather than the hold is that the PHY driver runs its
+own reset sequence on the same pin regardless, so a release that did nothing
+would still not leave the chip down. Proving it needs a *working* BC04 with a
+cable in, which is also the test that would show whether holding reset
+protects the part at all.
+
+Worth recording from the same log: with Ethernet refused the miner said so and
+carried on -- "No Ethernet controller found; continuing without it" -- kept
+WiFi, kept the web interface, and reported the power board fault. That is the
+behaviour the I2C timeout and fault-surfacing work was for, on a board with a
+dead hashboard domain and a dead Ethernet controller at once.
 
 ## A masked password was stored as the password (fixed)
 
