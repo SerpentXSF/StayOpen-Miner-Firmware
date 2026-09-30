@@ -2,6 +2,25 @@
 
 Things that are understood, worked around, and worth doing properly.
 
+**"Fixed" here means fixed in this tree, which is ahead of the latest
+release.** The current release is **2.0.28** (tag `v2.0.28`, 26 h BC04 soak).
+If you are running it, these are fixed in your firmware and these are not:
+
+| Fixed in 2.0.28 | Fixed in the tree, not yet released |
+| --- | --- |
+| Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step |
+| The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected |
+| A masked password is never stored as the password | A share can no longer be scored from a freed job |
+| Both interfaces cannot share one static IP | The bridge test no longer calls stuck-low pins shorts |
+| The I2C timeout is bounded; no model rewrite on an empty bus | Two sdkconfig values that were silently out of range |
+| A pool cannot crash or reboot the miner; crash dumps kept | |
+| Both fan tachometers reported; fan protection can fire | |
+| Kernel log download works while signed in | |
+| Releases carry LICENSE and a source pointer | |
+
+The right-hand column is unreleased **and not yet verified on hardware**. It
+lands in 2.0.29 after its own soak. Nothing in it is in a published image.
+
 ## A www update needed a restart the caller had to know about (fixed)
 
 **Status: fixed.** The handler restarts itself once the SHA256 verifies, the
