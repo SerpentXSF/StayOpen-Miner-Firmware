@@ -8,7 +8,7 @@ If you are running it, these are fixed in your firmware and these are not:
 
 | Fixed in 2.0.28 | Fixed in the tree, not yet released |
 | --- | --- |
-| Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step |
+| Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step (verified on hardware 2026-09-30) |
 | The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected |
 | A masked password is never stored as the password | A share can no longer be scored from a freed job |
 | Both interfaces cannot share one static IP | The bridge test no longer calls stuck-low pins shorts |
@@ -866,35 +866,44 @@ left alone. Where Ethernet is switched off the part is simply left in reset,
 which is the safer of the two states and costs nothing, since Ethernet is
 brought up at boot and enabling it takes a restart either way.
 
-**How far this is verified.** Both halves have now run on a real BC04, the
-dead one, on 2.0.28 with no USB attached:
+**Verified on a working BC04, 2026-09-30.** Both halves now have a live board
+behind them, not only the dead one. On `2.0.29-dev` with a healthy hashboard:
 
-    I (4682)   example_eth_init: W5500 held in reset on GPIO13 until the core
-                                 rail settles
-    E (253372) serpentx: Peripheral init has not finished in 240 s -- the
-                         hashboard is not coming up. Starting Ethernet anyway
-    I (253422) example_eth_init: W5500 released from reset
+    I (1712)  W5500 held in reset on GPIO13 until the core rail settles
+    I (10482) device: vcore power on hashboard, set voltage 480
+    I (10482) vcore: Set ASIC voltage = 4.80V
+    I (14532) W5500 released from reset
+    I (14552) esp_eth.netif.netif_glue: 9a:c3:77:a5:b6:30
+    I (14562) NETWORK: Ethernet Started
 
-The hold lands after the I2C scan and the pin survey, so it does not disturb
-either, and the release runs 50 ms after the deferred start. The 240 s stall
-watchdog is visible in the same log doing what it was widened for: firing
-past the regulator's last retry rather than in the middle of them.
+The part is held down across the rail step -- including the 4.80 V power-on
+value, before it walks back to the configured 4.60 -- and answers afterwards.
+There were no chip-ID or driver errors at all, where the dead board produced
+"version mismatched, expected 0x04, got 0x00" and refused the controller. The
+driver only reaches `netif_glue` once the ID verifies, so the part came out of
+reset alive. That is what the dead board could not establish, because 0x00
+reads the same whether a W5500 is faulty or still held in reset.
 
-What this does **not** establish is that the part actually leaves reset. The
-driver then read chip ID 0x00 and refused the controller -- and 0x00 is what a
-W5500 gives whether it is dead or still held in reset, so this board, whose
-W5500 failed short across 3.3 V, cannot tell the two apart. The reason to
-think it is the dead part rather than the hold is that the PHY driver runs its
-own reset sequence on the same pin regardless, so a release that did nothing
-would still not leave the chip down. Proving it needs a *working* BC04 with a
-cable in, which is also the test that would show whether holding reset
-protects the part at all.
+An Ethernet cable was then connected, with the miner running and the rail long
+settled, so the controller met no transient:
 
-Worth recording from the same log: with Ethernet refused the miner said so and
-carried on -- "No Ethernet controller found; continuing without it" -- kept
-WiFi, kept the web interface, and reported the power board fault. That is the
-behaviour the I2C timeout and fault-surfacing work was for, on a board with a
-dead hashboard domain and a dead Ethernet controller at once.
+    I (16918562) NETWORK: Ethernet Link Up
+    I (16918562) NETWORK: Ethernet HW Addr 9a:c3:77:a5:b6:30
+    I (16924332) NETWORK: Ethernet Got IP Address
+
+The interface took a DHCP lease and carried 262 KB at 609 KB/s on demand, so
+it passes real traffic rather than merely linking. Zero error lines, and the
+miner stayed on WiFi throughout -- nothing in this firmware stops the radio
+when Ethernet comes up, which is what makes a cable safe to add to a running
+board without risking losing contact with it.
+
+**Still not done, and it is now optional.** Nothing has yet booted this board
+from cold with the cable already attached, which is the exact shape of the
+original failure. The reason it is optional rather than pending: the hold
+leaves the W5500's PHY and internal regulator off through the rail step, so an
+attached cable makes no difference to what the part experiences -- it is dark
+either way. The protective mechanism is demonstrated; only the historical
+staging is untried.
 
 ## A masked password was stored as the password (fixed)
 
