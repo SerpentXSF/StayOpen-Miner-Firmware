@@ -267,7 +267,35 @@ void showLastResetReason(void)
         case ESP_RST_DEEPSLEEP: m_lastResetReason = "Exiting deep sleep"; break;
         case ESP_RST_BROWNOUT: m_lastResetReason = "Brownout reset"; break;
         case ESP_RST_SDIO: m_lastResetReason = "SDIO reset"; break;
-        default: m_lastResetReason = "Not specified"; break;
+        /*
+         * These five were missing and fell through to "Not specified", which
+         * is the least useful thing this function can say. Three of them name
+         * failures this project has actually spent time chasing:
+         *
+         *   USB         -- a BC01 that needed a USB cable to boot looped for
+         *                  days, and a reset caused by the USB peripheral
+         *                  reported as nothing at all.
+         *   PWR_GLITCH  -- a supply disturbance too brief to trip the brownout
+         *                  detector, on boards whose whole story is a core
+         *                  rail stepping hard.
+         *   CPU_LOCKUP  -- the shape of the unbounded I2C wait that hung a
+         *                  BC04 silently at 7.2 seconds.
+         *
+         * A reset reason costs nothing to report and is often the only
+         * evidence left after a board comes back.
+         */
+        case ESP_RST_USB: m_lastResetReason = "USB peripheral reset"; break;
+        case ESP_RST_JTAG: m_lastResetReason = "JTAG reset"; break;
+        case ESP_RST_EFUSE: m_lastResetReason = "eFuse error reset"; break;
+        case ESP_RST_PWR_GLITCH: m_lastResetReason = "Power glitch reset"; break;
+        case ESP_RST_CPU_LOCKUP: m_lastResetReason = "CPU lockup reset"; break;
+        /* Carry the number, so a reason added by a later IDF is still actionable. */
+        default: {
+            static char unknown[32];
+            snprintf(unknown, sizeof(unknown), "Not specified (%d)", (int) reason);
+            m_lastResetReason = unknown;
+            break;
+        }
     }
     ESP_LOGI(TAG, "Reset reason: %s", m_lastResetReason);
 }
