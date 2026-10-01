@@ -61,6 +61,56 @@ erase leaves the miner on the recovery page until a second upload succeeds.
 So: **retry, and check the version afterwards.**
 
 
+## Where Ethernet stands on a BC04, and whether a cable can hurt the board
+
+The entries below record five separate Ethernet problems, found over months
+and fixed in different releases. This section is the short answer, because
+assembling it from five entries a thousand lines apart is not reasonable to
+ask of an owner.
+
+**The mechanism, once.** The W5500 runs from its own 3.3 V supply. It leaves
+power-on reset by itself and is clocking, and linked if a cable is attached,
+whether or not this firmware has opened the SPI bus. Powering the hashboard
+steps the core rail hard. The first BC04 lost here had its controller stop
+answering about 70 ms after that step, and the part was later found shorted
+across 3.3 V, taking the I2C domain with it. Everything below is about keeping
+the controller out of the way of that one moment.
+
+**Plugging a cable in, or pulling one out, while the miner is running is
+safe on every build.** The rail is in steady state; there is no transient for
+the controller to be caught in. Ethernet is transformer-isolated and RJ45 is
+designed to be hot-plugged. Doing so does not disturb WiFi either: nothing in
+this firmware stops the radio when Ethernet arrives, and both interfaces run
+at once, each with its own address. Verified 2026-09-30 with the miner mining
+on WiFi throughout, the cable added live, and the interface then carrying
+262 KB at 609 KB/s.
+
+**Booting with a cable already attached is where the build matters.**
+
+| Build | What happens at the rail step |
+| --- | --- |
+| Before 2.0.28 | The self test could bring Ethernet fully up first, and the stall watchdog could start it mid-way through the regulator's retries. The controller was live, linked and holding a lease. This is the configuration that is believed to have killed a board. |
+| **2.0.28 (current release)** | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
+| 2.0.29 (unreleased) | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
+
+**So, plainly: on 2.0.28 a cold boot with the cable attached is not fully
+addressed.** Deferring the driver protects this firmware's view of the
+controller, not the controller. Whether a powered-but-unopened W5500 is at
+materially less risk than an initialised one is **not established** -- the
+first board's controller had been initialised and had a lease, so the
+quieter case has never been tested to destruction, and nobody should want it
+to be. The honest summary for an owner on the current release is that the
+known software paths are closed and the residual hardware exposure is real
+but unquantified.
+
+**If you are on 2.0.28 and want the cable in, the conservative order is the
+one that avoids the question**: leave the cable out until the miner is up and
+hashing, then plug it in. That is safe on every build, for the reason in the
+second paragraph. It costs one reconnection after a power cut.
+
+The 2.0.29 hold removes the need for that care, and is verified on hardware
+(see the W5500 entry below). Until it ships, the care is worth taking.
+
 ## BC04 Ethernet had to be started after the hashboard (fixed)
 
 **Status: fixed** in `main/network.c` and `main/main.c` -- Ethernet is started
