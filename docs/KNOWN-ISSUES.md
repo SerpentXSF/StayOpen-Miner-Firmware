@@ -9,7 +9,7 @@ If you are running it, these are fixed in your firmware and these are not:
 | Fixed in 2.0.28 | Fixed in the tree, not yet released |
 | --- | --- |
 | Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step (verified on hardware 2026-09-30) |
-| The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected |
+| The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected (verified on hardware 2026-10-01) |
 | A masked password is never stored as the password | A share can no longer be scored from a freed job |
 | Both interfaces cannot share one static IP | The bridge test no longer calls stuck-low pins shorts |
 | The I2C timeout is bounded; no model rewrite on an empty bus | Two sdkconfig values that were silently out of range |
@@ -954,6 +954,53 @@ leaves the W5500's PHY and internal regulator off through the rail step, so an
 attached cable makes no difference to what the part experiences -- it is dark
 either way. The protective mechanism is demonstrated; only the historical
 staging is untried.
+
+## Dual pool kept feeding a pool that had gone away (fixed, verified)
+
+**Where:** `main/tasks/create_jobs_task.c`.
+
+With dual pool enabled, the scheduler gave pool B its share of the slices
+whenever a notify had ever arrived from it. `poolb_notification` holds the
+last one for as long as the miner runs, so that test stayed true right through
+a disconnect: the miner carried on building work against a stale job, on an
+extranonce that would not survive the reconnect, and any nonce found against
+it reached the submit path, found `transportB` NULL and was dropped.
+
+Nothing reported it. `jobs_served[POOL_B]` kept counting, so a miner looked
+like it was splitting work exactly as configured while `dual_ratio_b` of the
+hashrate produced nothing at all, until pool B happened to come back.
+
+**Fixed** by testing `transportB` under its own lock before choosing pool B.
+`transportB` is published only once the connection is up and cleared when it
+goes down, so it is the honest test; the work goes to pool A instead.
+
+**Verified on a BC04, 2026-10-01**, by the procedure in
+`docs/2029-VERIFICATION-PLAN.md`. Pool B was a real pool reached through a
+local TCP relay, so killing the relay closed a genuine stratum session rather
+than simulating one. Three phases, 30 minutes up, 60 minutes down, 30 minutes
+up:
+
+| Phase | A selected | A served | B selected | B served |
+| --- | --- | --- | --- | --- |
+| up | 2977 | 2977 | 2963 | 2963 |
+| **down** | 5983 | **11962** | 5979 | **0** |
+| up again | 2977 | 2977 | 2964 | 2964 |
+
+While pool B was down, **not one job was built for it**, every job the
+scheduler picked for pool B was served to pool A instead, and the arithmetic
+closes exactly: 11962 = 5983 + 5979. The third phase matters as much as the
+second -- it shows the fix does not strand pool B permanently once it has been
+seen down.
+
+The hashrate went somewhere useful rather than nowhere: 1216 shares in the
+60-minute outage against 344 in the 30 minutes before it, because pool A took
+the whole machine and its difficulty is the lower of the two.
+
+**What this does not cover.** A pool that stops answering without closing the
+socket. `transportB` stays non-NULL until a receive actually fails, so in that
+state the fixed build behaves like the unfixed one. The relay method cannot
+produce it, and it is a real condition -- a blackholed route rather than a
+refused connection.
 
 ## A masked password was stored as the password (fixed)
 
