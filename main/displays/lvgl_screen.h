@@ -92,6 +92,17 @@ typedef struct {
     uint16_t block_num;
 }doge_screen_data;
 
+/*
+ * One jar, one fact at a time. The facts live in the refresh function rather
+ * than here because nothing outside the display ever sets them -- unlike every
+ * other screen on this device, this one has no data coming in.
+ */
+typedef struct {
+    lv_obj_t            *m_screen_obj;
+    ImageElement        m_image_element;
+    UiElement           m_ui_element_array[1];
+}bathwater_screen;
+
 typedef struct {
     lv_obj_t            *m_screen_obj;
     doge_screen_data    m_doge_screen_data;
@@ -194,6 +205,7 @@ typedef struct {
     mining_screen m_mining_screen;
     setting_screen m_setting_screen;
     doge_screen   m_doge_screen;
+    bathwater_screen m_bathwater_screen;
     global_stats_screen  m_global_screen;
     splash_screen    m_splash_screen;
     log_screen m_log_screen;
@@ -264,6 +276,7 @@ typedef enum {
     SCREEN_SPLASH_SCREEN,
     SCREEN_GLOBAL_SCREEN,
     SCREEN_DOGE_SCREEN,
+    SCREEN_BATHWATER_SCREEN,
     SCREEN_MINING_SCREEN,
     SCREEN_SETTING_SCREEN,
     SCREEN_CLOCK_SCREEN,
@@ -296,5 +309,6 @@ void hideErrorScreen(void);
 
 void refresh_coin_data(coin_info new_coin_info);
 void refresh_clock_screen(bool b_load_screen);
+void refresh_bathwater_screen(bool b_load_screen);
 
 #endif

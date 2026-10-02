@@ -10,6 +10,7 @@ extern "C" {
 #else
 #include "./serpentx/export/btcscreen.c"
 #endif
+#include "./serpentx/export/bathwater.c"
 #include "./serpentx/export/globalStats.c"
 #include "./serpentx/export/netstats.c"
 #include "./serpentx/export/clockscreen.c"

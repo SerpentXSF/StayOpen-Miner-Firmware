@@ -129,6 +129,18 @@ static volc_display volc_s3_display = {
             #endif
         }
     },
+    .m_bathwater_screen = {
+        .m_screen_obj = NULL,
+        .m_image_element = {.image_dsc = &bathwater, .align = LV_ALIGN_CENTER, .add_flag = LV_OBJ_FLAG_ADV_HITTEST, .clear_flag = LV_OBJ_FLAG_SCROLLABLE},
+        .m_ui_element_array = {
+            /* The jar occupies x 8..105 of the 320 px panel, so the text sits
+             * in what is left: 196 px wide, centred on the right-hand half.
+             * A fixed width rather than LV_SIZE_CONTENT, because that is what
+             * makes the label wrap -- the facts are not all one line long. */
+            {.name="fact", .text="", .unit_text="", .x_pos=52, .y_pos=0, .text_font=&lv_font_montserrat_20,.p_lv_obj = NULL,
+            .width=196, .height=LV_SIZE_CONTENT, .align=LV_ALIGN_CENTER, .text_align=LV_TEXT_ALIGN_CENTER, .text_color=LV_COLOR_MAKE(0xff, 0xff, 0xff)},
+        }
+    },
     .m_global_screen = {
         .m_screen_obj = NULL,
         .m_global_stats_data = {
@@ -838,6 +850,70 @@ void refresh_doge_text()
     snprintf(p_uielement_array[3].text, 20, "%d", cur_doge_data->block_num);
 }
 
+/*
+ * The jar screen. No data arrives for this one -- it exists to be looked at --
+ * so the facts are held here and advanced by the screen's own refresh, which
+ * runs about every EXAMPLE_LVGL_REFRESH_SCREEN_INTERVAL while it is on top.
+ * Three refreshes per fact puts a change at roughly six seconds, which is long
+ * enough to read a short line and short enough not to look stuck.
+ */
+static const char *k_bathwater_facts[] = {
+    "Only 21 Million",
+    "Decentralized",
+    "Proof of Work",
+    "Halving every\n210,000 blocks",
+    "A block every\n10 minutes",
+    "Genesis block\n3 Jan 2009",
+    "190 Proof Whiskey\nRPM Bath Water",
+};
+
+void refresh_bathwater_screen(bool b_load_screen)
+{
+    bathwater_screen *cur = &(volc_s3_display.m_bathwater_screen);
+    static uint32_t tick = 0;
+    static size_t shown = (size_t)-1;
+    const size_t count = sizeof(k_bathwater_facts)/sizeof(k_bathwater_facts[0]);
+
+    if(NULL == cur)
+        return;
+
+    if(NULL == cur->m_screen_obj){
+        cur->m_screen_obj = lv_obj_create(NULL);
+        lv_obj_add_style(cur->m_screen_obj, &style, LV_PART_MAIN | LV_STATE_DEFAULT);
+        create_image_obj(cur->m_screen_obj, &(cur->m_image_element));
+        create_ui_elements(
+            cur->m_screen_obj, cur->m_ui_element_array,
+            sizeof(cur->m_ui_element_array)/sizeof(cur->m_ui_element_array[0])
+        );
+        tick = 0;
+        shown = (size_t)-1;
+    }
+
+    /* Start on the first fact whenever the screen is entered, so it does not
+     * resume mid-list showing whatever happened to be up last time. */
+    if(b_load_screen){
+        tick = 0;
+    }
+
+    size_t want = (tick / 3) % count;
+    if(want != shown){
+        lv_label_set_text(cur->m_ui_element_array[0].p_lv_obj, k_bathwater_facts[want]);
+        shown = want;
+    }
+    tick++;
+
+    if(b_load_screen){
+#if defined(LEGACY_LOAD_SCREEN)
+        lv_screen_load(cur->m_screen_obj);
+#elif defined(ANIMATION_LOAD_SCREEN)
+        lv_screen_load_anim(
+            cur->m_screen_obj,
+            LV_SCR_LOAD_ANIM_MOVE_BOTTOM, LV_DEF_REFR_PERIOD*128/8, 0, false
+        );
+#endif
+    }
+}
+
 void refresh_doge_screen(bool b_load_screen)
 {
     doge_screen *cur_doge_screen = &(volc_s3_display.m_doge_screen);
@@ -1021,6 +1097,9 @@ void mining_next_screen()
         case SCREEN_GLOBAL_SCREEN:
             cur_screen_index = SCREEN_CLOCK_SCREEN;
             break;
+        case SCREEN_CLOCK_SCREEN:
+            cur_screen_index = SCREEN_BATHWATER_SCREEN;
+            break;
         default:
             cur_screen_index = SCREEN_MINING_SCREEN;
             break;
@@ -1110,6 +1189,9 @@ void refresh_current_screen()
             break;        
         case SCREEN_DOGE_SCREEN:
             refresh_doge_screen(b_screen_changed);
+            break;
+        case SCREEN_BATHWATER_SCREEN:
+            refresh_bathwater_screen(b_screen_changed);
             break;
         case SCREEN_MINING_SCREEN:
             refresh_mining_screen(b_screen_changed);

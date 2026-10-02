@@ -9,6 +9,7 @@
 #define APP_SUPPORT_FOUND_BLOCK 0
 
 LV_IMG_DECLARE(btcscreen);
+LV_IMG_DECLARE(bathwater);
 LV_IMG_DECLARE(globalStats);
 LV_IMG_DECLARE(netstats);
 LV_IMG_DECLARE(clockscreen);
