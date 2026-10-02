@@ -1,0 +1,33 @@
+{
+  "name": "SerpentX / Stay Open (BC01) -- update, keeps settings",
+  "version": "2.0.29",
+  "home_assistant_domain": null,
+  "new_install_prompt_erase": false,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "stay-open-bc01-2.0.29-bootloader.bin",
+          "offset": 0
+        },
+        {
+          "path": "stay-open-bc01-2.0.29-partitions.bin",
+          "offset": 53248
+        },
+        {
+          "path": "stay-open-bc01-2.0.29-otadata.bin",
+          "offset": 90112
+        },
+        {
+          "path": "stay-open-bc01-2.0.29-app.bin",
+          "offset": 131072
+        },
+        {
+          "path": "stay-open-bc01-2.0.29-www.bin",
+          "offset": 10354688
+        }
+      ]
+    }
+  ]
+}
