@@ -10,7 +10,7 @@ If you are running it, these are fixed in your firmware and these are not:
 | --- | --- |
 | Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step (verified on hardware 2026-09-30) |
 | The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected (verified on hardware 2026-10-01) |
-| A masked password is never stored as the password | A share can no longer be scored from a freed job |
+| A masked password is never stored as the password | A share can no longer be scored from a freed job (reasoned, not proven) |
 | Both interfaces cannot share one static IP | The bridge test no longer calls stuck-low pins shorts |
 | The I2C timeout is bounded; no model rewrite on an empty bus | Two sdkconfig values that were silently out of range |
 | A pool cannot crash or reboot the miner; crash dumps kept | |
@@ -954,6 +954,61 @@ leaves the W5500's PHY and internal regulator off through the rail step, so an
 attached cable makes no difference to what the part experiences -- it is dark
 either way. The protective mechanism is demonstrated; only the historical
 staging is untried.
+
+## A share could be scored and submitted from a freed job (fixed, reasoned but unproven)
+
+**Where:** `main/tasks/asic_result_task.c`, `components/asic/bm1370.c`,
+`components/asic/lt0051.c`.
+
+The result task read `active_jobs[job_id]` with no lock held, and the task
+that sends work freed the job already in that slot -- also with no lock held
+-- before storing the new one. `valid_jobs[]` was the only thing either side
+took the lock for, and a pointer guarded by a flag is not guarded.
+
+Not a narrow window either. `job_id` comes back from the ASIC, and
+`BM1370_send_work` walks the slots in steps of 24 modulo 128, so only sixteen
+are ever used and each is recycled every sixteen jobs. A nonce arriving for a
+slot being reused is an ordinary event, and when it landed the miner scored
+the share against freed memory and submitted `jobid` and `extranonce2` read
+out of it.
+
+**Fixed.** The reader takes `valid_jobs_lock`, checks the slot, scores the
+nonce and copies out what the submission needs -- the two strings duplicated,
+everything else scalar -- then releases the lock before touching a socket,
+which must not be held across a pool that has stopped reading. The senders
+swap the slot under the same lock and free the displaced job afterwards, when
+nothing can still reach it.
+
+**This fix is reasoned but unproven, and that is the honest description.**
+Unlike the dual-pool fix beside it, there is no external signal that
+distinguishes a fixed build from an unfixed one:
+
+- Nothing counts the event.
+- `CONFIG_HEAP_POISONING_DISABLED=y`, so a freed `bm_job` usually still reads
+  correctly. The bug was frequently silent while firing.
+- The symptom it does produce -- a nonce scored against a recycled slot fails
+  the difficulty test and is booked as a *hardware* error, not a rejected
+  share -- is indistinguishable from marginal silicon without a per-core
+  breakdown.
+
+What the 26-hour soak of 2.0.29 does establish is narrower, and worth stating
+exactly: 0 hardware errors across 3,112 samples, 0 reboots, and free heap flat
+at **-25 bytes/hour** over the full run. That last figure is the one that
+matters here, because the fix adds roughly eleven allocations a second and a
+leak was its most plausible regression. It did not leak, and it did not
+destabilise anything.
+
+It does not show that the use-after-free is gone, because an unfixed build
+would very likely have produced the same numbers.
+
+**What would actually prove it** is in `docs/2029-VERIFICATION-PLAN.md`
+section 3: a 24-hour run on each side of the fix compared on hardware-error
+rate and per-core distribution, and, better still, a third build with heap
+poisoning enabled. Neither has been run.
+
+**Not covered at all:** the three sites in `components/asic/lt0051.c` and
+`ASIC_ltc_result_task()`. That driver is off by default and matches no board
+here, so those corrections are reviewed and nothing more.
 
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 
