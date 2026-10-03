@@ -236,6 +236,22 @@ def main():
     os.makedirs(DIST, exist_ok=True)
     print("building release artifacts for %s %s from %s" % (board, ver, build))
 
+    # Anything left in dist/ from another version is swept into the release by
+    # ship.py, which collects assets with a plain *.bin glob. That has very
+    # nearly shipped a stale image twice: a 2.0.28 set left behind in the
+    # release worktree, and a -dev build sitting beside the real one. Neither
+    # reached a release, and both times the only thing that caught it was
+    # someone reading the file list. Checked here, before any work is done,
+    # because this is where it is still cheap to fix.
+    stale = sorted(f for f in os.listdir(DIST)
+                   if f.endswith(".bin") and f != "config-dist.bin"
+                   and ("-%s-" % ver) not in f)
+    if stale:
+        sys.exit("dist/ holds %d file(s) from another version: %s -- ship.py "
+                 "collects assets with a plain *.bin glob and would upload "
+                 "them alongside %s. Remove them and run this again."
+                 % (len(stale), ", ".join(stale), ver))
+
     build_config(board)
 
     LAYOUT = layout(build)
