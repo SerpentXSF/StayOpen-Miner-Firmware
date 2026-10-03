@@ -557,9 +557,27 @@ void stratum_task(void * pvParameters)
                 queue_enqueue(&GLOBAL_STATE->stratum_queue, stratum_api_v1_message.mining_notification);
                 //decode_mining_notification(GLOBAL_STATE, stratum_api_v1_message.mining_notification);
             } else if (stratum_api_v1_message.method == MINING_SET_DIFFICULTY) {
-                if (stratum_api_v1_message.new_difficulty != STATUM_MODULE.stratum_difficulty) {
-                    GLOBAL_STATE->stratum_difficulty = stratum_api_v1_message.new_difficulty;
-                    STATUM_MODULE.stratum_difficulty = stratum_api_v1_message.new_difficulty;
+                /*
+                 * Always take the value; only announce it when it moves.
+                 *
+                 * This used to do both inside the comparison, and the two
+                 * variables do not start life agreeing: STATUM_MODULE begins
+                 * at 8192 while GLOBAL_STATE->stratum_difficulty begins at
+                 * zero. A pool whose first mining.set_difficulty is exactly
+                 * 8192 -- an ordinary default -- therefore matched, the
+                 * assignment was skipped, and create_jobs_task went on
+                 * building every job at difficulty zero. Every nonce the chip
+                 * found then cleared that bar and was submitted, and the pool
+                 * rejected nearly all of them.
+                 */
+                bool diff_changed =
+                    (stratum_api_v1_message.new_difficulty != STATUM_MODULE.stratum_difficulty) ||
+                    (GLOBAL_STATE->stratum_difficulty != stratum_api_v1_message.new_difficulty);
+
+                GLOBAL_STATE->stratum_difficulty = stratum_api_v1_message.new_difficulty;
+                STATUM_MODULE.stratum_difficulty = stratum_api_v1_message.new_difficulty;
+
+                if (diff_changed) {
                     ESP_LOGI(TAG, "Set stratum difficulty: %ld", STATUM_MODULE.stratum_difficulty);
                     #ifdef STATISTIC_SYSTEM_FEATURE
                     statistic_pool_set_diff(&(GLOBAL_STATE->STATISTIC_MODULE), pool_id, STATUM_MODULE.stratum_difficulty);

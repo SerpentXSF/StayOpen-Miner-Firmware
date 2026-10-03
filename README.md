@@ -182,8 +182,17 @@ refuses to run if that template has been edited to hold a real address.
 
 ### Updating a miner already running this firmware
 
-Open the miner's web interface, go to **Settings**, and upload one of these.
-Your settings are kept — pool, WiFi, password, voltage, frequency, all of it.
+Your settings are kept either way — pool, WiFi, password, voltage, frequency,
+all of it.
+
+**The easy way.** Open the miner's web interface, go to **Settings**, and press
+**Check for Updates**. It asks this repository what the latest release is, and
+if your miner is behind it offers the right files for your board with a
+**Download** button beside each. Nothing to pick and nothing to match up.
+
+**The manual way.** Download from the
+[latest release](https://github.com/SerpentXSF/StayOpen-Miner-Firmware/releases/latest)
+and upload one of these on the same page:
 
 | File | Updates |
 |---|---|
@@ -197,6 +206,15 @@ Both are needed to move fully between releases; the web-UI file alone is enough
 when a release only changes the interface. The raw `-app.bin` and `-www.bin` are
 for a serial cable and will be rejected here — they are partition images, not
 update containers.
+
+**If the upload fails, try it again.** A large upload to either update endpoint
+sometimes drops mid-transfer. It is intermittent, happens on Ethernet and WiFi
+alike, and nothing is harmed by it: a partial firmware write fails its checksum
+and is rejected, and the miner carries on hashing throughout. From 2.0.30 the
+page retries by itself; before that, upload the same file again and check the
+version afterwards. An interrupted *web interface* upload leaves the miner
+showing its recovery page until a second upload succeeds — the API and mining
+are unaffected while that is true.
 
 **After an over-the-air update, the miner boots from the other application
 partition.** A later serial flash of `-app.bin` to `0x20000` will then appear to
