@@ -263,6 +263,7 @@ const lang = {
         upload_status_firmware: 'Firmware detected. Uploading...',
         upload_status_website: 'Website detected. Uploading...',
         upload_status_fail: 'Upload failed! Please retry.',
+        upload_status_retrying: 'Connection dropped. Trying again...',
         upload_status_fail_retry: 'Upload failed!\nDo not close this page. Please upload the file again.',
         upload_status_md5_mismatch: 'Update Failed!\nSHA256 mismatch, file is corrupt. Please re-upload.',
         upload_status_success_firmware: 'Upload complete! Firmware is being validated and applied... Device will restart.',

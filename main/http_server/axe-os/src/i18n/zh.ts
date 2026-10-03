@@ -262,6 +262,7 @@ const lang = {
         upload_status_firmware: '识别为固件，正在上传...',
         upload_status_website: '识别为WEB，正在上传...',
         upload_status_fail: '上传失败！请重试。',
+        upload_status_retrying: '连接中断，正在重试…',
         upload_status_fail_retry: '升级失败！\n不要关闭当前页面，请再次上传文件升级。',
         upload_status_md5_mismatch: '升级失败！\nSHA256 校验不匹配，文件已损坏。请重新上传。',
         upload_status_success_firmware: '上传完成！固件正在校验和应用... 设备即将重启。',

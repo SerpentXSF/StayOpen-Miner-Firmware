@@ -114,18 +114,54 @@ const processFirmwareFile = async (file: File | Blob) => {
       }
     }
 
-    try {
-      await axios.post(uploadUrl, file, {
-        headers: {
-          'Content-Type': 'application/octet-stream'
-        },
-        responseType: 'text',
-        onUploadProgress: (progressEvent: AxiosProgressEvent) => {
-           if (progressEvent.total) {
-              uploadProgress.value = (progressEvent.loaded / progressEvent.total);
-           }
+    /*
+     * Retry a dropped upload rather than hand it back to the owner.
+     *
+     * A large upload to either OTA endpoint sometimes resets mid-transfer.
+     * It is intermittent, not tied to Ethernet or WiFi, and unexplained --
+     * see KNOWN-ISSUES.md. Nothing is damaged by it: a partial application
+     * write fails its checksum and is rejected, and mining carries on. The
+     * documented remedy has always been "upload it again", which is a strange
+     * thing to make a person do by hand when the page can do it.
+     *
+     * A refusal is not retried. A 400 means the miner looked at the file and
+     * did not want it -- the wrong .bin, or a damaged one -- and sending it
+     * twice more only wastes the owner's time and says nothing new.
+     */
+    const MAX_UPLOAD_ATTEMPTS = 3;
+    let uploadError: any = null;
+
+    for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+      try {
+        uploadError = null;
+        await axios.post(uploadUrl, file, {
+          headers: {
+            'Content-Type': 'application/octet-stream'
+          },
+          responseType: 'text',
+          onUploadProgress: (progressEvent: AxiosProgressEvent) => {
+             if (progressEvent.total) {
+                uploadProgress.value = (progressEvent.loaded / progressEvent.total);
+             }
+          }
+        });
+        break;
+      } catch (e: any) {
+        uploadError = e;
+        const refused = e?.response && e.response.status >= 400 && e.response.status < 500;
+        if (refused || attempt === MAX_UPLOAD_ATTEMPTS) {
+          break;
         }
-      });
+        uploadStatusMessage.value += t('settings.upload_status_retrying') + '\n';
+        uploadProgress.value = 0;
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+
+    try {
+      if (uploadError) {
+        throw uploadError;
+      }
       
       if (isFirmware) {
         uploadStatusMessage.value += t('settings.upload_status_success_firmware') + '\n';
