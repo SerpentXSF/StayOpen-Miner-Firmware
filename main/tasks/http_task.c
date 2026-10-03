@@ -27,6 +27,16 @@ static const char *TAG = "http_task";
 #define DOGE_COIN_PRICE  "https://api.coingecko.com/api/v3/simple/price?ids=dogecoin&vs_currencies=usd"
 #define LITE_COIN_PRICE  "https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=usd"
 
+/* How long to leave the boot alone before the first request. The handshake
+ * needs internal RAM that start-up is still competing for; see http_task(). */
+#define HTTP_FIRST_DELAY_MS     (45 * 1000)
+/* Between refreshes once a pass has produced something. */
+#define HTTP_REFRESH_MS         (15 * 60 * 1000)
+/* Extra wait when the stats endpoint answered, which carries everything. */
+#define HTTP_STATS_EXTRA_MS     (10 * 60 * 1000)
+/* After a pass that got nothing at all. */
+#define HTTP_RETRY_MS           (60 * 1000)
+
 static int responseLength = 0;
 //static char local_response_buffer[MAX_HTTP_OUTPUT_BUFFER + 1];
 static char *local_response_buffer = NULL;
@@ -559,36 +569,70 @@ void http_task(void *pvParameters)
         return;
     }
 
+    /*
+     * Leave start-up alone before reaching for the network.
+     *
+     * This used to fire five seconds after the task started, which lands about
+     * thirty seconds into the boot -- while WiFi, the stratum sessions, LVGL
+     * and the ASIC frequency ramp are all still coming up. TLS needs internal,
+     * DMA-capable RAM for the AES accelerator, and at that moment there is not
+     * reliably enough of it:
+     *
+     *     I esp-x509-crt-bundle: Certificate validated
+     *     E esp-aes: Failed to allocate memory
+     *     E esp-tls-mbedtls: read error :-0x0001
+     *     E http_task: HTTP GET request failed: ESP_ERR_HTTP_FETCH_HEADER
+     *
+     * The certificate verifies and the handshake completes; it is the read
+     * that dies, for want of memory rather than anything to do with the peer.
+     * Free heap looks enormous at that point because almost all of it is
+     * PSRAM, which this allocation cannot use.
+     */
+    vTaskDelay(HTTP_FIRST_DELAY_MS / portTICK_PERIOD_MS);
+
     while (1) 
 	{
-        vTaskDelay(5000 / portTICK_PERIOD_MS);
+        bool got_something;
 
         if(http_rest_btc_stats())
         {
             vTaskDelay(500 / portTICK_PERIOD_MS);
             ltc_sta_ok = 1;
+            got_something = true;
         }
         else
         {
             vTaskDelay(500 / portTICK_PERIOD_MS);
             ltc_sta_ok = 0;
 
-            http_rest_btc();
+            int a = http_rest_btc();
 
             vTaskDelay(500 / portTICK_PERIOD_MS);
 
-            http_rest_price();
+            int b = http_rest_price();
+
+            got_something = (a || b);
         }
 
         refresh_coin_data(new_coin_info);
 
-        vTaskDelay(300000 / portTICK_PERIOD_MS);
-        vTaskDelay(300000 / portTICK_PERIOD_MS);
-        vTaskDelay(300000 / portTICK_PERIOD_MS);
+        /*
+         * A failed pass used to be punished with the full interval, so one
+         * unlucky attempt left the display reading "$--" for the next quarter
+         * of an hour -- which is exactly what a boot-time failure produced,
+         * every boot. Come back in a minute instead and let it settle.
+         */
+        if(!got_something){
+            vTaskDelay(HTTP_RETRY_MS / portTICK_PERIOD_MS);
+            continue;
+        }
+
+        vTaskDelay(HTTP_REFRESH_MS / portTICK_PERIOD_MS);
         if(ltc_sta_ok)
         {
-            vTaskDelay(300000 / portTICK_PERIOD_MS);
-            vTaskDelay(300000 / portTICK_PERIOD_MS);
+            /* The stats endpoint carries everything, so when it answers there
+             * is less reason to come back soon. */
+            vTaskDelay(HTTP_STATS_EXTRA_MS / portTICK_PERIOD_MS);
         }
     }
 }
