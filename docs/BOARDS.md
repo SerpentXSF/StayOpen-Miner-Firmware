@@ -45,6 +45,19 @@ and has since been **confirmed on hardware** — a BC04 running this build
 detects all four ASICs and mines. See [Bringing up a BC04](#bringing-up-a-bc04)
 for what it does and what it does not do.
 
+### The display is deliberately not one of the differences
+
+Every device module that has a panel builds the same display stack, the same
+theme and the same set of screens. `main/CMakeLists.txt` lists them —
+`lotto`, `DC02`, `DC04`, `BC01`, `BC02`, `BC04`, `BC06`, `BC08` — and the panel
+geometry is in the shared configuration rather than in any board fragment.
+
+So a screen added to `lvgl_screen.c` appears on every miner this firmware
+supports, including boards that have no build fragment here yet. That is the
+intent, and it is worth keeping: **do not put a board test around a screen.**
+If a future panel differs in size the right answer is to make the layout
+respond to the panel, not to fence the screen off behind a model name.
+
 ## The trap this exists to close
 
 The two lines above are swapped between the boards, and getting them wrong
