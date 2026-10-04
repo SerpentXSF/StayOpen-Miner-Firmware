@@ -14,6 +14,12 @@ authentication, OTA integrity, shipped credentials. [KNOWN-ISSUES.md](KNOWN-ISSU
 carries the full history of each defect. This file is the safety-relevant
 subset in one place.
 
+[RMA-BC04.md](RMA-BC04.md) is the one you should read alongside the power-on
+ordering below. The board those findings were measured on is dead, the warranty
+claim on it was refused, and what killed it was never established -- four
+explanations still fit. Without that, the ordering material here reads as more
+settled than it is.
+
 ---
 
 ## 1. What protects the hardware
