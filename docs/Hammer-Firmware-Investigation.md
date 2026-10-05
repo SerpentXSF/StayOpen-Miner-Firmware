@@ -291,6 +291,9 @@ Kept separate so it is clear where the evidence stops.
 - **No claim about intent.** Only about what is published, and where.
 - **No claim about the shipping firmware's provenance**, beyond noting the
   acknowledged derivation applies to the pre-production build.
+- **No claim that the vendor's silence means anything.** The questions in
+  section 6a went unanswered. A company is not obliged to answer a customer's
+  email, and an unanswered question is not an admission.
 
 ---
 
@@ -380,6 +383,8 @@ record independent of when anything was pushed to GitHub.
 | 2026-05-06 | Earliest BC01 firmware build in evidence | tag `V2.0.1-20260506` |
 | 2026-06-25 | `BC01-APP` repository created; BC01 binaries published | repo + release metadata |
 | **2026-08-21** | **`baichuan-org` created; all three source repositories published** | org + repo metadata |
+| 2026-08-30 | Questions put to `info@hammerminer.com`; reply window to 13 September | section 6a |
+| 2026-09-13 | Reply window closed with no response | section 6a |
 
 The earliest firmware build date the vendor's own tags record is **25 December
 2025**. Corresponding source appeared **21 August 2026**, roughly eight months
@@ -395,6 +400,79 @@ satisfied depends on when units were conveyed and what accompanied them —
 questions only the vendor and its customers can answer. The dates above
 establish when source became publicly available, and no earlier public source
 release has been found.
+
+## 6a. The vendor was asked, and has not replied
+
+Nothing above was published without first putting it to Hammer Miner.
+
+On **30 August 2026** an email was sent to `info@hammerminer.com`, the contact
+address published on their own site, under the subject *"GPL-3.0 corresponding
+source and Installation Information — request for confirmation and comment"*.
+It said plainly that it was being sent before publishing further, invited
+correction, and offered to publish any reply in full.
+
+It asked five things. Quoting the substance:
+
+**1. Are the source repositories yours?** "On 21 August 2026, three repositories
+appeared at `github.com/baichuan-org` containing full firmware source for BC01,
+BC04 and DC02. Each carries a README stating that the firmware was outsourced to
+Chengdu Baichuan, that it incorporated code derived from ESP-Miner, and that GPL
+obligations were determined to apply. That organisation has no display name,
+website or description, and nothing on hammerminer.com or under
+`github.com/HammerMiner` refers to it. Before I attribute those statements to
+Hammer Miner, I would like you to confirm: is `github.com/baichuan-org` your
+official GPL source release? If it is not, I will correct my published findings
+accordingly."
+
+**2. Reaching the source.** The download page links every firmware download to
+the `HammerMiner` organisation and describes it as containing "firmware
+releases, source code, and documentation", while that organisation contained no
+source — "an owner following your instructions to find the source is directed to
+binaries. A link from your download page would resolve this immediately."
+
+**3. Licence text.** None of the three source repositories contains a LICENSE or
+COPYING file; GPL-3.0 §4 requires the licence accompany the source.
+
+**4. Timing.** The earliest firmware build in the vendor's own tags is dated 25
+December 2025 and the source was published 21 August 2026: "For units sold
+before August 2026, what was provided at the time of sale?"
+
+**5. Installation Information, §6.** A retail BC01 reports Secure Boot enforced,
+both spare key digest slots revoked and JTAG permanently disabled, so "an owner
+can obtain the source, modify it and build it, but cannot run the result on
+hardware they own." The email explicitly conceded that §6 does not oblige the
+vendor to support or maintain modified firmware, and said that either signing
+community builds on request or publishing the Installation Information "would
+resolve this and I would document it as resolved."
+
+It also stated this project's own position without being asked: that this
+firmware is maintained under GPL-3.0 with full corresponding source and
+attribution, that it involves **no circumvention** of the vendor's Secure Boot
+because the ESP32-S3 is a socketed module and a new one is fitted, and that its
+documentation tells owners to check `get_security_info` and stop if Secure Boot
+is enforced. "I am not distributing a way past your locks and have no interest
+in doing so."
+
+A reply window of fourteen days was allowed, to **13 September 2026**.
+
+**No reply has been received.** As of the date on this section, more than a
+month after the email and three weeks after the window closed, Hammer Miner has
+not responded.
+
+**What that does and does not mean.** It means the questions above went
+unanswered and the findings in this document stand uncorrected — not that they
+are confirmed. Silence is not agreement. A company is under no obligation to
+answer an email from a customer, and nothing here should be read as suggesting
+otherwise. Question 1 in particular remains genuinely open: whether
+`baichuan-org` is Hammer's official source release is still unconfirmed by
+anyone at Hammer, and this document continues to treat it as an attribution
+that has not been acknowledged rather than one that has been denied.
+
+The offer stands. If a reply arrives it will be published here in full, and
+anything shown to be inaccurate will be corrected rather than defended.
+
+The sending address is omitted here deliberately; this repository does not
+publish personal contact details, including its maintainer's.
 
 ## 7. Preservation
 
