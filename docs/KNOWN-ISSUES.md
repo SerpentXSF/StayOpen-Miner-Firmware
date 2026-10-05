@@ -1010,6 +1010,34 @@ poisoning enabled. Neither has been run.
 `ASIC_ltc_result_task()`. That driver is off by default and matches no board
 here, so those corrections are reviewed and nothing more.
 
+## A dropped update upload is retried now, and how far that is verified
+
+A large upload to either OTA endpoint sometimes stops mid-transfer. It is
+intermittent, happens on Ethernet and WiFi alike, and is unexplained. Nothing
+is damaged by it -- a partial application write fails its checksum and is
+rejected, and mining carries on -- so the remedy has always been to upload the
+same file again. An owner on 2.0.27 hit it and was told only "Upload failed!
+Do not close this page. Please upload the file again."
+
+From 2.0.30 the page does that itself: three attempts, three seconds apart,
+with the reason shown.
+
+**Verified on hardware:**
+
+- A file the miner refuses returns **HTTP 400 `File error`** on all three wrong
+  combinations -- a raw application image posted to the firmware endpoint, a
+  web-interface container posted to the firmware endpoint, and an application
+  container posted to the web-interface endpoint. The client treats any 4xx as
+  "the miner looked at this and said no" and does **not** retry it, so a wrong
+  file still fails once and fast rather than three times slowly.
+- The retry is in the released bundle and served by the miner:
+  `/assets/Settings-LLYuMbmh.js` carries it.
+
+**Not verified, and it may never be:** that the retry fires and succeeds on a
+real dropped upload. The failure cannot be reproduced on demand -- it did not
+appear once across a day of deliberate attempts -- so the path has been reasoned
+and its refusal branch tested, but never seen to do the thing it exists for.
+
 ## The rejected shares were the pool's, and the miner was already reporting why
 
 Both miners showed a small number of rejected shares -- a burst around connect
