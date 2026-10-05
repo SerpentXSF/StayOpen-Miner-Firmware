@@ -79,6 +79,7 @@ def _thor(payloads):
         "asicDetected": d.get("detected_chips_count"),
         "wifiRSSI": d.get("wifi_rssi"),
         "freeHeap": d.get("free_heap"),
+        "sharesRejectedReasons": None,
         "hwErrorCount": d.get("nonce_mismatch_errors"),
         "uartCrcErrors": d.get("uart_crc_errors"),
         "queueDropErrors": d.get("queue_drop_errors"),
@@ -114,6 +115,12 @@ FIELDS = [
     # first three soaks, which is why none of them can answer the question
     # they were run to answer.
     "freeHeap",
+    # What the pool said when it refused a share, which is the only thing that
+    # distinguishes "this miner is submitting bad work" from "the pool moved
+    # its target". Our own firmware has reported it as sharesRejectedReasons
+    # all along; two days were spent polling logs for it before anyone looked
+    # at the field list.
+    "sharesRejectedReasons",
     # Stock THOR reports these and ours does not; they stay empty on ours.
     "uartCrcErrors", "queueDropErrors", "staleShareErrors", "ethLinkUp",
     "bootMode",
@@ -273,7 +280,20 @@ def main():
         for field in FIELDS:
             value = data.get(field) if isinstance(data, dict) else None
             cur[field] = value
-            row.append("" if value is None else value)
+            if isinstance(value, list):
+                # sharesRejectedReasons arrives as [{message, count}, ...].
+                # Written straight into a cell it would carry commas and tear
+                # the row in half, so flatten it to "3x Stale | 1x Above target".
+                parts = []
+                for item in value:
+                    if isinstance(item, dict):
+                        parts.append("%sx %s" % (item.get("count", "?"),
+                                                 item.get("message", "?")))
+                    else:
+                        parts.append(str(item))
+                row.append(" | ".join(parts))
+            else:
+                row.append("" if value is None else value)
         writer.writerow(row)
         csv_fh.flush()
 

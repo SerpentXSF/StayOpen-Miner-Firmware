@@ -1010,6 +1010,45 @@ poisoning enabled. Neither has been run.
 `ASIC_ltc_result_task()`. That driver is off by default and matches no board
 here, so those corrections are reviewed and nothing more.
 
+## The rejected shares were the pool's, and the miner was already reporting why
+
+Both miners showed a small number of rejected shares -- a burst around connect
+and then nothing -- and two days went into chasing the reason: a relay to cut a
+stratum session deterministically, a forced reconnect, and nearly twelve hours
+of polling the kernel log waiting to catch one.
+
+None of that was necessary. **This firmware has always reported the pool's own
+rejection message** in `/api/system/info` as `sharesRejectedReasons`, an array
+of `{message, count}` built by `SYSTEM_notify_rejected_share()`. The field is
+only present once a share has actually been refused, which is why it does not
+appear in a healthy miner's output and was missed.
+
+Read on 2026-10-04:
+
+| Miner | Shares | Reasons |
+| --- | --- | --- |
+| BC01 | 8673 accepted / 5 rejected | 5 x `Above target` |
+| BC04 | 8665 accepted / 2 rejected | 2 x `Stale` |
+
+Both are ordinary stratum outcomes and neither is a fault in this firmware.
+**Above target** means the share did not meet the pool's current difficulty:
+the job was built while the target was lower and the pool raised it before the
+share arrived. **Stale** means the job had already been replaced. Both cluster
+around difficulty changes and new blocks, which is exactly where the observed
+bursts were -- shortly after a session opens.
+
+At 0.06% and 0.02% this is background noise for solo mining. For comparison,
+the dual-pool B endpoint has never refused a share on either board.
+
+**One thing worth keeping in mind when reading `Above target` in future:** it
+is also what the difficulty-zero defect produced, in bulk, before it was fixed
+-- a miner building every job at difficulty zero submits everything it finds
+and the pool refuses nearly all of it. A handful of them is vardiff. A flood of
+them is that bug. The distinguishing figure is the proportion, not the message.
+
+`tools/soak_monitor.py` now records this column, so a future soak answers the
+question without anyone polling a log for it.
+
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 
 **Where:** `main/tasks/create_jobs_task.c`.
