@@ -1781,6 +1781,27 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddNumberToObject(root, "coreVoltageActual", GLOBAL_STATE->HEALTH_MODULE.out_voltage*1000);
 
     cJSON_AddNumberToObject(root, "freeHeap", esp_get_free_heap_size());
+    /*
+     * Internal RAM, reported separately because freeHeap above is dominated by
+     * PSRAM and says nothing about the pool that actually runs out.
+     *
+     * TLS is the thing that notices. The AES accelerator needs internal,
+     * DMA-capable memory, and when there is not enough the handshake completes
+     * and the *read* fails -- "esp-aes: Failed to allocate memory" followed by
+     * a bare read error, with eight megabytes of free heap on the dashboard.
+     * That cost a day to diagnose with nothing in the API to look at.
+     *
+     * The minimum is the figure that matters: a number that is comfortable now
+     * but dipped near zero during start-up means the next thing that wants
+     * internal RAM at boot will be the one that fails. The largest free block
+     * separates "exhausted" from "fragmented", which need different answers.
+     */
+    cJSON_AddNumberToObject(root, "freeHeapInternal",
+        heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "minFreeHeapInternal",
+        heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(root, "largestBlockInternal",
+        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "coreVoltage", GLOBAL_STATE->HEALTH_MODULE.voltage);
     cJSON_AddNumberToObject(root, "frequency", GLOBAL_STATE->asic_freqency);
 #ifdef CONFIG_BC04_INDIVIDUAL_FREQ
