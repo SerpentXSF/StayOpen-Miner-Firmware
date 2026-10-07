@@ -171,83 +171,80 @@ static void restart_callback(void)
     esp_rom_printf("\nSerpentX restarting...\n\n");
 }
 
+/*
+ * One compact line per task, because the figure that matters is how much of
+ * each stack is never used.
+ *
+ * usStackHighWaterMark is the smallest free space that stack has ever had, in
+ * words. A task created with 8192 bytes that still reports 6 KB free has been
+ * over-allocated by that much, and on this chip that memory is internal RAM --
+ * the scarce pool, not the eight megabytes of PSRAM the dashboard reports.
+ * Internal RAM has been measured down to 1.1 KB free since boot here, so every
+ * over-allocated stack is worth knowing about.
+ */
 void analyze_task_memory(void) {
-    ESP_LOGI("TASKS", "=== 任务内存分析 ===");
-    
-    // 获取任务数量
-    UBaseType_t task_count = uxTaskGetNumberOfTasks();
-    ESP_LOGI("TASKS", "总任务数: %d", task_count);
-    
-    // 分配数组存储任务状态
-    TaskStatus_t *task_status = (TaskStatus_t *)pvPortMalloc(task_count * sizeof(TaskStatus_t));
-    
-    if (task_status != NULL) {
-        // 获取任务状态数组
-        task_count = uxTaskGetSystemState(task_status, task_count, NULL);
-        
-        // 打印每个任务的信息
-        for (int i = 0; i < task_count; i++) {
-            ESP_LOGI("TASKS", "任务: %s", task_status[i].pcTaskName);
-            ESP_LOGI("TASKS", "  优先级: %d", task_status[i].uxCurrentPriority);
-            ESP_LOGI("TASKS", "  栈高水位线: %d", task_status[i].usStackHighWaterMark);
-            ESP_LOGI("TASKS", "  任务编号: %d", task_status[i].xTaskNumber);
-        }
-        
-        vPortFree(task_status);
+    UBaseType_t count = uxTaskGetNumberOfTasks();
+    TaskStatus_t *tasks = (TaskStatus_t *) pvPortMalloc(count * sizeof(TaskStatus_t));
+    if (tasks == NULL) {
+        ESP_LOGW("TASKS", "cannot allocate %u task records", (unsigned) count);
+        return;
     }
+
+    count = uxTaskGetSystemState(tasks, count, NULL);
+
+    uint32_t unused_total = 0;
+    ESP_LOGI("TASKS", "--- %u tasks: unused stack, bytes ---", (unsigned) count);
+    for (UBaseType_t i = 0; i < count; i++) {
+        uint32_t unused = (uint32_t) tasks[i].usStackHighWaterMark * sizeof(StackType_t);
+        unused_total += unused;
+        ESP_LOGI("TASKS", "  %-20s prio %2u  unused %6" PRIu32,
+                 tasks[i].pcTaskName, (unsigned) tasks[i].uxCurrentPriority, unused);
+    }
+    ESP_LOGI("TASKS", "  total unused stack across all tasks: %" PRIu32 " bytes (%" PRIu32 " KB)",
+             unused_total, unused_total / 1024);
+
+    vPortFree(tasks);
 }
 
-void improved_memory_monitor(void) 
+void improved_memory_monitor(void)
 {
     size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    size_t spiram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    
-    ESP_LOGI("MEMORY", "=== 改进后内存状态 ===");
-    ESP_LOGI("MEMORY", "内部RAM空闲: %d bytes", internal_free);
-    ESP_LOGI("MEMORY", "SPIRAM空闲: %d bytes", spiram_free);
-    ESP_LOGI("MEMORY", "总堆空闲: %d bytes", esp_get_free_heap_size());
-    ESP_LOGI("MEMORY", "最小堆: %d bytes", esp_get_minimum_free_heap_size());
-    
-    if (internal_free < 20000) { // 如果内部RAM少于20KB
-        ESP_LOGW("MEMORY", "警告: 内部RAM仍然紧张!");
+    size_t internal_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    size_t internal_blk  = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    size_t spiram_free   = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+
+    ESP_LOGI("MEMORY", "internal free %u, min since boot %u, largest block %u",
+             (unsigned) internal_free, (unsigned) internal_min, (unsigned) internal_blk);
+    ESP_LOGI("MEMORY", "PSRAM free %u, total heap %u",
+             (unsigned) spiram_free, (unsigned) esp_get_free_heap_size());
+
+    /*
+     * A TLS session wants tens of kilobytes of internal RAM and will not take
+     * PSRAM. Below about 40 KB the next handshake is the one that fails, which
+     * is how a broken price fetch hid behind eight megabytes of free heap.
+     */
+    if (internal_min < 40000) {
+        ESP_LOGW("MEMORY", "internal RAM reached %u bytes since boot -- a TLS "
+                           "handshake needs more than that", (unsigned) internal_min);
     }
 }
 
-// 内存监控任务
+/*
+ * Reports where internal RAM is going, every two minutes.
+ *
+ * Started only where it earns its keep -- see the call site. It exists because
+ * nothing else on this device measures the internal pool, and a figure that
+ * only appears when a TLS handshake fails is a figure that arrives too late.
+ */
 void memory_monitor_task(void *pvParameters) {
-    ESP_LOGI("MONITOR", "内存监控任务启动");
-    
+    /* Let start-up finish before the first reading, or every line describes
+     * the boot rather than how the miner actually runs. */
+    vTaskDelay(pdMS_TO_TICKS(90 * 1000));
+
     while (1) {
-        ESP_LOGI("MONITOR", "=== 实时内存状态 ===");
-        
-        // 基础内存信息
-        size_t free_heap = xPortGetFreeHeapSize();
-        size_t min_free_heap = xPortGetMinimumEverFreeHeapSize();
-        
-        ESP_LOGI("MONITOR", "当前堆: %d bytes, 最小堆: %d bytes", 
-                 free_heap, min_free_heap);
-        
-        // 堆碎片分析
-        multi_heap_info_t info;
-        heap_caps_get_info(&info, MALLOC_CAP_8BIT);
-        
-        ESP_LOGI("MONITOR", "最大空闲块: %d bytes", info.largest_free_block);
-        ESP_LOGI("MONITOR", "空闲块数量: %d", info.free_blocks);
-        
-        // 内存使用率计算
-        float fragmentation = 0.0;
-        if (info.largest_free_block > 0) {
-            fragmentation = (1.0 - ((float)info.largest_free_block / info.total_free_bytes)) * 100.0;
-        }
-        ESP_LOGI("MONITOR", "内存碎片率: %.2f%%", fragmentation);
-        
-        vTaskDelay(pdMS_TO_TICKS(10000)); // 每10秒检查一次
-
-        analyze_task_memory();
-        vTaskDelay(pdMS_TO_TICKS(10000)); // 每10秒检查一次
         improved_memory_monitor();
-
-        vTaskDelay(pdMS_TO_TICKS(10000)); // 每10秒检查一次
+        analyze_task_memory();
+        vTaskDelay(pdMS_TO_TICKS(120 * 1000));
     }
 }
 
@@ -674,7 +671,23 @@ void app_main(void)
     /*create http task*/
     xTaskCreate(http_task, "http task", 6144, (void*)&GLOBAL_STATE, 3, NULL);
     /*create memory monitor task*/
-    //xTaskCreate(memory_monitor_task, "memory monitor task", 4096, (void*)&GLOBAL_STATE, 1, NULL);
+    /*
+     * Deliberately not started.
+     *
+     * Starting it cost the miner its hashrate. This task is 3 KB and at 25 s
+     * into the boot there was not 3 KB of internal RAM to spare, so the next
+     * xTaskCreate -- asic_result_0, the task that reads nonces back from the
+     * chips -- failed with -1. The miner then detected four ASICs, built jobs
+     * and sent them, and read nothing back: hashrate zero, shares zero, no
+     * error beyond one warning line.
+     *
+     * The figures it would have printed are in /api/system/info instead, as
+     * freeHeapInternal, minFreeHeapInternal and largestBlockInternal, which
+     * cost nothing because they are read on request rather than by a task of
+     * their own. Do not start this on a board until internal RAM has real
+     * headroom.
+     */
+    //xTaskCreate(memory_monitor_task, "memory-monitor", 3072, (void*)&GLOBAL_STATE, 1, NULL);
     /*create system task*/
     xTaskCreate(system_task, "system task", 4096, (void*)&GLOBAL_STATE, 4, NULL);
 
