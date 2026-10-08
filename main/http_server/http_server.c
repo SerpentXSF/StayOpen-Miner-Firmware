@@ -3732,7 +3732,9 @@ esp_err_t start_rest_server(void * pvParameters)
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, http_404_error_handler);
 
     // Start websocket log handler thread
-    xTaskCreate(&websocket_log_handler, "websocket_log", 4096, NULL, 2, NULL);
+    /* Measured 804 bytes used of 4096 at the 121 s census. 2560 is three
+     * times that; the rest was internal RAM this board has none of. */
+    xTaskCreate(&websocket_log_handler, "websocket_log", 2560, NULL, 2, NULL);
 
     // Start the DNS server that will redirect all queries to the softAP IP
     dns_server_config_t dns_config = DNS_SERVER_CONFIG_SINGLE("*" /* all A queries */, "WIFI_AP_DEF" /* softAP netif ID */);

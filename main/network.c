@@ -707,7 +707,8 @@ void network_eth_start_health_watch(void)
         return;
     }
     started = true;
-    xTaskCreate(eth_health_task, "eth-health", 3072, NULL, 3, NULL);
+    /* Measured 740 bytes used of 3072 at the 121 s census. */
+    xTaskCreate(eth_health_task, "eth-health", 2048, NULL, 3, NULL);
     ESP_LOGI(TAG, "watching the Ethernet controller for mid-run failures");
 }
 
