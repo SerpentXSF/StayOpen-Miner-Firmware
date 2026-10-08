@@ -393,6 +393,81 @@ static void check_board_matches_image(GlobalState * state)
     }
 }
 
+/*
+ * Did a task the miner cannot mine without fail to start?
+ *
+ * File scope rather than a local, because the answer has to outlive the loop
+ * that sets it and reach the SYSTEM_HARDWARE_OK call at the end of app_main().
+ */
+static bool s_critical_task_failed = false;
+
+/*
+ * Task creation that cannot fail quietly.
+ *
+ * Every xTaskCreate() in app_main() either ignored its return value outright
+ * or logged one ESP_LOGW and carried on. That is how a BC04 on this bench
+ * spent twenty minutes reporting four ASICs, 12 V in, a healthy network and
+ * 0 GH/s: asic_result_0 had failed to create for want of internal RAM -- the
+ * entire record of it was the line "Create asic_result_0 failed -1." -- and
+ * nothing else in the firmware knew. Jobs were built, work was sent to the
+ * chips, and the nonces came back to a task that did not exist.
+ *
+ * FreeRTOS fails this call for one reason: it could not allocate the stack.
+ * Stacks come out of internal RAM, which on a BC04 has been measured down to
+ * 203 bytes free at its low-water mark since boot, so this is a live failure
+ * mode rather than a theoretical one -- and the memory work that follows will
+ * be moving exactly these allocations around.
+ *
+ * `critical` marks a task the miner cannot mine without. Those raise a fault
+ * and stop the miner reporting itself healthy. Where that fault shows up,
+ * stated exactly, because two of the obvious places are not among them:
+ *
+ *   - `systemError` in /api/system/info, and /api/get_err. Durable: the
+ *     string is only cleared for NETWORK_ERROR and WIFI_CONNETION_ERROR, so
+ *     a SPECIAL_ERROR outlives SYSTEM_NORMAL_MINING.
+ *   - the dashboard's alert column, which reads that same field.
+ *   - the status LED, but only until the pool hands over a job:
+ *     SYSTEM_notify_get_work() raises SYSTEM_NORMAL_MINING, which puts the
+ *     LED back to its mining pattern. The string survives; the light does
+ *     not.
+ *   - NOT the T-Display. Nothing under main/displays reads system_error and
+ *     showErrorScreen() is commented out in system.c.
+ *
+ * The rest are logged at ESP_LOGE and left alone -- losing the price fetcher
+ * is not a reason to tell an owner their hardware is broken.
+ *
+ * Reporting only. Nothing here retries, and nothing powers the hashboard
+ * down -- at this point in boot the heap is at its most contended, so a
+ * retry would be the same roll of the dice, and a chain that is hashing into
+ * a missing reader is still a chain whose owner may want to look at it
+ * before it stops.
+ */
+static bool create_task_checked(GlobalState *state, TaskFunction_t fn,
+                                const char *name, uint32_t stack, void *arg,
+                                UBaseType_t prio, bool critical)
+{
+    if (pdPASS == xTaskCreate(fn, name, stack, arg, prio, NULL)) {
+        return true;
+    }
+
+    ESP_LOGE(TAG, "task '%s' did not start: no internal RAM for its %" PRIu32
+                  " byte stack. Internal heap: %u free, largest block %u.",
+             name, stack,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+
+    if (critical) {
+        char info[48];
+        snprintf(info, sizeof(info), "%s did not start", name);
+        ESP_LOGE(TAG, "'%s' is required in order to mine. Raising a fault: "
+                      "this miner will not hash and must not report itself "
+                      "healthy.", name);
+        SYSTEM_notify_error_info(state, SPECIAL_ERROR, info);
+        s_critical_task_failed = true;
+    }
+    return false;
+}
+
 void app_main(void)
 {
     init_logging_system();
@@ -510,7 +585,8 @@ void app_main(void)
     #endif
 
 	/*create the health task*/
-    xTaskCreate(health_maintenance_task, "health_maintener", 4096, (void*)&GLOBAL_STATE, 12, NULL);
+    create_task_checked(&GLOBAL_STATE, health_maintenance_task, "health_maintener",
+                        4096, (void*)&GLOBAL_STATE, 12, false);
 
     /*
      * Secure the supply before switching the radio on.
@@ -552,7 +628,8 @@ void app_main(void)
             ESP_LOGI(TAG, "Could not take xSyncTimeSemaphore.");
             ESP_ERROR_CHECK(ESP_FAIL);
         }else{
-            xTaskCreate(rtc_sync_task, "rtc-sync", 4096, NULL, 5, NULL);
+            create_task_checked(&GLOBAL_STATE, rtc_sync_task, "rtc-sync",
+                                4096, NULL, 5, false);
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
@@ -584,7 +661,8 @@ void app_main(void)
      * guarantee: Ethernet starts either after the hashboard is up, or after
      * we know it is never coming up. Never in between.
      */
-    xTaskCreate(eth_stall_watchdog, "eth-stall", 3072, &GLOBAL_STATE, 3, NULL);
+    create_task_checked(&GLOBAL_STATE, eth_stall_watchdog, "eth-stall",
+                        3072, &GLOBAL_STATE, 3, false);
 
     /*
      * Not ESP_ERROR_CHECK. The only failure this reports is a voltage
@@ -626,7 +704,8 @@ void app_main(void)
     if(ASIC_detect(&GLOBAL_STATE))
     {
         power_off_hashboard(&GLOBAL_STATE);
-        xTaskCreate(system_task, "system task", 4096, (void*)&GLOBAL_STATE, 4, NULL);
+        create_task_checked(&GLOBAL_STATE, system_task, "system task",
+                            4096, (void*)&GLOBAL_STATE, 4, true);
         show_mining_screen();
         return;
     }
@@ -655,21 +734,28 @@ void app_main(void)
     init_jobs(&GLOBAL_STATE);
 
     /*create the stratum task.*/
-    xTaskCreate(stratum_task, "stratum_manager", 8192, (void *)&GLOBAL_STATE, 5, NULL);
+    create_task_checked(&GLOBAL_STATE, stratum_task, "stratum_manager",
+                        8192, (void *)&GLOBAL_STATE, 5, true);
     /* pool B idles cheaply when dual mining is off, so it is always started */
-    xTaskCreate(stratum_poolb_task, "stratum_poolb", 8192, (void *)&GLOBAL_STATE, 5, NULL);
+    /* Pool B is optional: create_jobs_task checks whether its transport is
+     * up before selecting it, so pool A carries on alone. */
+    create_task_checked(&GLOBAL_STATE, stratum_poolb_task, "stratum_poolb",
+                        8192, (void *)&GLOBAL_STATE, 5, false);
     /*create the uart task.*/
-    xTaskCreate(create_jobs_task, "stratum_worker", 6144, (void *)&GLOBAL_STATE, 10, NULL);
+    create_task_checked(&GLOBAL_STATE, create_jobs_task, "stratum_worker",
+                        6144, (void *)&GLOBAL_STATE, 10, true);
     /*create the socket api task.*/
     #ifdef SOCKET_API_FEAUTRE
-    xTaskCreate(socket_api_task, "socket-api", 4096, (void*)&GLOBAL_STATE, 16, NULL);
+    create_task_checked(&GLOBAL_STATE, socket_api_task, "socket-api",
+                        4096, (void*)&GLOBAL_STATE, 16, false);
     #endif
     /*create influx task*/
     //xTaskCreate(influx_task, "influx", 8192, (void*)&GLOBAL_STATE, 23, NULL);
     /*create ping pool task*/
     //xTaskCreate(ping_task, "ping task", 4096, (void*)&GLOBAL_STATE, 20, NULL);
     /*create http task*/
-    xTaskCreate(http_task, "http task", 6144, (void*)&GLOBAL_STATE, 3, NULL);
+    create_task_checked(&GLOBAL_STATE, http_task, "http task",
+                        6144, (void*)&GLOBAL_STATE, 3, false);
     /*create memory monitor task*/
     /*
      * Deliberately not started.
@@ -689,7 +775,8 @@ void app_main(void)
      */
     //xTaskCreate(memory_monitor_task, "memory-monitor", 3072, (void*)&GLOBAL_STATE, 1, NULL);
     /*create system task*/
-    xTaskCreate(system_task, "system task", 4096, (void*)&GLOBAL_STATE, 4, NULL);
+    create_task_checked(&GLOBAL_STATE, system_task, "system task",
+                        4096, (void*)&GLOBAL_STATE, 4, true);
 
     /*
      * static, because its address is handed to tasks that outlive this
@@ -704,36 +791,47 @@ void app_main(void)
             ESP_LOGI(TAG, "create tasks for chain %"PRIu32"", i);
             /*create the asic work.*/
             char tmp_name[30];
-            BaseType_t xReturn;
 
             {
+                /* Sends work to the chips. */
                 sprintf(tmp_name, "asic_task_%"PRIu32"", i);
-                xReturn = xTaskCreate(ASIC_task, tmp_name, 5120, (void *)&(chain_param[i]), 10, NULL);
-                if(pdPASS != xReturn){
-                    ESP_LOGW(TAG, "Create %s failed %d.", tmp_name, xReturn);
-                }
+                create_task_checked(&GLOBAL_STATE, ASIC_task, tmp_name, 5120,
+                                    (void *)&(chain_param[i]), 10, true);
             }
-            
+
             {
+                /* Reads nonces back. Without it the chain hashes and every
+                 * share it finds is dropped on the floor. */
                 sprintf(tmp_name, "asic_result_%"PRIu32"", i);
-                xReturn = xTaskCreate(ASIC_result_task, tmp_name, 6144, (void *)&(chain_param[i]), 15, NULL);
-                if(pdPASS != xReturn){
-                    ESP_LOGW(TAG, "Create %s failed %d.", tmp_name, xReturn);
-                }
+                create_task_checked(&GLOBAL_STATE, ASIC_result_task, tmp_name,
+                                    6144, (void *)&(chain_param[i]), 15, true);
             }
             #if 1
             {
+                /* The stall watchdog. Its absence costs the detection, not
+                 * the mining, so it is reported rather than raised. */
                 sprintf(tmp_name, "hashrate_task_%"PRIu32"", i);
-                xReturn = xTaskCreate(hashrate_monitor_task, tmp_name, 4096, (void *)&(chain_param[i]), 5, NULL);
-                if(pdPASS != xReturn){
-                    ESP_LOGW(TAG, "Create %s failed %d.", tmp_name, xReturn);
-                }
+                create_task_checked(&GLOBAL_STATE, hashrate_monitor_task,
+                                    tmp_name, 4096,
+                                    (void *)&(chain_param[i]), 5, false);
             }
             #endif
         }
     }
 
-    SYSTEM_notify_status_change(&GLOBAL_STATE, SYSTEM_HARDWARE_OK);
+    /*
+     * SYSTEM_HARDWARE_OK used to be unconditional, which was the other half
+     * of the silent failure: SYSTEM_notify_error_info() sets the status to
+     * SYSTEM_ERROR_STATUS, and this line ran afterwards and cleared it. The
+     * fault was raised and then immediately overwritten with "healthy".
+     */
+    if (!s_critical_task_failed) {
+        SYSTEM_notify_status_change(&GLOBAL_STATE, SYSTEM_HARDWARE_OK);
+    } else {
+        ESP_LOGE(TAG, "not reporting SYSTEM_HARDWARE_OK: a task this miner "
+                      "needs in order to mine did not start. The fault "
+                      "stands.");
+    }
     show_mining_screen();
     
     ESP_LOGI(TAG, "heap free heap size: %" PRIu32 " bytes", heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
