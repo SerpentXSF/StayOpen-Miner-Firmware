@@ -3,6 +3,12 @@
 
 #include "work_queue.h"
 #include "pool_scheduler.h"
+
+/* global_state.h cannot include pool_scheduler.h -- components/asic and
+ * components/bc_hal include it and do not see dual_pool -- so SystemModule
+ * declares its pool array with a literal. This is what stops the two from
+ * drifting apart. */
+_Static_assert(POOL_MAX == 4, "SystemModule::pool[] must match POOL_MAX");
 #include "global_state.h"
 #include "esp_log.h"
 #include "esp_timer.h"

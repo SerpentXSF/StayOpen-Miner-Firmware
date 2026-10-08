@@ -60,7 +60,7 @@ static void poolb_close(GlobalState *GLOBAL_STATE)
     }
     pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
 
-    GLOBAL_STATE->SYSTEM_MODULE.poolB_connected = false;
+    GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].connected = false;
     /* queue_clear frees each mining_notify it drops */
     queue_clear(&GLOBAL_STATE->stratum_queueB);
 }
@@ -82,7 +82,7 @@ void stratum_poolb_task(void *pvParameters)
      */
     pool_failover_t fo;
     pool_failover_init(&fo, POOLB_MAX_RETRIES,
-                       module->poolB_fb_url != NULL && module->poolB_fb_url[0] != 0);
+                       module->pool[POOL_B].fb_url != NULL && module->pool[POOL_B].fb_url[0] != 0);
 
     ESP_LOGI(TAG, "pool B task started");
 
@@ -103,25 +103,25 @@ void stratum_poolb_task(void *pvParameters)
         }
 
         bool use_fb = (endpoint == 1);
-        module->poolB_is_using_failover = use_fb;
+        module->pool[POOL_B].is_using_failover = use_fb;
 
-        char *url     = use_fb ? module->poolB_fb_url  : module->poolB_url;
-        uint16_t port = use_fb ? module->poolB_fb_port : module->poolB_port;
-        char *user    = use_fb ? module->poolB_fb_user : module->poolB_user;
-        char *pass    = use_fb ? module->poolB_fb_pass : module->poolB_pass;
+        char *url     = use_fb ? module->pool[POOL_B].fb_url  : module->pool[POOL_B].url;
+        uint16_t port = use_fb ? module->pool[POOL_B].fb_port : module->pool[POOL_B].port;
+        char *user    = use_fb ? module->pool[POOL_B].fb_user : module->pool[POOL_B].user;
+        char *pass    = use_fb ? module->pool[POOL_B].fb_pass : module->pool[POOL_B].pass;
         if (url == NULL || url[0] == '\0') {
             vTaskDelay(pdMS_TO_TICKS(POOLB_IDLE_DELAY_MS));
             continue;
         }
 
-        tls_mode tls = (tls_mode)(use_fb ? module->poolB_fb_tls : module->poolB_tls);
+        tls_mode tls = (tls_mode)(use_fb ? module->pool[POOL_B].fb_tls : module->pool[POOL_B].tls);
 
         /*
          * Build and connect on a local handle. Publishing a half-open handle to
          * transportB would let the submit path write to a socket that never
          * came up.
          */
-        esp_transport_handle_t transport = STRATUM_V1_transport_init(tls, module->poolB_cert);
+        esp_transport_handle_t transport = STRATUM_V1_transport_init(tls, module->pool[POOL_B].cert);
         if (transport == NULL) {
             ESP_LOGE(TAG, "pool B transport init failed");
             pool_failover_step(&fo, PF_EV_DISCONNECTED);
@@ -145,7 +145,7 @@ void stratum_poolb_task(void *pvParameters)
         pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
         GLOBAL_STATE->transportB = transport;
         pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
-        module->poolB_connected = true;
+        module->pool[POOL_B].connected = true;
         pool_failover_step(&fo, PF_EV_CONNECTED);
         ESP_LOGI(TAG, "pool B connected to %s:%u (%s)", url, port,
                  use_fb ? "failover" : "primary");
@@ -172,7 +172,7 @@ void stratum_poolb_task(void *pvParameters)
          * The handler for MINING_SET_EXTRANONCE below has always been here,
          * so pool B could receive a rotation -- it simply never asked to. The
          * setting existed too: poolbxnsub is read out of NVS at startup into
-         * poolB_extranonce_subscribe, and then nothing in the firmware ever
+         * pool[POOL_B].extranonce_subscribe, and then nothing in the firmware ever
          * looked at that field. Pool A and the fallback both do this properly.
          *
          * Without it, pool B keeps whatever extranonce it was given when it
@@ -184,7 +184,7 @@ void stratum_poolb_task(void *pvParameters)
          * pool A does: stratum is ordered over the connection, so the pool
          * still processes the authorize first.
          */
-        if (GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe) {
+        if (GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe) {
             STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transportB,
                                             GLOBAL_STATE->send_uidB++);
         }
@@ -277,9 +277,9 @@ void stratum_poolb_task(void *pvParameters)
             } else if (poolb_message.method == STRATUM_RESULT) {
                 /* share acknowledgements; setup replies arrive as _SETUP */
                 if (poolb_message.response_success) {
-                    module->poolB_shares_accepted++;
+                    module->pool[POOL_B].shares_accepted++;
                 } else {
-                    module->poolB_shares_rejected++;
+                    module->pool[POOL_B].shares_rejected++;
                     ESP_LOGW(TAG, "pool B share rejected: %s",
                              poolb_message.error_str ? poolb_message.error_str : "unknown");
                 }

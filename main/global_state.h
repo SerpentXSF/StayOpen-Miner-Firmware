@@ -82,6 +82,39 @@ typedef enum{
 	SYSTEM_ERROR_MAX_NUM
 }SYSTEM_ERROR;
 
+/*
+ * One pool other than pool A. See SystemModule::pool below for why pool A is
+ * not one of these yet.
+ */
+typedef struct {
+    char *   url;
+    uint16_t port;
+    char *   user;
+    char *   pass;
+    uint16_t tls;
+    char *   cert;
+    bool     extranonce_subscribe;
+
+    /* its own failover, stepped independently of every other pool's */
+    char *   fb_url;
+    uint16_t fb_port;
+    char *   fb_user;
+    char *   fb_pass;
+    uint16_t fb_tls;
+    bool     is_using_failover;
+
+    /* runtime */
+    bool     connected;
+    uint64_t shares_accepted;
+    uint64_t shares_rejected;
+
+    /*
+     * Share of slices wanted by this pool, relative to the others. The
+     * scheduler normalises, so these need not add up to anything.
+     */
+    uint8_t  weight;
+} PoolConfig;
+
 typedef struct
 {
     double duration_start;
@@ -146,27 +179,29 @@ typedef struct
     char * fallback_pool_cert;
     bool is_using_fallback;
 
-    /* ---- dual mining, pool B ----
-     * A second, permanently connected pool. Not a failover for pool A: both
-     * stay up and the ASIC's single hashrate is time-sliced between them. */
-    char * poolB_url;
-    uint16_t poolB_port;
-    char * poolB_user;
-    char * poolB_pass;
-    uint16_t poolB_tls;
-    char * poolB_cert;
-    bool poolB_extranonce_subscribe;
-    uint64_t poolB_shares_accepted;
-    uint64_t poolB_shares_rejected;
-    bool poolB_connected;
-
-    /* pool B's own failover, independent of pool A's */
-    char * poolB_fb_url;
-    uint16_t poolB_fb_port;
-    char * poolB_fb_user;
-    char * poolB_fb_pass;
-    uint16_t poolB_fb_tls;
-    bool poolB_is_using_failover;
+    /* ---- dual mining, and beyond ----
+     * Pools that are not pool A: permanently connected, not failovers for it.
+     * The ASIC's single hashrate is time-sliced between whichever of them are
+     * configured -- see components/dual_pool/pool_scheduler.c.
+     *
+     * Indexed by pool_id_t, so pool[POOL_B], pool[POOL_C] and pool[POOL_D]
+     * line up with the scheduler's ids and with job_pool[]: the slot a job
+     * records when it is built is the slot that scores it when it comes back.
+     *
+     * pool[POOL_A] is reserved and unused. Pool A's configuration still lives
+     * in the pool_url / pool_port / pool_user fields above, because it is
+     * served by its own task rather than by the secondary one, and moving it
+     * would touch the display, the API, NVS and the primary stratum path
+     * without changing any behaviour. Keeping its index here means nothing
+     * needs renumbering when it does move.
+     *
+     * The literal 4 is POOL_MAX from pool_scheduler.h, which this header
+     * cannot include: components/asic and components/bc_hal include
+     * global_state.h and do not see dual_pool's include directory. A
+     * _Static_assert in create_jobs_task.c, which includes both, keeps the
+     * two from drifting apart.
+     */
+    PoolConfig pool[4];
 
     uint16_t overheat_mode;
     uint16_t power_fault;

@@ -115,7 +115,7 @@ void ASIC_result_task(void *pvParameters)
                     int retB = STRATUM_V1_submit_share(
                         GLOBAL_STATE->transportB,
                         GLOBAL_STATE->send_uidB++,
-                        GLOBAL_STATE->SYSTEM_MODULE.poolB_user,
+                        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user,
                         job_jobid,
                         job_en2,
                         job_ntime,

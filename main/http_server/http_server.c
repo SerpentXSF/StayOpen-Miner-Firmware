@@ -31,6 +31,7 @@
 
 #include "cJSON.h"
 #include "global_state.h"
+#include "pool_scheduler.h"
 #include "history.h"
 #include "nvs_config.h"
 #include "dual_clamp.h"
@@ -1269,7 +1270,7 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
     }
     if ((item = cJSON_GetObjectItem(root, "poolBExtranonceSubscribe")) != NULL) {
         nvs_config_set_u16(NVS_CONFIG_POOLB_XNSUB, item->valueint);
-        GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe = item->valueint;
+        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe = item->valueint;
     }
     if ((item = cJSON_GetObjectItem(root, "poolBFbUrl")) != NULL) {
         nvs_config_set_string(NVS_CONFIG_POOLB_FB_URL, item->valuestring);
@@ -1924,11 +1925,11 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddNumberToObject(root, "dualRatioA", GLOBAL_STATE->dual_ratio_a);
     cJSON_AddNumberToObject(root, "dualSliceMs", GLOBAL_STATE->dual_interval_ms);
     cJSON_AddStringToObject(root, "poolBUrl",
-        GLOBAL_STATE->SYSTEM_MODULE.poolB_url ? GLOBAL_STATE->SYSTEM_MODULE.poolB_url : "");
-    cJSON_AddNumberToObject(root, "poolBPort", GLOBAL_STATE->SYSTEM_MODULE.poolB_port);
+        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].url ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].url : "");
+    cJSON_AddNumberToObject(root, "poolBPort", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].port);
     cJSON_AddStringToObject(root, "poolBUser",
-        GLOBAL_STATE->SYSTEM_MODULE.poolB_user ? GLOBAL_STATE->SYSTEM_MODULE.poolB_user : "");
-    cJSON_AddNumberToObject(root, "poolBConnected", GLOBAL_STATE->SYSTEM_MODULE.poolB_connected);
+        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user : "");
+    cJSON_AddNumberToObject(root, "poolBConnected", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].connected);
     /*
      * poolBTLS was accepted by the settings handler and stored, but never
      * reported back. The pool page reads it as `st.poolBTLS ?? 0`, so it came
@@ -1937,19 +1938,19 @@ static esp_err_t GET_system_info(httpd_req_t * req)
      * opened the tab and pressed Save. The failover switch beside it was
      * reported correctly all along, which is what made it look deliberate.
      */
-    cJSON_AddNumberToObject(root, "poolBTLS", GLOBAL_STATE->SYSTEM_MODULE.poolB_tls);
+    cJSON_AddNumberToObject(root, "poolBTLS", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].tls);
     cJSON_AddNumberToObject(root, "poolBExtranonceSubscribe",
-                            GLOBAL_STATE->SYSTEM_MODULE.poolB_extranonce_subscribe);
+                            GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe);
     cJSON_AddStringToObject(root, "poolBFbUrl",
-        GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_url ? GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_url : "");
-    cJSON_AddNumberToObject(root, "poolBFbPort", GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_port);
+        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_url ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_url : "");
+    cJSON_AddNumberToObject(root, "poolBFbPort", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_port);
     cJSON_AddStringToObject(root, "poolBFbUser",
-        GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_user ? GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_user : "");
-    cJSON_AddNumberToObject(root, "poolBFbTLS", GLOBAL_STATE->SYSTEM_MODULE.poolB_fb_tls);
+        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_user ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_user : "");
+    cJSON_AddNumberToObject(root, "poolBFbTLS", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_tls);
     cJSON_AddBoolToObject(root, "boardMismatch", GLOBAL_STATE->SYSTEM_MODULE.board_mismatch);
-    cJSON_AddNumberToObject(root, "poolBUsingFailover", GLOBAL_STATE->SYSTEM_MODULE.poolB_is_using_failover);
-    cJSON_AddNumberToObject(root, "poolBSharesAccepted", GLOBAL_STATE->SYSTEM_MODULE.poolB_shares_accepted);
-    cJSON_AddNumberToObject(root, "poolBSharesRejected", GLOBAL_STATE->SYSTEM_MODULE.poolB_shares_rejected);
+    cJSON_AddNumberToObject(root, "poolBUsingFailover", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].is_using_failover);
+    cJSON_AddNumberToObject(root, "poolBSharesAccepted", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].shares_accepted);
+    cJSON_AddNumberToObject(root, "poolBSharesRejected", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].shares_rejected);
     /* Pool B's own vardiff. Without it the two pools' share counts cannot be
      * compared: work delivered is shares x difficulty, and the pools rarely
      * settle on the same one. */
