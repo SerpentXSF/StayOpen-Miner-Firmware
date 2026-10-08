@@ -849,7 +849,18 @@ void app_main(void)
     }
     show_mining_screen();
     
-    ESP_LOGI(TAG, "heap free heap size: %" PRIu32 " bytes", heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+    /*
+     * Free and largest-block, not just free.
+     *
+     * These two diverge badly on this board and only the second one decides
+     * anything: a task stack has to come out of one contiguous block, so
+     * "17875 free" says nothing about whether an 8 KB stack can be had. The
+     * boot that refused asic_result_0 had 10863 free and a largest block of
+     * 3840. This is the number that sizes the pools' stratum task.
+     */
+    ESP_LOGI(TAG, "heap free heap size: %" PRIu32 " bytes, largest block %" PRIu32,
+             (uint32_t) heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (uint32_t) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
     ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
 
     /*
