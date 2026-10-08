@@ -124,6 +124,7 @@ void health_maintenance_task(void *pvParameters)
     int max_fan_speed = 0, fan_check_param = 0;
     FanInputInfo fan_input_info;
     uint32_t counter = 0, fan_error_counter = 0;
+    bool memory_census_done = false;
     uint32_t num_of_pwm_channel = 0;
     /*
      * Ten seconds of being driven with no rotation at all, at this loop's two
@@ -151,6 +152,28 @@ void health_maintenance_task(void *pvParameters)
     while(1){
         /*get the infomation from power every 10 seconds.*/
         time_start = esp_timer_get_time() / 1000;
+
+        /*
+         * One memory census, two minutes in, from a task that already exists.
+         *
+         * Nothing on this device reports internal RAM per task. The task that
+         * did -- memory_monitor_task -- is deliberately not started, because
+         * its 3 KB of internal stack was enough to stop asic_result_0 being
+         * created and the miner hashed nothing for twenty minutes. So this
+         * borrows a task already running, costs no stack of its own beyond the
+         * call, and fires once rather than every two minutes.
+         *
+         * Two minutes in: late enough that start-up allocation has settled and
+         * the pool sockets are up, early enough to be the state the miner
+         * actually runs in. It is the measurement the stack trimming has to be
+         * based on -- guessing at stack sizes on a board with 163 bytes of
+         * headroom is how the last outage happened.
+         */
+        if (!memory_census_done && esp_timer_get_time() > 120LL * 1000 * 1000) {
+            memory_census_done = true;
+            improved_memory_monitor();
+            analyze_task_memory();
+        }
 
         if(GLOBAL_STATE->interface_initalized){
             if(5 == ++counter){           

@@ -184,7 +184,22 @@ static void restart_callback(void)
  */
 void analyze_task_memory(void) {
     UBaseType_t count = uxTaskGetNumberOfTasks();
-    TaskStatus_t *tasks = (TaskStatus_t *) pvPortMalloc(count * sizeof(TaskStatus_t));
+
+    /*
+     * The census goes in PSRAM, not internal RAM.
+     *
+     * pvPortMalloc() takes internal, and this wants about 40 bytes per task --
+     * a kilobyte and more on a BC04, asked for by the very measurement that
+     * exists to find out why internal RAM is short. Taking it from the pool
+     * under study changes the answer. Nothing here is touched by an ISR or by
+     * DMA, so PSRAM is simply the right place for it.
+     */
+    TaskStatus_t *tasks = heap_caps_malloc(count * sizeof(TaskStatus_t),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (tasks == NULL) {
+        /* No PSRAM, or none left: internal is better than no reading at all. */
+        tasks = (TaskStatus_t *) pvPortMalloc(count * sizeof(TaskStatus_t));
+    }
     if (tasks == NULL) {
         ESP_LOGW("TASKS", "cannot allocate %u task records", (unsigned) count);
         return;
@@ -203,7 +218,7 @@ void analyze_task_memory(void) {
     ESP_LOGI("TASKS", "  total unused stack across all tasks: %" PRIu32 " bytes (%" PRIu32 " KB)",
              unused_total, unused_total / 1024);
 
-    vPortFree(tasks);
+    heap_caps_free(tasks);
 }
 
 void improved_memory_monitor(void)
@@ -836,5 +851,19 @@ void app_main(void)
     
     ESP_LOGI(TAG, "heap free heap size: %" PRIu32 " bytes", heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
     ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
+
+    /*
+     * How much of the main task's own stack was ever used.
+     *
+     * CONFIG_ESP_MAIN_TASK_STACK_SIZE is 16000 on this build against an IDF
+     * default of 3584, and all of it is internal RAM held for the whole of
+     * app_main -- including the moment the ASIC tasks are created, which is
+     * exactly where this board runs out. Whether that figure can come down is
+     * the question the log has never answered, so it answers it here. The
+     * reading is taken last, after the deepest call this function makes.
+     */
+    ESP_LOGI(TAG, "main task stack: %u of %d bytes still unused",
+             (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
+             CONFIG_ESP_MAIN_TASK_STACK_SIZE);
     /*restart();*/
 }
