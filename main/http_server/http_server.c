@@ -223,6 +223,20 @@ static char* get_log_snapshot(size_t *out_len) {
     return snapshot;
 }
 
+/*
+ * How much history a newly connected log viewer is sent.
+ *
+ * The ring holds 256 KB and this used to send all of it: about fifty 4 KB
+ * frames back to back, and the viewer rebuilds its whole DOM on each one --
+ * it splits the buffer into as many as 5000 lines, escapes every one and
+ * builds a div for each. The page fell behind within seconds of being opened
+ * and the log looked frozen, which is exactly what a log viewer must not do.
+ *
+ * A tail is what the page is for. The whole ring is still one click away on
+ * the download button, which streams it as a file instead of as DOM.
+ */
+#define WS_LOG_HISTORY_BYTES (32 * 1024)
+
 // 5. WebSocket 历史日志发送 (使用快照)
 static void send_log_history_to_ws(httpd_req_t *req) {
     size_t data_len = 0;
@@ -230,6 +244,15 @@ static void send_log_history_to_ws(httpd_req_t *req) {
 
     if (temp_buf) {
         size_t sent = 0;
+
+        if (data_len > WS_LOG_HISTORY_BYTES) {
+            sent = data_len - WS_LOG_HISTORY_BYTES;
+            /* Start at a line boundary; half a line at the top of the viewer
+             * reads as corruption. */
+            const char *nl = memchr(temp_buf + sent, '\n', data_len - sent);
+            sent = (nl != NULL) ? (size_t) (nl - temp_buf) + 1 : data_len;
+        }
+
         size_t chunk_size = 4096; 
         while (sent < data_len) {
             size_t this_chunk = (data_len - sent) > chunk_size ? chunk_size : (data_len - sent);

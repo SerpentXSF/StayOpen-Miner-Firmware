@@ -9,6 +9,20 @@ import { getHistory, getMinerStatus, login } from "@/api";
 // Max log lines
 const MAX_LOG_LINES = 5000;
 
+/* Log data waiting to reach the store, and the timer that will deliver it.
+ * Deliberately not reactive: touching reactive state is the expensive part,
+ * so the buffer that exists to avoid it must not be reactive itself. */
+let wsPending = "";
+let wsFlushTimer: number | null = null;
+
+function wsResetBuffer() {
+    if (wsFlushTimer !== null) {
+        clearTimeout(wsFlushTimer);
+        wsFlushTimer = null;
+    }
+    wsPending = "";
+}
+
 export const useAppStore = defineStore("app", {
     state: (): AppState => ({
         isAPMode: false,
@@ -449,14 +463,42 @@ export const useAppStore = defineStore("app", {
                     this.wsConnecting = false;
                     this.logContent = translations.connected + "\n";
                 };
+                /*
+                 * Collect incoming log data and hand it to the reactive store
+                 * a few times a second, rather than once per frame.
+                 *
+                 * This used to append and re-split on every message. The log
+                 * viewer renders logContent through a computed that splits it
+                 * into as many as MAX_LOG_LINES lines, escapes each one and
+                 * builds a div for each, so every message rebuilt the whole
+                 * log DOM. At a few lines a second that is merely wasteful;
+                 * on connect, when the miner sends its history as a burst of
+                 * 4 KB frames, it ran dozens of times back to back and the
+                 * page stopped keeping up -- which is what "the log stops
+                 * scrolling" was.
+                 *
+                 * Buffering outside the store keeps reactivity off the hot
+                 * path: a burst now costs one render instead of fifty, and
+                 * the trim runs once per flush instead of once per message.
+                 */
                 socket.onmessage = (event) => {
-                    this.logContent += event.data;
-                    const lines = this.logContent.split('\n');
-                    if (lines.length > MAX_LOG_LINES) {
-                        this.logContent = lines.slice(lines.length - MAX_LOG_LINES).join('\n');
-                    }
+                    wsPending += event.data;
+                    if (wsFlushTimer !== null) return;
+                    wsFlushTimer = window.setTimeout(() => {
+                        wsFlushTimer = null;
+                        if (!wsPending) return;
+                        const incoming = wsPending;
+                        wsPending = "";
+                        let text = this.logContent + incoming;
+                        const lines = text.split('\n');
+                        if (lines.length > MAX_LOG_LINES) {
+                            text = lines.slice(lines.length - MAX_LOG_LINES).join('\n');
+                        }
+                        this.logContent = text;
+                    }, 250);
                 };
                 socket.onclose = () => {
+                    wsResetBuffer();
                     /*
                      * An expired session and an ordinary disconnect look
                      * identical here: the miner cannot answer a websocket
@@ -479,6 +521,7 @@ export const useAppStore = defineStore("app", {
                     });
                 };
                 socket.onerror = () => {
+                    wsResetBuffer();
                     this.logContent += "\n" + translations.error + "\n";
                     this.ws = null;
                     this.wsConnected = false;
