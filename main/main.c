@@ -737,12 +737,20 @@ void app_main(void)
     /*create the queue.*/
     queue_init(&GLOBAL_STATE.stratum_queue);
 
-    /* dual mining: pool B's own queue and the locks guarding its session state.
-     * Initialised unconditionally so enabling dual mining at runtime does not
-     * need a restart to have somewhere to put work. */
-    queue_init(&GLOBAL_STATE.pool_session[POOL_B].queue);
-    pthread_mutex_init(&GLOBAL_STATE.pool_session[POOL_B].transport_lock, NULL);
-    pthread_mutex_init(&GLOBAL_STATE.pool_session[POOL_B].extranonce_lock, NULL);
+    /*
+     * Every secondary pool's queue and the locks guarding its session state.
+     *
+     * All of them, unconditionally, and not just the ones configured right
+     * now: a pool can be filled in from the web UI while the miner is running,
+     * and the task would reach for a mutex that was never initialised. Pool A
+     * is skipped because its session lives in the GlobalState fields of the
+     * same names, not in this array.
+     */
+    for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+        queue_init(&GLOBAL_STATE.pool_session[id].queue);
+        pthread_mutex_init(&GLOBAL_STATE.pool_session[id].transport_lock, NULL);
+        pthread_mutex_init(&GLOBAL_STATE.pool_session[id].extranonce_lock, NULL);
+    }
     for(int i = 0; i < MAX_CHAIN_NUM; i++){
         if(GLOBAL_STATE.chain_pluged[i])
             queue_init(&GLOBAL_STATE.ASIC_jobs_queue[i]);
