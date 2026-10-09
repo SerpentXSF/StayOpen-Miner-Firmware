@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 set(SRCS
     "main.c"
     "nvs_config.c"
+    "pool_fields.c"
     "nvs_device.c"
     "work_queue.c"
     "system.c"

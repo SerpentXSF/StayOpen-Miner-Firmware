@@ -19,23 +19,23 @@
 #define NVS_CONFIG_STRATUM_USER "stratumuser"
 #define NVS_CONFIG_STRATUM_PASS "stratumpass"
 
-/* ---- dual mining, pool B ----
- * NVS keys are limited to 15 characters, hence the abbreviations. */
-#define NVS_CONFIG_POOLB_URL   "poolburl"
-#define NVS_CONFIG_POOLB_PORT  "poolbport"
-#define NVS_CONFIG_POOLB_USER  "poolbuser"
-#define NVS_CONFIG_POOLB_PASS  "poolbpass"
-#define NVS_CONFIG_POOLB_TLS   "poolbtls"
-#define NVS_CONFIG_POOLB_CERT  "poolbcert"
-#define NVS_CONFIG_POOLB_XNSUB "poolbxnsub"
-
-/* pool B's own failover endpoint. Pool A already had one; without this, pool B
- * simply retried a dead host forever and donated its slices to pool A. */
-#define NVS_CONFIG_POOLB_FB_URL  "poolbfburl"
-#define NVS_CONFIG_POOLB_FB_PORT "poolbfbport"
-#define NVS_CONFIG_POOLB_FB_USER "poolbfbuser"
-#define NVS_CONFIG_POOLB_FB_PASS "poolbfbpass"
-#define NVS_CONFIG_POOLB_FB_TLS  "poolbfbtls"
+/* ---- the pools that are not pool A ----
+ * No macros: their keys are built at runtime as "pool" + the pool's letter +
+ * a suffix, from the one table in pool_fields.c -- "poolburl", "poolcfbport"
+ * and so on. Thirteen settings across three pools is thirty-nine names, and
+ * a list of thirty-nine #defines is a list that drifts from the code that
+ * reads them.
+ *
+ * The spellings are unchanged: POOL_B is 1 and 'a' + 1 is 'b', so the keys
+ * that table generates for pool B are byte for byte the ones this header
+ * used to declare, and settings written by earlier firmware load as they
+ * always did. NVS still caps a key at 15 characters; pool_key() says so
+ * loudly if a suffix ever grows past it.
+ *
+ * Each pool has its own failover endpoint. Pool A already had one; before
+ * that, pool B simply retried a dead host forever and donated its slices to
+ * pool A.
+ */
 #define NVS_CONFIG_DUAL_ENABLE "dualenable"
 #define NVS_CONFIG_DUAL_RATIO  "dualratioa"
 #define NVS_CONFIG_DUAL_SLICE  "dualslicems"

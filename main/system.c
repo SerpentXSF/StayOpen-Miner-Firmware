@@ -22,6 +22,7 @@
 
 #include "system.h"
 #include "pool_scheduler.h"
+#include "pool_fields.h"
 #include "dual_clamp.h"
 #include "connect.h"
 #include "history.h"
@@ -113,27 +114,33 @@ void SYSTEM_init_system(GlobalState * GLOBAL_STATE)
     module->pool_cert = nvs_config_get_string(NVS_CONFIG_STRATUM_CERT, STRATUM_CERT);
     module->fallback_pool_cert = nvs_config_get_string(NVS_CONFIG_FALLBACK_STRATUM_CERT, FALLBACK_STRATUM_CERT);
 
-    /* ---- dual mining, pool B ----
-     * Off unless both explicitly enabled and given a URL, so an upgrade from a
-     * single-pool build behaves exactly as before. */
-    module->pool[POOL_B].url  = nvs_config_get_string(NVS_CONFIG_POOLB_URL, "");
-    module->pool[POOL_B].port = nvs_config_get_u16(NVS_CONFIG_POOLB_PORT, 3333);
-    module->pool[POOL_B].user = nvs_config_get_string(NVS_CONFIG_POOLB_USER, "");
-    module->pool[POOL_B].pass = nvs_config_get_string(NVS_CONFIG_POOLB_PASS, "x");
-    module->pool[POOL_B].tls  = nvs_config_get_u16(NVS_CONFIG_POOLB_TLS, 0);
-    module->pool[POOL_B].cert = nvs_config_get_string(NVS_CONFIG_POOLB_CERT, "");
-    module->pool[POOL_B].extranonce_subscribe =
-        nvs_config_get_u16(NVS_CONFIG_POOLB_XNSUB, 0);
-    module->pool[POOL_B].fb_url  = nvs_config_get_string(NVS_CONFIG_POOLB_FB_URL, "");
-    module->pool[POOL_B].fb_port = nvs_config_get_u16(NVS_CONFIG_POOLB_FB_PORT, 3333);
-    module->pool[POOL_B].fb_user = nvs_config_get_string(NVS_CONFIG_POOLB_FB_USER, "");
-    module->pool[POOL_B].fb_pass = nvs_config_get_string(NVS_CONFIG_POOLB_FB_PASS, "x");
-    module->pool[POOL_B].fb_tls  = nvs_config_get_u16(NVS_CONFIG_POOLB_FB_TLS, 0);
-    module->pool[POOL_B].is_using_failover = false;
+    /* ---- the pools that are not pool A ----
+     * Every one of them is loaded; a pool with no URL is simply never
+     * connected. Off unless dual mining is explicitly enabled and pool B has
+     * a URL, so an upgrade from a single-pool build behaves exactly as
+     * before -- see dual_enable below. */
+    for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+        PoolConfig *pool = &module->pool[id];
+        char key[32];
 
-    module->pool[POOL_B].shares_accepted = 0;
-    module->pool[POOL_B].shares_rejected = 0;
-    module->pool[POOL_B].connected = false;
+        for (size_t f = 0; f < POOL_FIELD_COUNT; f++) {
+            const PoolField *field = &POOL_FIELDS[f];
+            pool_key(key, sizeof(key), id, field->nvs, false);
+
+            if (field->kind == POOL_FIELD_STR) {
+                *(char **) ((char *) pool + field->offset) =
+                    nvs_config_get_string(key, field->def_str);
+            } else {
+                *(uint16_t *) ((char *) pool + field->offset) =
+                    nvs_config_get_u16(key, field->def_u16);
+            }
+        }
+
+        pool->is_using_failover = false;
+        pool->shares_accepted = 0;
+        pool->shares_rejected = 0;
+        pool->connected = false;
+    }
 
     /* Slice scheduling lives on GlobalState, next to the other per-session
      * mining state. Dual mining needs a pool B URL as well as the flag: a

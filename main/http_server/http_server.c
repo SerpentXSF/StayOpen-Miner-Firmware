@@ -32,6 +32,7 @@
 #include "cJSON.h"
 #include "global_state.h"
 #include "pool_scheduler.h"
+#include "pool_fields.h"
 #include "history.h"
 #include "nvs_config.h"
 #include "dual_clamp.h"
@@ -1249,43 +1250,51 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
         nvs_config_set_string(NVS_CONFIG_TIME_ZONE, item->valuestring);
     }
 
-    /* ---- dual mining, pool B ----
-     * Takes effect on restart: the pool B session and the slice scheduler read
-     * these at start-up. Ratio and slice length are also re-read live by
-     * create_jobs_task, so those two can be tuned without a reboot. */
-    if ((item = cJSON_GetObjectItem(root, "poolBUrl")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_URL, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBPort")) != NULL && item->valueint > 0) {
-        nvs_config_set_u16(NVS_CONFIG_POOLB_PORT, item->valueint);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBUser")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_USER, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBPass")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_PASS, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBTLS")) != NULL) {
-        nvs_config_set_u16(NVS_CONFIG_POOLB_TLS, item->valueint);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBExtranonceSubscribe")) != NULL) {
-        nvs_config_set_u16(NVS_CONFIG_POOLB_XNSUB, item->valueint);
-        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe = item->valueint;
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBFbUrl")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_FB_URL, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBFbPort")) != NULL && item->valueint > 0) {
-        nvs_config_set_u16(NVS_CONFIG_POOLB_FB_PORT, item->valueint);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBFbUser")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_FB_USER, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBFbPass")) != NULL) {
-        nvs_config_set_string(NVS_CONFIG_POOLB_FB_PASS, item->valuestring);
-    }
-    if ((item = cJSON_GetObjectItem(root, "poolBFbTLS")) != NULL) {
-        nvs_config_set_u16(NVS_CONFIG_POOLB_FB_TLS, item->valueint);
+    /* ---- the pools that are not pool A ----
+     * Takes effect on restart: the secondary pool task and the slice
+     * scheduler read these at start-up. Ratio, slice length and the per-pool
+     * weights are re-read live by create_jobs_task, so the split can be tuned
+     * without a reboot. */
+    for (pool_id_t pid = POOL_B; pid < POOL_MAX; pid++) {
+        char key[32];
+        char name[48];
+
+        for (size_t f = 0; f < POOL_FIELD_COUNT; f++) {
+            const PoolField *field = &POOL_FIELDS[f];
+            pool_key(name, sizeof(name), pid, field->json, true);
+
+            if ((item = cJSON_GetObjectItem(root, name)) == NULL) {
+                continue;
+            }
+            pool_key(key, sizeof(key), pid, field->nvs, false);
+
+            if (field->kind == POOL_FIELD_STR) {
+                if (item->valuestring != NULL) {
+                    nvs_config_set_string(key, item->valuestring);
+                }
+                continue;
+            }
+
+            /* A port of zero is a typo, not a setting; it was rejected here
+             * before and still is. */
+            if (item->valueint <= 0 &&
+                (strcmp(field->nvs, "port") == 0 || strcmp(field->nvs, "fbport") == 0)) {
+                continue;
+            }
+            nvs_config_set_u16(key, item->valueint);
+
+            /* Taken live as well as stored: the secondary task reads it each
+             * time it subscribes, so turning it on need not wait for a
+             * restart. */
+            if (strcmp(field->nvs, "xnsub") == 0) {
+                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].extranonce_subscribe = item->valueint;
+            }
+            /* Likewise the weight: create_jobs_task rebuilds the scheduler
+             * whenever these change. */
+            if (strcmp(field->nvs, "wt") == 0) {
+                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].weight = item->valueint;
+            }
+        }
     }
     if ((item = cJSON_GetObjectItem(root, "dualEnable")) != NULL) {
         nvs_config_set_u16(NVS_CONFIG_DUAL_ENABLE, item->valueint);
@@ -1924,41 +1933,68 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddNumberToObject(root, "dualEnable", GLOBAL_STATE->dual_enable);
     cJSON_AddNumberToObject(root, "dualRatioA", GLOBAL_STATE->dual_ratio_a);
     cJSON_AddNumberToObject(root, "dualSliceMs", GLOBAL_STATE->dual_interval_ms);
-    cJSON_AddStringToObject(root, "poolBUrl",
-        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].url ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].url : "");
-    cJSON_AddNumberToObject(root, "poolBPort", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].port);
-    cJSON_AddStringToObject(root, "poolBUser",
-        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user : "");
-    cJSON_AddNumberToObject(root, "poolBConnected", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].connected);
     /*
-     * poolBTLS was accepted by the settings handler and stored, but never
-     * reported back. The pool page reads it as `st.poolBTLS ?? 0`, so it came
-     * up off on every load regardless of what the miner was doing, and saving
-     * the page then wrote that back -- turning pool B's TLS off for anyone who
-     * opened the tab and pressed Save. The failover switch beside it was
-     * reported correctly all along, which is what made it look deliberate.
+     * Every secondary pool's stored settings, then its live state.
+     *
+     * Driven off the same table the POST handler and the start-up load use,
+     * because a field reported here but not accepted there (or the reverse)
+     * is a bug the page cannot see. poolBTLS was exactly that: accepted and
+     * stored but missing from this list, so the pool page read it back as
+     * `st.poolBTLS ?? 0`, came up off regardless of what the miner was doing,
+     * and pressing Save wrote that back -- turning pool B's TLS off for
+     * anyone who opened the tab. The failover switch beside it was reported
+     * correctly all along, which is what made it look deliberate.
+     *
+     * Passwords and certificates are marked unpublished in the table and so
+     * never appear here. The page leaves those inputs blank and only sends
+     * them when the user types one.
      */
-    cJSON_AddNumberToObject(root, "poolBTLS", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].tls);
-    cJSON_AddNumberToObject(root, "poolBExtranonceSubscribe",
-                            GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe);
-    cJSON_AddStringToObject(root, "poolBFbUrl",
-        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_url ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_url : "");
-    cJSON_AddNumberToObject(root, "poolBFbPort", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_port);
-    cJSON_AddStringToObject(root, "poolBFbUser",
-        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_user ? GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_user : "");
-    cJSON_AddNumberToObject(root, "poolBFbTLS", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].fb_tls);
+    for (pool_id_t pid = POOL_B; pid < POOL_MAX; pid++) {
+        const PoolConfig *pool = &GLOBAL_STATE->SYSTEM_MODULE.pool[pid];
+        char name[48];
+
+        for (size_t f = 0; f < POOL_FIELD_COUNT; f++) {
+            const PoolField *field = &POOL_FIELDS[f];
+            if (!field->publish) {
+                continue;
+            }
+            pool_key(name, sizeof(name), pid, field->json, true);
+
+            if (field->kind == POOL_FIELD_STR) {
+                const char *value = *(char *const *) ((const char *) pool + field->offset);
+                cJSON_AddStringToObject(root, name, value ? value : "");
+            } else {
+                cJSON_AddNumberToObject(root, name,
+                    *(const uint16_t *) ((const char *) pool + field->offset));
+            }
+        }
+
+        pool_key(name, sizeof(name), pid, "Connected", true);
+        cJSON_AddNumberToObject(root, name, pool->connected);
+        pool_key(name, sizeof(name), pid, "UsingFailover", true);
+        cJSON_AddNumberToObject(root, name, pool->is_using_failover);
+        pool_key(name, sizeof(name), pid, "SharesAccepted", true);
+        cJSON_AddNumberToObject(root, name, pool->shares_accepted);
+        pool_key(name, sizeof(name), pid, "SharesRejected", true);
+        cJSON_AddNumberToObject(root, name, pool->shares_rejected);
+
+        /* Each pool's own vardiff. Without it their share counts cannot be
+         * compared: work delivered is shares x difficulty, and pools rarely
+         * settle on the same one. */
+        pool_key(name, sizeof(name), pid, "Diff", true);
+        cJSON_AddNumberToObject(root, name, GLOBAL_STATE->pool_session[pid].stratum_difficulty);
+
+        pool_key(name, sizeof(name), pid, "JobsSelected", true);
+        cJSON_AddNumberToObject(root, name, GLOBAL_STATE->jobs_selected[pid]);
+        pool_key(name, sizeof(name), pid, "JobsServed", true);
+        cJSON_AddNumberToObject(root, name, GLOBAL_STATE->jobs_served[pid]);
+    }
     cJSON_AddBoolToObject(root, "boardMismatch", GLOBAL_STATE->SYSTEM_MODULE.board_mismatch);
-    cJSON_AddNumberToObject(root, "poolBUsingFailover", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].is_using_failover);
-    cJSON_AddNumberToObject(root, "poolBSharesAccepted", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].shares_accepted);
-    cJSON_AddNumberToObject(root, "poolBSharesRejected", GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].shares_rejected);
-    /* Pool B's own vardiff. Without it the two pools' share counts cannot be
-     * compared: work delivered is shares x difficulty, and the pools rarely
-     * settle on the same one. */
-    cJSON_AddNumberToObject(root, "poolBDiff", GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty);
-    cJSON_AddNumberToObject(root, "poolAJobsSelected", GLOBAL_STATE->jobs_selected[0]);
-    cJSON_AddNumberToObject(root, "poolAJobsServed", GLOBAL_STATE->jobs_served[0]);
-    cJSON_AddNumberToObject(root, "poolBJobsSelected", GLOBAL_STATE->jobs_selected[1]);
-    cJSON_AddNumberToObject(root, "poolBJobsServed", GLOBAL_STATE->jobs_served[1]);
+    /* Pool A's, by hand: it is not in the loop above, because its
+     * configuration still lives in its own fields rather than in pool[]. The
+     * secondary pools' counters are emitted there. */
+    cJSON_AddNumberToObject(root, "poolAJobsSelected", GLOBAL_STATE->jobs_selected[POOL_A]);
+    cJSON_AddNumberToObject(root, "poolAJobsServed", GLOBAL_STATE->jobs_served[POOL_A]);
 
     cJSON_AddStringToObject(root, "version", esp_app_get_description()->version);
     cJSON_AddStringToObject(root, "WWWVersion", WWWVersion);

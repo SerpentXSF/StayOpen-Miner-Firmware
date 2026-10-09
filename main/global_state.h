@@ -93,7 +93,10 @@ typedef struct {
     char *   pass;
     uint16_t tls;
     char *   cert;
-    bool     extranonce_subscribe;
+    /* uint16_t, not bool: the settings table in pool_fields.c has one
+     * integer kind, and a bool member would be written through a
+     * uint16_t pointer. Still read as a truth value everywhere. */
+    uint16_t extranonce_subscribe;
 
     /* its own failover, stepped independently of every other pool's */
     char *   fb_url;
@@ -112,7 +115,7 @@ typedef struct {
      * Share of slices wanted by this pool, relative to the others. The
      * scheduler normalises, so these need not add up to anything.
      */
-    uint8_t  weight;
+    uint16_t weight;
 } PoolConfig;
 
 /*
