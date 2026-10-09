@@ -51,18 +51,18 @@ static void poolb_close(GlobalState *GLOBAL_STATE)
      * task at any moment; if it read the handle while this freed it, it would
      * write into freed memory.
      */
-    pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
-    esp_transport_handle_t t = GLOBAL_STATE->transportB;
-    GLOBAL_STATE->transportB = NULL;
+    pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
+    esp_transport_handle_t t = GLOBAL_STATE->pool_session[POOL_B].transport;
+    GLOBAL_STATE->pool_session[POOL_B].transport = NULL;
     if (t != NULL) {
         esp_transport_close(t);
         esp_transport_destroy(t);
     }
-    pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
+    pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
 
     GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].connected = false;
     /* queue_clear frees each mining_notify it drops */
-    queue_clear(&GLOBAL_STATE->stratum_queueB);
+    queue_clear(&GLOBAL_STATE->pool_session[POOL_B].queue);
 }
 
 void stratum_poolb_task(void *pvParameters)
@@ -118,7 +118,7 @@ void stratum_poolb_task(void *pvParameters)
 
         /*
          * Build and connect on a local handle. Publishing a half-open handle to
-         * transportB would let the submit path write to a socket that never
+         * pool_session[POOL_B].transport would let the submit path write to a socket that never
          * came up.
          */
         esp_transport_handle_t transport = STRATUM_V1_transport_init(tls, module->pool[POOL_B].cert);
@@ -142,9 +142,9 @@ void stratum_poolb_task(void *pvParameters)
             continue;
         }
 
-        pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
-        GLOBAL_STATE->transportB = transport;
-        pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
+        pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
+        GLOBAL_STATE->pool_session[POOL_B].transport = transport;
+        pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
         module->pool[POOL_B].connected = true;
         pool_failover_step(&fo, PF_EV_CONNECTED);
         ESP_LOGI(TAG, "pool B connected to %s:%u (%s)", url, port,
@@ -157,13 +157,13 @@ void stratum_poolb_task(void *pvParameters)
             rxsize = 0;
         }
 
-        GLOBAL_STATE->send_uidB = 1;
-        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->transportB,
-                                             GLOBAL_STATE->send_uidB++,
-                                             &GLOBAL_STATE->version_maskB);
-        STRATUM_V1_subscribe(GLOBAL_STATE->transportB, GLOBAL_STATE->send_uidB++,
+        GLOBAL_STATE->pool_session[POOL_B].send_uid = 1;
+        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->pool_session[POOL_B].transport,
+                                             GLOBAL_STATE->pool_session[POOL_B].send_uid++,
+                                             &GLOBAL_STATE->pool_session[POOL_B].version_mask);
+        STRATUM_V1_subscribe(GLOBAL_STATE->pool_session[POOL_B].transport, GLOBAL_STATE->pool_session[POOL_B].send_uid++,
                              GLOBAL_STATE->asic_model_str);
-        STRATUM_V1_authorize(GLOBAL_STATE->transportB, GLOBAL_STATE->send_uidB++,
+        STRATUM_V1_authorize(GLOBAL_STATE->pool_session[POOL_B].transport, GLOBAL_STATE->pool_session[POOL_B].send_uid++,
                              user, pass);
 
         /*
@@ -185,8 +185,8 @@ void stratum_poolb_task(void *pvParameters)
          * still processes the authorize first.
          */
         if (GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].extranonce_subscribe) {
-            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transportB,
-                                            GLOBAL_STATE->send_uidB++);
+            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->pool_session[POOL_B].transport,
+                                            GLOBAL_STATE->pool_session[POOL_B].send_uid++);
         }
 
         while (1) {
@@ -196,7 +196,7 @@ void stratum_poolb_task(void *pvParameters)
                 break;
             }
 
-            char *line = STRATUM_V1_receive_jsonrpc_line_ctx(GLOBAL_STATE->transportB,
+            char *line = STRATUM_V1_receive_jsonrpc_line_ctx(GLOBAL_STATE->pool_session[POOL_B].transport,
                                                              &rxbuf, &rxsize);
             if (line == NULL) {
                 ESP_LOGW(TAG, "pool B connection lost, reconnecting");
@@ -216,8 +216,8 @@ void stratum_poolb_task(void *pvParameters)
                      * jobs stayed valid and their nonces were submitted to a
                      * pool that had already moved on -- rejected as stale.
                      */
-                    if (GLOBAL_STATE->stratum_queueB.count > 0) {
-                        queue_clear(&GLOBAL_STATE->stratum_queueB);
+                    if (GLOBAL_STATE->pool_session[POOL_B].queue.count > 0) {
+                        queue_clear(&GLOBAL_STATE->pool_session[POOL_B].queue);
                     }
                     for (uint32_t chain = 0; chain < MAX_CHAIN_NUM; chain++) {
                         if (!GLOBAL_STATE->chain_pluged[chain]) {
@@ -234,27 +234,27 @@ void stratum_poolb_task(void *pvParameters)
                         pthread_mutex_unlock(&GLOBAL_STATE->valid_jobs_lock[chain]);
                     }
                 }
-                if (GLOBAL_STATE->stratum_queueB.count == QUEUE_SIZE) {
+                if (GLOBAL_STATE->pool_session[POOL_B].queue.count == QUEUE_SIZE) {
                     mining_notify *stale =
-                        (mining_notify *)queue_dequeue(&GLOBAL_STATE->stratum_queueB);
+                        (mining_notify *)queue_dequeue(&GLOBAL_STATE->pool_session[POOL_B].queue);
                     STRATUM_V1_free_mining_notify(stale);
                 }
-                poolb_message.mining_notification->difficulty = GLOBAL_STATE->stratum_difficultyB;
-                queue_enqueue(&GLOBAL_STATE->stratum_queueB,
+                poolb_message.mining_notification->difficulty = GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty;
+                queue_enqueue(&GLOBAL_STATE->pool_session[POOL_B].queue,
                               poolb_message.mining_notification);
                 /* the queue owns it now */
                 poolb_message.mining_notification = NULL;
 
             } else if (poolb_message.method == MINING_SET_DIFFICULTY) {
-                if (poolb_message.new_difficulty != GLOBAL_STATE->stratum_difficultyB) {
-                    GLOBAL_STATE->stratum_difficultyB = poolb_message.new_difficulty;
+                if (poolb_message.new_difficulty != GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty) {
+                    GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty = poolb_message.new_difficulty;
                     ESP_LOGI(TAG, "pool B difficulty: %lu",
-                             (unsigned long)GLOBAL_STATE->stratum_difficultyB);
+                             (unsigned long)GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty);
                 }
 
             } else if (poolb_message.method == MINING_SET_VERSION_MASK ||
                        poolb_message.method == STRATUM_RESULT_VERSION_MASK) {
-                GLOBAL_STATE->version_maskB = poolb_message.version_mask;
+                GLOBAL_STATE->pool_session[POOL_B].version_mask = poolb_message.version_mask;
 
             } else if (poolb_message.method == STRATUM_RESULT_SUBSCRIBE ||
                        poolb_message.method == MINING_SET_EXTRANONCE) {
@@ -264,14 +264,14 @@ void stratum_poolb_task(void *pvParameters)
                      * Swap under the lock create_jobs_task copies it under, so
                      * a job never reads the string while it is being freed.
                      */
-                    pthread_mutex_lock(&GLOBAL_STATE->extranonceB_lock);
-                    char *old = GLOBAL_STATE->extranonce_strB;
-                    GLOBAL_STATE->extranonce_strB = strdup(poolb_message.extranonce_str);
-                    GLOBAL_STATE->extranonce_2_lenB = poolb_message.extranonce_2_len;
-                    pthread_mutex_unlock(&GLOBAL_STATE->extranonceB_lock);
+                    pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
+                    char *old = GLOBAL_STATE->pool_session[POOL_B].extranonce_str;
+                    GLOBAL_STATE->pool_session[POOL_B].extranonce_str = strdup(poolb_message.extranonce_str);
+                    GLOBAL_STATE->pool_session[POOL_B].extranonce_2_len = poolb_message.extranonce_2_len;
+                    pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
                     free(old);
                     ESP_LOGI(TAG, "pool B extranonce %s, en2_len %d",
-                             GLOBAL_STATE->extranonce_strB, GLOBAL_STATE->extranonce_2_lenB);
+                             GLOBAL_STATE->pool_session[POOL_B].extranonce_str, GLOBAL_STATE->pool_session[POOL_B].extranonce_2_len);
                 }
 
             } else if (poolb_message.method == STRATUM_RESULT) {

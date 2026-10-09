@@ -20,6 +20,7 @@
 #include "nvs_device.h"
 #include "main.h"
 #include "global_state.h"
+#include "pool_scheduler.h"
 #include "miner.h"
 #include "self_test.h"
 #include "ethernet_init.h"
@@ -739,9 +740,9 @@ void app_main(void)
     /* dual mining: pool B's own queue and the locks guarding its session state.
      * Initialised unconditionally so enabling dual mining at runtime does not
      * need a restart to have somewhere to put work. */
-    queue_init(&GLOBAL_STATE.stratum_queueB);
-    pthread_mutex_init(&GLOBAL_STATE.transportB_lock, NULL);
-    pthread_mutex_init(&GLOBAL_STATE.extranonceB_lock, NULL);
+    queue_init(&GLOBAL_STATE.pool_session[POOL_B].queue);
+    pthread_mutex_init(&GLOBAL_STATE.pool_session[POOL_B].transport_lock, NULL);
+    pthread_mutex_init(&GLOBAL_STATE.pool_session[POOL_B].extranonce_lock, NULL);
     for(int i = 0; i < MAX_CHAIN_NUM; i++){
         if(GLOBAL_STATE.chain_pluged[i])
             queue_init(&GLOBAL_STATE.ASIC_jobs_queue[i]);

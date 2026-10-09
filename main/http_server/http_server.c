@@ -1954,7 +1954,7 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     /* Pool B's own vardiff. Without it the two pools' share counts cannot be
      * compared: work delivered is shares x difficulty, and the pools rarely
      * settle on the same one. */
-    cJSON_AddNumberToObject(root, "poolBDiff", GLOBAL_STATE->stratum_difficultyB);
+    cJSON_AddNumberToObject(root, "poolBDiff", GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty);
     cJSON_AddNumberToObject(root, "poolAJobsSelected", GLOBAL_STATE->jobs_selected[0]);
     cJSON_AddNumberToObject(root, "poolAJobsServed", GLOBAL_STATE->jobs_served[0]);
     cJSON_AddNumberToObject(root, "poolBJobsSelected", GLOBAL_STATE->jobs_selected[1]);

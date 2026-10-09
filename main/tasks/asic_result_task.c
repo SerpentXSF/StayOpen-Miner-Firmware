@@ -108,13 +108,13 @@ void ASIC_result_task(void *pvParameters)
              * this reason.
              */
             if (GLOBAL_STATE->dual_enable && job_pool_id == POOL_B) {
-                /* Hold transportB_lock across the write: the pool B task can be
+                /* Hold pool_session[POOL_B].transport_lock across the write: the pool B task can be
                  * tearing this handle down at any moment. */
-                pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
-                if (GLOBAL_STATE->transportB != NULL) {
+                pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
+                if (GLOBAL_STATE->pool_session[POOL_B].transport != NULL) {
                     int retB = STRATUM_V1_submit_share(
-                        GLOBAL_STATE->transportB,
-                        GLOBAL_STATE->send_uidB++,
+                        GLOBAL_STATE->pool_session[POOL_B].transport,
+                        GLOBAL_STATE->pool_session[POOL_B].send_uid++,
                         GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user,
                         job_jobid,
                         job_en2,
@@ -127,7 +127,7 @@ void ASIC_result_task(void *pvParameters)
                 } else {
                     ESP_LOGD(TAG, "pool B share dropped: not connected");
                 }
-                pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
+                pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
             } else {
                 char * user = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
                 /*TODO: submit a share without rolled version.*/

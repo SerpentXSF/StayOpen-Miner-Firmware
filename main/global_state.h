@@ -115,6 +115,35 @@ typedef struct {
     uint8_t  weight;
 } PoolConfig;
 
+/*
+ * One pool's live Stratum session, for the pools that are not pool A.
+ *
+ * Indexed by pool_id_t alongside SystemModule::pool, and [POOL_A] is unused
+ * for the same reason: pool A's session state sits in the GlobalState fields
+ * of the same names, because its own task owns it.
+ *
+ * Each pool owns its receive accumulator rather than sharing one, which is
+ * what lets several sessions run at once -- see
+ * STRATUM_V1_receive_jsonrpc_line_ctx, which exists for exactly that.
+ */
+typedef struct {
+    work_queue             queue;
+    char *                 extranonce_str;
+    int                    extranonce_2_len;
+    uint32_t               stratum_difficulty;
+    uint32_t               version_mask;
+    int                    send_uid;
+
+    /*
+     * Published only once the connection is up, and swapped under its lock:
+     * asic_result_task can be submitting a share from another task at any
+     * moment and must never read a handle that is being destroyed.
+     */
+    esp_transport_handle_t transport;
+    pthread_mutex_t        transport_lock;
+    pthread_mutex_t        extranonce_lock;
+} PoolSession;
+
 typedef struct
 {
     double duration_start;
@@ -292,10 +321,11 @@ typedef struct
 
     esp_transport_handle_t transport;
 
-    /* ---- dual mining, pool B session ----
-     * Mirrors the pool A fields above. transportB is published only once the
-     * connection is up and is swapped under transportB_lock, because the share
-     * submit path in asic_result_task writes to it from another task. */
+    /* ---- how the hashrate is divided ----
+     * dual_ratio_a is the two-pool form, kept because that is what is stored
+     * in NVS and shown in the UI today; it is handed to the scheduler as
+     * {ratio_a, 100 - ratio_a}. With more than two pools in play the per-pool
+     * weights in SystemModule::pool are what count instead. */
     bool dual_enable;
     uint8_t dual_ratio_a;        /* percent of slices given to pool A */
     uint16_t dual_interval_ms;   /* slice length */
@@ -311,18 +341,10 @@ typedef struct
      * inferred from share counts against two moving vardiffs.
      * Index by pool_id.
      */
-    uint32_t jobs_selected[2];
-    uint32_t jobs_served[2];
+    uint32_t jobs_selected[4];
+    uint32_t jobs_served[4];
 
-    work_queue stratum_queueB;
-    char *extranonce_strB;
-    int extranonce_2_lenB;
-    uint32_t stratum_difficultyB;
-    uint32_t version_maskB;
-    esp_transport_handle_t transportB;
-    int send_uidB;
-    pthread_mutex_t transportB_lock;
-    pthread_mutex_t extranonceB_lock;
+    PoolSession pool_session[4];
 
     // A message ID that must be unique per request that expects a response.
     // For requests not expecting a response (called notifications), this is null.

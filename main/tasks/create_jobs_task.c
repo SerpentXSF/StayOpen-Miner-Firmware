@@ -94,15 +94,15 @@ void create_jobs_task(void *pvParameters)
                             }
 
                             /* take pool B's newest notify if one has arrived */
-                            while (GLOBAL_STATE->stratum_queueB.count > 0) {
+                            while (GLOBAL_STATE->pool_session[POOL_B].queue.count > 0) {
                                 mining_notify *fresh =
-                                    (mining_notify *)queue_dequeue(&GLOBAL_STATE->stratum_queueB);
+                                    (mining_notify *)queue_dequeue(&GLOBAL_STATE->pool_session[POOL_B].queue);
                                 if (fresh == NULL) break;
                                 if (poolb_notification != NULL) {
                                     STRATUM_V1_free_mining_notify(poolb_notification);
                                 }
                                 poolb_notification = fresh;
-                                difficulty_B = GLOBAL_STATE->stratum_difficultyB;
+                                difficulty_B = GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty;
                                 extranonce_2_B = 0;
                             }
 
@@ -116,7 +116,7 @@ void create_jobs_task(void *pvParameters)
                              * cannot be submitted, on an extranonce that will
                              * not survive the reconnect. Any nonce found
                              * against it reaches the submit path, finds
-                             * transportB NULL and is dropped.
+                             * pool_session[POOL_B].transport NULL and is dropped.
                              *
                              * Nothing reports that. jobs_served[POOL_B] keeps
                              * counting, so the miner looks like it is splitting
@@ -124,15 +124,15 @@ void create_jobs_task(void *pvParameters)
                              * hashrate produces nothing at all, until pool B
                              * happens to come back.
                              *
-                             * transportB is published only once the connection
+                             * pool_session[POOL_B].transport is published only once the connection
                              * is up and cleared when it goes down, so it is the
                              * honest test. Read it under its own lock: the pool
                              * B task can swap it at any moment.
                              */
                             bool poolb_up = false;
-                            pthread_mutex_lock(&GLOBAL_STATE->transportB_lock);
-                            poolb_up = (GLOBAL_STATE->transportB != NULL);
-                            pthread_mutex_unlock(&GLOBAL_STATE->transportB_lock);
+                            pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
+                            poolb_up = (GLOBAL_STATE->pool_session[POOL_B].transport != NULL);
+                            pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
 
                             uint8_t chosen = pool_scheduler_select(&scheduler, esp_timer_get_time());
                             GLOBAL_STATE->jobs_selected[chosen]++;
@@ -199,15 +199,15 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
     /* Each pool has its own extranonce and version mask. Building a job for one
      * pool with the other's values yields a share it cannot match to a job. */
     uint32_t version_mask = (pool_id == POOL_B)
-                            ? GLOBAL_STATE->version_maskB : GLOBAL_STATE->version_mask;
+                            ? GLOBAL_STATE->pool_session[POOL_B].version_mask : GLOBAL_STATE->version_mask;
 
     if (pool_id == POOL_B) {
-        pthread_mutex_lock(&GLOBAL_STATE->extranonceB_lock);
-        extranonce_2_len = GLOBAL_STATE->extranonce_2_lenB;
-        if (GLOBAL_STATE->extranonce_strB != NULL) {
-            snprintf(extranonce_str, sizeof(extranonce_str), "%s", GLOBAL_STATE->extranonce_strB);
+        pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
+        extranonce_2_len = GLOBAL_STATE->pool_session[POOL_B].extranonce_2_len;
+        if (GLOBAL_STATE->pool_session[POOL_B].extranonce_str != NULL) {
+            snprintf(extranonce_str, sizeof(extranonce_str), "%s", GLOBAL_STATE->pool_session[POOL_B].extranonce_str);
         }
-        pthread_mutex_unlock(&GLOBAL_STATE->extranonceB_lock);
+        pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
         if (extranonce_str[0] == '\0' || extranonce_2_len <= 0) {
             /* pool B has not subscribed yet; nothing to build from */
             return;
