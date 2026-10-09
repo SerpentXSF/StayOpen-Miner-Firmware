@@ -25,6 +25,59 @@ static const char *TAG = "create_jobs_task";
 static bool should_generate_more_work(GlobalState *GLOBAL_STATE, uint32_t chain_num);
 static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification, uint64_t extranonce_2, uint32_t difficulty, uint32_t chain_num, uint8_t pool_id);
 
+/*
+ * Work out each pool's share of the slices.
+ *
+ * dual_ratio_a stays what it always was -- pool A's percentage -- because that
+ * is what is stored in NVS and what the UI shows. Whatever is left over is
+ * divided among the pools that are configured, by their own weights if any
+ * have been set and evenly if none have. The scheduler normalises, so these
+ * figures only have to be in the right proportion to each other.
+ *
+ * Weights come from what is *configured*, not from what is currently
+ * connected. A pool that is down keeps being chosen and keeps failing the
+ * liveness test at the call site, which is what makes jobs_selected outrun
+ * jobs_served and puts a visible number on the shortfall. Zeroing a dead
+ * pool's weight here would quietly paper over exactly that.
+ */
+static void build_pool_weights(GlobalState *GLOBAL_STATE, uint8_t *weights)
+{
+    SystemModule *module = &GLOBAL_STATE->SYSTEM_MODULE;
+    int configured = 0;
+    int stated = 0;
+
+    memset(weights, 0, POOL_MAX);
+
+    for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+        const char *url = module->pool[id].url;
+        if (url != NULL && url[0] != '\0') {
+            configured++;
+            stated += module->pool[id].weight;
+        }
+    }
+
+    if (configured == 0) {
+        weights[POOL_A] = 100;
+        return;
+    }
+
+    uint8_t ratio_a = GLOBAL_STATE->dual_ratio_a;
+    if (ratio_a > 100) {
+        ratio_a = 100;
+    }
+    weights[POOL_A] = ratio_a;
+
+    uint8_t rest = (uint8_t) (100 - ratio_a);
+    for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+        const char *url = module->pool[id].url;
+        if (url == NULL || url[0] == '\0') {
+            continue;
+        }
+        weights[id] = (stated > 0) ? module->pool[id].weight
+                                   : (uint8_t) (rest / configured);
+    }
+}
+
 void create_jobs_task(void *pvParameters)
 {
     GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
@@ -34,15 +87,17 @@ void create_jobs_task(void *pvParameters)
 
     uint64_t extranonce_2 = 0;
 
-    /* ---- dual mining ----
-     * Pool B's latest notify is held here rather than dequeued in step with
-     * pool A's: the two pools issue work on their own schedules, and pool A's
-     * dequeue below blocks. */
-    mining_notify *poolb_notification = NULL;
-    uint64_t extranonce_2_B = 0;
-    uint32_t difficulty_B = 0;
+    /* ---- the pools that are not pool A ----
+     * Each one's latest notify is held here rather than dequeued in step with
+     * pool A's: the pools issue work on their own schedules, and pool A's
+     * dequeue below blocks. Indexed by pool id; [POOL_A] is unused, as
+     * everywhere else. */
+    mining_notify *secondary_notify[POOL_MAX] = {0};
+    uint64_t secondary_extranonce_2[POOL_MAX] = {0};
+    uint32_t secondary_difficulty[POOL_MAX] = {0};
+
     pool_scheduler_t scheduler;
-    uint8_t sched_ratio = 0;
+    uint8_t sched_weights[POOL_MAX] = {0};
     uint16_t sched_interval = 0;
     bool sched_ready = false;
 
@@ -81,74 +136,81 @@ void create_jobs_task(void *pvParameters)
                         uint8_t pool_id = POOL_A;
 
                         if (GLOBAL_STATE->dual_enable) {
-                            /* re-init when the ratio or slice length changes, so
-                             * tuning them does not need a restart */
+                            /* re-init when the weights or slice length change,
+                             * so tuning them does not need a restart */
+                            uint8_t weights[POOL_MAX];
+                            build_pool_weights(GLOBAL_STATE, weights);
                             if (!sched_ready ||
-                                sched_ratio != GLOBAL_STATE->dual_ratio_a ||
-                                sched_interval != GLOBAL_STATE->dual_interval_ms) {
-                                sched_ratio = GLOBAL_STATE->dual_ratio_a;
+                                sched_interval != GLOBAL_STATE->dual_interval_ms ||
+                                memcmp(sched_weights, weights, sizeof(weights)) != 0) {
+                                memcpy(sched_weights, weights, sizeof(weights));
                                 sched_interval = GLOBAL_STATE->dual_interval_ms;
-                                pool_scheduler_init(&scheduler, sched_ratio, sched_interval,
-                                                    esp_timer_get_time());
+                                pool_scheduler_init_n(&scheduler, sched_weights, POOL_MAX,
+                                                      sched_interval, esp_timer_get_time());
                                 sched_ready = true;
                             }
 
-                            /* take pool B's newest notify if one has arrived */
-                            while (GLOBAL_STATE->pool_session[POOL_B].queue.count > 0) {
-                                mining_notify *fresh =
-                                    (mining_notify *)queue_dequeue(&GLOBAL_STATE->pool_session[POOL_B].queue);
-                                if (fresh == NULL) break;
-                                if (poolb_notification != NULL) {
-                                    STRATUM_V1_free_mining_notify(poolb_notification);
+                            /* take each pool's newest notify if one has arrived */
+                            for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+                                while (GLOBAL_STATE->pool_session[id].queue.count > 0) {
+                                    mining_notify *fresh =
+                                        (mining_notify *)queue_dequeue(&GLOBAL_STATE->pool_session[id].queue);
+                                    if (fresh == NULL) break;
+                                    if (secondary_notify[id] != NULL) {
+                                        STRATUM_V1_free_mining_notify(secondary_notify[id]);
+                                    }
+                                    secondary_notify[id] = fresh;
+                                    secondary_difficulty[id] = GLOBAL_STATE->pool_session[id].stratum_difficulty;
+                                    secondary_extranonce_2[id] = 0;
                                 }
-                                poolb_notification = fresh;
-                                difficulty_B = GLOBAL_STATE->pool_session[POOL_B].stratum_difficulty;
-                                extranonce_2_B = 0;
                             }
 
                             /*
-                             * Pool B has to still be there, not merely to have
-                             * sent something once. poolb_notification keeps the
-                             * last notify for as long as the miner runs, so on
-                             * its own it stays true across a disconnect and the
-                             * scheduler carries on handing pool B its share of
-                             * the slices -- building work against a job that
-                             * cannot be submitted, on an extranonce that will
-                             * not survive the reconnect. Any nonce found
-                             * against it reaches the submit path, finds
-                             * pool_session[POOL_B].transport NULL and is dropped.
+                             * The chosen pool has to still be there, not merely
+                             * to have sent something once. secondary_notify[]
+                             * keeps the last notify for as long as the miner
+                             * runs, so on its own it stays true across a
+                             * disconnect and the scheduler carries on handing
+                             * that pool its share of the slices -- building work
+                             * against a job that cannot be submitted, on an
+                             * extranonce that will not survive the reconnect.
+                             * Any nonce found against it reaches the submit
+                             * path, finds the transport NULL and is dropped.
                              *
-                             * Nothing reports that. jobs_served[POOL_B] keeps
-                             * counting, so the miner looks like it is splitting
-                             * work as configured while dual_ratio_b of the
-                             * hashrate produces nothing at all, until pool B
-                             * happens to come back.
+                             * Nothing reports that. jobs_served[] would keep
+                             * counting, so the miner would look like it was
+                             * splitting work as configured while that pool's
+                             * share of the hashrate produced nothing at all,
+                             * until it happened to come back.
                              *
-                             * pool_session[POOL_B].transport is published only once the connection
-                             * is up and cleared when it goes down, so it is the
-                             * honest test. Read it under its own lock: the pool
-                             * B task can swap it at any moment.
+                             * The transport is published only once the
+                             * connection is up and cleared when it goes down, so
+                             * it is the honest test. Read it under its own lock:
+                             * the pool task can swap it at any moment.
                              */
-                            bool poolb_up = false;
-                            pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
-                            poolb_up = (GLOBAL_STATE->pool_session[POOL_B].transport != NULL);
-                            pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
-
                             uint8_t chosen = pool_scheduler_select(&scheduler, esp_timer_get_time());
                             GLOBAL_STATE->jobs_selected[chosen]++;
-                            if (chosen == POOL_B && poolb_notification != NULL &&
-                                poolb_up) {
-                                pool_id = POOL_B;
+
+                            if (chosen != POOL_A && secondary_notify[chosen] != NULL) {
+                                bool up = false;
+                                pthread_mutex_lock(&GLOBAL_STATE->pool_session[chosen].transport_lock);
+                                up = (GLOBAL_STATE->pool_session[chosen].transport != NULL);
+                                pthread_mutex_unlock(&GLOBAL_STATE->pool_session[chosen].transport_lock);
+                                if (up) {
+                                    pool_id = chosen;
+                                }
                             }
-                            /* chosen but not served means the job went to the
-                             * other pool; the counters make that visible */
+                            /* chosen but not served means the job fell through
+                             * to pool A; the counters make that visible */
                         }
                         GLOBAL_STATE->jobs_served[pool_id]++;
 
-                        if (pool_id == POOL_B) {
-                            generate_work(GLOBAL_STATE, poolb_notification, extranonce_2_B,
-                                          difficulty_B ? difficulty_B : difficulty, chain_num, POOL_B);
-                            extranonce_2_B++;
+                        if (pool_id != POOL_A) {
+                            generate_work(GLOBAL_STATE, secondary_notify[pool_id],
+                                          secondary_extranonce_2[pool_id],
+                                          secondary_difficulty[pool_id] ? secondary_difficulty[pool_id] : difficulty,
+                                          chain_num, pool_id);
+                            secondary_extranonce_2[pool_id]++;
                         } else {
                             generate_work(GLOBAL_STATE, mining_notification, extranonce_2, difficulty, chain_num, POOL_A);
                             extranonce_2++;
@@ -197,19 +259,19 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
     int extranonce_2_len = 0;
     char extranonce_str[40] = {"\0"};
     /* Each pool has its own extranonce and version mask. Building a job for one
-     * pool with the other's values yields a share it cannot match to a job. */
-    uint32_t version_mask = (pool_id == POOL_B)
-                            ? GLOBAL_STATE->pool_session[POOL_B].version_mask : GLOBAL_STATE->version_mask;
+     * pool with another's values yields a share it cannot match to a job. */
+    uint32_t version_mask = (pool_id != POOL_A)
+                            ? GLOBAL_STATE->pool_session[pool_id].version_mask : GLOBAL_STATE->version_mask;
 
-    if (pool_id == POOL_B) {
-        pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
-        extranonce_2_len = GLOBAL_STATE->pool_session[POOL_B].extranonce_2_len;
-        if (GLOBAL_STATE->pool_session[POOL_B].extranonce_str != NULL) {
-            snprintf(extranonce_str, sizeof(extranonce_str), "%s", GLOBAL_STATE->pool_session[POOL_B].extranonce_str);
+    if (pool_id != POOL_A) {
+        pthread_mutex_lock(&GLOBAL_STATE->pool_session[pool_id].extranonce_lock);
+        extranonce_2_len = GLOBAL_STATE->pool_session[pool_id].extranonce_2_len;
+        if (GLOBAL_STATE->pool_session[pool_id].extranonce_str != NULL) {
+            snprintf(extranonce_str, sizeof(extranonce_str), "%s", GLOBAL_STATE->pool_session[pool_id].extranonce_str);
         }
-        pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].extranonce_lock);
+        pthread_mutex_unlock(&GLOBAL_STATE->pool_session[pool_id].extranonce_lock);
         if (extranonce_str[0] == '\0' || extranonce_2_len <= 0) {
-            /* pool B has not subscribed yet; nothing to build from */
+            /* that pool has not subscribed yet; nothing to build from */
             return;
         }
     } else if(xSemaphoreTake(GLOBAL_STATE->global_parameter_mutex, pdMS_TO_TICKS(2000))){
