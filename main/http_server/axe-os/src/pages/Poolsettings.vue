@@ -32,19 +32,36 @@ interface FormState {
   fallbackStratumTLS: number;
   fallbackStratumExtranonceSubscribe: number;
 
-  poolBURL: string;
-  poolBUser: string;
-  poolBPassword: string | null;
-  poolBTLS: number;
-  poolBExtranonceSubscribe: number;
-  poolBFbURL: string;
-  poolBFbUser: string;
-  poolBFbPassword: string | null;
-  poolBFbTLS: number;
+  secondary: SecondaryPool[];
+  poolCount: number;
   dualEnable: number;
   dualRatioA: number;
   dualSliceMs: number;
 }
+
+/*
+ * One pool that is not pool A. Three of them, for B, C and D -- the same
+ * shape, because the miner treats them the same way: every configured pool
+ * stays connected and the chain is time-sliced between them.
+ */
+interface SecondaryPool {
+  URL: string;
+  User: string;
+  Password: string | null;
+  TLS: number;
+  ExtranonceSubscribe: number;
+  FbURL: string;
+  FbUser: string;
+  FbPassword: string | null;
+  FbTLS: number;
+  Weight: number;
+}
+
+const POOL_LETTERS = ['B', 'C', 'D'];
+const blankSecondary = (): SecondaryPool => ({
+  URL: '', User: '', Password: null, TLS: 0, ExtranonceSubscribe: 0,
+  FbURL: '', FbUser: '', FbPassword: null, FbTLS: 0, Weight: 0,
+});
 
 const formState = reactive<FormState>({
   stratumURL: '',
@@ -58,15 +75,8 @@ const formState = reactive<FormState>({
   fallbackStratumTLS: 0,
   fallbackStratumExtranonceSubscribe: 0,
 
-  poolBURL: '',
-  poolBUser: '',
-  poolBPassword: null,
-  poolBTLS: 0,
-  poolBExtranonceSubscribe: 0,
-  poolBFbURL: '',
-  poolBFbUser: '',
-  poolBFbPassword: null,
-  poolBFbTLS: 0,
+  secondary: [blankSecondary(), blankSecondary(), blankSecondary()],
+  poolCount: 2,
   dualEnable: 0,
   dualRatioA: 50,
   dualSliceMs: 2000,
@@ -75,10 +85,73 @@ const formState = reactive<FormState>({
 const cfgsFormRef = ref<FormInstance>();
 const minerStatusRef = ref<MinerStatusData>();
 
-/* Which pool B endpoint is actually live. Read from the status the page
- * already fetches, so it reflects the miner rather than the form. */
-const poolBUsingFailover = computed(
-    () => ((minerStatusRef.value as any)?.poolBUsingFailover ?? 0) === 1);
+/* Which endpoint each secondary pool is actually on. Read from the status the
+ * page already fetches, so it reflects the miner rather than the form. */
+const usingFailover = (i: number) => (((minerStatusRef.value as any)
+    ?.[`pool${POOL_LETTERS[i]}UsingFailover`] ?? 0) === 1);
+
+/*
+ * Pools beyond B need four ASICs. That is a product decision rather than a
+ * technical one -- work is time-sliced across the whole chain rather than
+ * aimed at a chip, so pool count and ASIC count are independent -- but the
+ * miner enforces it, so the page must not offer what would be ignored.
+ */
+const asicCount = computed(() => Number(appStore.statusRaw?.asicCount ?? 0));
+const canQuad = computed(() => asicCount.value >= 4);
+
+/* How many secondary pools are on show: one for Dual, three for Quad. */
+const shownPools = computed(() => Math.max(0, formState.poolCount - 1));
+
+/*
+ * The split the miner will actually run, mirroring build_pool_weights() in
+ * create_jobs_task.c: pool A takes its percentage, and whatever is left is
+ * divided among the configured pools -- by their own weights where any have
+ * been set, evenly where none have. Shown live, because three weights and a
+ * percentage are hard to hold in your head.
+ */
+const splitPreview = computed(() => {
+  const active = formState.secondary
+      .slice(0, shownPools.value)
+      .map((p, i) => ({ letter: POOL_LETTERS[i], url: p.URL.trim(), weight: Number(p.Weight) || 0 }))
+      .filter((p) => p.url !== '');
+
+  if (!formState.dualEnable || active.length === 0) {
+    return [{ letter: 'A', pct: 100 }];
+  }
+
+  const ratioA = Math.min(100, Math.max(0, Number(formState.dualRatioA) || 0));
+  const stated = active.reduce((sum, p) => sum + p.weight, 0);
+  const rest = 100 - ratioA;
+
+  const weights = [
+    { letter: 'A', weight: ratioA },
+    ...active.map((p) => ({
+      letter: p.letter,
+      weight: stated > 0 ? p.weight : Math.floor(rest / active.length),
+    })),
+  ];
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  if (total <= 0) {
+    return [{ letter: 'A', pct: 100 }];
+  }
+  return weights.map((w) => ({ letter: w.letter, pct: Math.round((w.weight / total) * 1000) / 10 }));
+});
+
+/*
+ * Reducing the pool count clears the pools it drops.
+ *
+ * The miner has no notion of a "mode": it connects every pool that has a
+ * host, so a pool left filled in but hidden here would quietly keep mining.
+ * Clearing the host is what removes it, and doing that here keeps the page
+ * showing what the miner will do.
+ */
+const onPoolCountChange = (next: number) => {
+  for (let i = next - 1; i < formState.secondary.length; i++) {
+    formState.secondary[i] = blankSecondary();
+  }
+  formState.poolCount = next;
+  formState.dualEnable = next > 1 ? 1 : 0;
+};
 const actionStatus = reactive<ActionStatus>({saving: false, restarting: false});
 const activeTab = ref<string>('primary'); // 控制 Tab 切换
 
@@ -121,8 +194,13 @@ const syncMinerStatus = async () => {
   }
 }
 
-const onPoolBSelect = (value: string) => {
-  formState.poolBURL = value;
+/* Which secondary pool a Quick Select dropdown is filling in. Set on focus,
+ * because the select itself only reports the value chosen, not which of the
+ * three rows it belongs to. */
+const secondaryQuickSelectIndex = ref<number>(0);
+
+const onSecondaryPoolSelect = (value: string) => {
+  formState.secondary[secondaryQuickSelectIndex.value].URL = value;
 };
 
 const updateSys = async (values: any) => {
@@ -180,34 +258,46 @@ const updateSys = async (values: any) => {
       fallbackStratumExtranonceSubscribe: values.fallbackStratumExtranonceSubscribe,
     }
 
-    // Dual pool. Only send the endpoint when one is set, so saving the page
-    // with the tab untouched cannot blank a configured pool B.
-    const poolB = parseAddress(formState.poolBURL);
-    if (poolB.url) {
-      Object.assign(formData, {
-        poolBUrl: poolB.url,
-        poolBPort: poolB.port,
-        poolBUser: formState.poolBUser,
-        poolBTLS: formState.poolBTLS,
-        poolBExtranonceSubscribe: formState.poolBExtranonceSubscribe,
-      });
-      if (formState.poolBPassword && formState.poolBPassword !== '*****') {
-        Object.assign(formData, { poolBPass: formState.poolBPassword });
-      }
-    }
+    /*
+     * Every secondary pool. Pools past the chosen count were blanked by
+     * onPoolCountChange, and a blank host is sent as a blank -- that is what
+     * removes a pool from the miner, which otherwise connects anything with a
+     * host in it.
+     */
+    formState.secondary.forEach((pool, i) => {
+      const L = POOL_LETTERS[i];
+      const primary = parseAddress(pool.URL);
 
-    /* Pool B's failover is independent of pool A's, and of pool B's primary --
-     * it is cleared by emptying the field, not by clearing the primary. */
-    const poolBFb = parseAddress(formState.poolBFbURL);
-    Object.assign(formData, {
-      poolBFbUrl: poolBFb.url,
-      poolBFbPort: poolBFb.url ? poolBFb.port : 0,
-      poolBFbUser: formState.poolBFbUser,
-      poolBFbTLS: formState.poolBFbTLS,
+      Object.assign(formData, {
+        [`pool${L}Url`]: primary.url,
+        [`pool${L}Port`]: primary.url ? primary.port : 3333,
+        [`pool${L}User`]: pool.User,
+        [`pool${L}TLS`]: pool.TLS,
+        [`pool${L}ExtranonceSubscribe`]: pool.ExtranonceSubscribe,
+        [`pool${L}Weight`]: Number(pool.Weight) || 0,
+      });
+      /* Only sent when the user typed one: the API never hands a password
+       * back, so an untouched field holds the '*****' placeholder and
+       * sending that would overwrite the stored secret with five asterisks. */
+      if (pool.Password && pool.Password !== '*****') {
+        Object.assign(formData, { [`pool${L}Pass`]: pool.Password });
+      }
+
+      /* Each pool's failover is independent of pool A's and of its own
+       * primary -- it is cleared by emptying the field, not by clearing the
+       * primary. */
+      const fb = parseAddress(pool.FbURL);
+      Object.assign(formData, {
+        [`pool${L}FbUrl`]: fb.url,
+        [`pool${L}FbPort`]: fb.url ? fb.port : 0,
+        [`pool${L}FbUser`]: pool.FbUser,
+        [`pool${L}FbTLS`]: pool.FbTLS,
+      });
+      if (pool.FbPassword && pool.FbPassword !== '*****') {
+        Object.assign(formData, { [`pool${L}FbPass`]: pool.FbPassword });
+      }
     });
-    if (formState.poolBFbPassword && formState.poolBFbPassword !== '*****') {
-      Object.assign(formData, { poolBFbPass: formState.poolBFbPassword });
-    }
+
     Object.assign(formData, {
       dualEnable: formState.dualEnable,
       dualRatioA: formState.dualRatioA,
@@ -272,12 +362,25 @@ const applyPendingOverFormState = () => {
     return;
   }
 
-  if (pending.poolBUrl) {
-    formState.poolBURL = `${pending.poolBUrl}:${pending.poolBPort ?? 3333}`;
-  }
-  if (pending.poolBFbUrl) {
-    formState.poolBFbURL = `${pending.poolBFbUrl}:${pending.poolBFbPort ?? 3333}`;
-  }
+  POOL_LETTERS.forEach((L, i) => {
+    const pool = formState.secondary[i];
+    if (pending[`pool${L}Url`] !== undefined) {
+      pool.URL = pending[`pool${L}Url`]
+          ? `${pending[`pool${L}Url`]}:${pending[`pool${L}Port`] ?? 3333}` : '';
+    }
+    if (pending[`pool${L}FbUrl`] !== undefined) {
+      pool.FbURL = pending[`pool${L}FbUrl`]
+          ? `${pending[`pool${L}FbUrl`]}:${pending[`pool${L}FbPort`] ?? 3333}` : '';
+    }
+    (['User', 'TLS', 'ExtranonceSubscribe', 'FbUser', 'FbTLS', 'Weight'] as const)
+        .forEach((field) => {
+          if (pending[`pool${L}${field}`] !== undefined) {
+            (pool as any)[field] = pending[`pool${L}${field}`];
+          }
+        });
+  });
+  formState.poolCount = 1 + formState.secondary.filter((p) => p.URL !== '').length;
+
   if (pending.stratumURL) {
     formState.stratumURL = `${pending.stratumURL}:${pending.stratumPort ?? 3333}`;
   }
@@ -286,10 +389,11 @@ const applyPendingOverFormState = () => {
         `${pending.fallbackStratumURL}:${pending.fallbackStratumPort ?? 3333}`;
   }
 
+  /* The secondary pools are handled above; these are pool A's and the
+   * settings that apply to the split as a whole. */
   const direct: Array<keyof typeof formState> = [
     'stratumUser', 'fallbackStratumUser', 'stratumTLS', 'fallbackStratumTLS',
     'stratumExtranonceSubscribe', 'fallbackStratumExtranonceSubscribe',
-    'poolBUser', 'poolBTLS', 'poolBExtranonceSubscribe', 'poolBFbUser', 'poolBFbTLS',
     'dualEnable', 'dualRatioA', 'dualSliceMs',
   ] as any;
 
@@ -319,15 +423,27 @@ onMounted(async () => {
     /* What the miner is running. Anything saved since is layered over it
      * below -- see appStore.pendingSettings. */
     const st: any = minerStatusRef.value;
-    formState.poolBURL = st.poolBUrl ? `${st.poolBUrl}:${st.poolBPort ?? 3333}` : '';
-    formState.poolBUser = st.poolBUser ?? '';
-    formState.poolBPassword = st.poolBUrl ? '*****' : '';
-    formState.poolBTLS = st.poolBTLS ?? 0;
-    formState.poolBExtranonceSubscribe = st.poolBExtranonceSubscribe ?? 0;
-    formState.poolBFbURL = st.poolBFbUrl ? `${st.poolBFbUrl}:${st.poolBFbPort ?? 3333}` : '';
-    formState.poolBFbUser = st.poolBFbUser ?? '';
-    formState.poolBFbPassword = st.poolBFbUrl ? '*****' : '';
-    formState.poolBFbTLS = st.poolBFbTLS ?? 0;
+    POOL_LETTERS.forEach((L, i) => {
+      const pool = formState.secondary[i];
+      pool.URL = st[`pool${L}Url`] ? `${st[`pool${L}Url`]}:${st[`pool${L}Port`] ?? 3333}` : '';
+      pool.User = st[`pool${L}User`] ?? '';
+      /* The API never returns a password. A placeholder stands in so the
+       * field is not blank for a pool that has one, and updateSys only sends
+       * it back when the user has replaced it. */
+      pool.Password = st[`pool${L}Url`] ? '*****' : '';
+      pool.TLS = st[`pool${L}TLS`] ?? 0;
+      pool.ExtranonceSubscribe = st[`pool${L}ExtranonceSubscribe`] ?? 0;
+      pool.FbURL = st[`pool${L}FbUrl`] ? `${st[`pool${L}FbUrl`]}:${st[`pool${L}FbPort`] ?? 3333}` : '';
+      pool.FbUser = st[`pool${L}FbUser`] ?? '';
+      pool.FbPassword = st[`pool${L}FbUrl`] ? '*****' : '';
+      pool.FbTLS = st[`pool${L}FbTLS`] ?? 0;
+      pool.Weight = st[`pool${L}Weight`] ?? 0;
+    });
+
+    /* The mode is read from the configuration rather than stored: a pool is
+     * in play when it has a host, so counting them is what the miner itself
+     * does. One configured secondary shows as Dual, three as Quad. */
+    formState.poolCount = 1 + formState.secondary.filter((p) => p.URL !== '').length;
     formState.dualEnable = st.dualEnable ?? 0;
     formState.dualRatioA = st.dualRatioA ?? 50;
     formState.dualSliceMs = st.dualSliceMs ?? 2000;
@@ -446,98 +562,125 @@ onMounted(async () => {
                 <div class="dual-intro-body">{{ dpl('dual_intro_body') }}</div>
               </div>
 
-              <a-form-item :colon="false" style="margin-bottom: 1.25rem;">
-                <div class="ps-switch-row">
-                  <span class="ps-switch-label">{{ dpl('dual_enable') }}</span>
-                  <a-switch :checked="formState.dualEnable === 1"
-                            @change="(checked: boolean) => formState.dualEnable = checked ? 1 : 0" />
+              <!-- How many pools to divide the chain between. The miner has
+                   no stored "mode": a pool is in play when it has a host, so
+                   this adds and removes panels and the hosts decide. -->
+              <div class="pool-mode">
+                <div class="pool-mode-head">
+                  <span class="ps-switch-label">{{ dpl('mode') }}</span>
                 </div>
-              </a-form-item>
-
-              <a-form-item label="Quick Select">
-                <a-select class="pool-quick-select" placeholder="Select a recommended solo pool"
-                          @change="onPoolBSelect" style="width: 100%"
-                          dropdownClassName="pool-quick-select-dropdown">
-                  <a-select-option v-for="pool in recommendedPools" :key="pool.id" :value="pool.value">
-                    <div class="pool-option">
-                      <img :src="pool.logo" class="pool-logo" />
-                      <div class="pool-info">
-                        <div class="pool-name">{{ pool.label }}</div>
-                        <div class="pool-addr">{{ pool.value }}</div>
-                      </div>
-                    </div>
-                  </a-select-option>
-                </a-select>
-              </a-form-item>
-
-              <a-form-item :label="pl('stratum_host')" name="poolBURL">
-                <a-input v-model:value="formState.poolBURL" placeholder="host:port"></a-input>
-              </a-form-item>
-              <a-form-item :label="pl('stratum_user')" name="poolBUser">
-                <a-input v-model:value="formState.poolBUser"></a-input>
-              </a-form-item>
-              <a-form-item :label="pl('stratum_password')" name="poolBPassword">
-                <a-input-password v-model:value="formState.poolBPassword"></a-input-password>
-              </a-form-item>
-
-              <a-form-item v-if="appStore.currentModelConfig?.support_tls" name="poolBTLS" :colon="false" style="margin-bottom: 0;">
-                <div class="ps-switch-row">
-                  <span class="ps-switch-label">{{ pl('stratum_tls') }}</span>
-                  <a-switch :checked="formState.poolBTLS === 1"
-                            @change="(checked: boolean) => formState.poolBTLS = checked ? 1 : 0" />
+                <a-radio-group :value="formState.poolCount" button-style="solid"
+                               @change="(e: any) => onPoolCountChange(e.target.value)">
+                  <a-radio-button :value="1">{{ dpl('mode_single') }}</a-radio-button>
+                  <a-radio-button :value="2">{{ dpl('mode_dual') }}</a-radio-button>
+                  <a-radio-button :value="3" :disabled="!canQuad">{{ dpl('mode_triple') }}</a-radio-button>
+                  <a-radio-button :value="4" :disabled="!canQuad">{{ dpl('mode_quad') }}</a-radio-button>
+                </a-radio-group>
+                <div class="dual-hint" style="margin-top: .6rem;">
+                  {{ canQuad ? dpl('mode_hint') : dpl('mode_needs_four') }}
                 </div>
-              </a-form-item>
-              <!-- Pool B could always receive an extranonce rotation; it just
-                   never asked for one, and there was no way to ask. -->
-              <a-form-item v-if="appStore.currentModelConfig?.support_xnsub" name="poolBExtranonceSubscribe" :colon="false" style="margin-bottom: 0;">
-                <div class="ps-switch-row">
-                  <span class="ps-switch-label">{{ pl('stratum_xnsub') }}</span>
-                  <a-switch :checked="formState.poolBExtranonceSubscribe === 1"
-                            @change="(checked: boolean) => formState.poolBExtranonceSubscribe = checked ? 1 : 0" />
-                </div>
-              </a-form-item>
-
-              <div class="dual-fb">
-                <div class="dual-fb-head">
-                  <span class="ps-switch-label">{{ dpl('dual_fb') }}</span>
-                  <span v-if="formState.poolBFbURL"
-                        class="dual-fb-state"
-                        :class="{ 'is-live': poolBUsingFailover }">
-                    {{ poolBUsingFailover ? dpl('dual_fb_active') : dpl('dual_fb_primary') }}
-                  </span>
-                </div>
-                <div class="dual-hint" style="margin-bottom: .85rem;">{{ dpl('dual_fb_hint') }}</div>
-
-                <a-form-item :label="pl('stratum_host')" name="poolBFbURL">
-                  <a-input v-model:value="formState.poolBFbURL" placeholder="host:port"></a-input>
-                </a-form-item>
-                <a-form-item :label="pl('stratum_user')" name="poolBFbUser">
-                  <a-input v-model:value="formState.poolBFbUser"></a-input>
-                </a-form-item>
-                <a-form-item :label="pl('stratum_password')" name="poolBFbPassword">
-                  <a-input-password v-model:value="formState.poolBFbPassword"></a-input-password>
-                </a-form-item>
-                <a-form-item v-if="appStore.currentModelConfig?.support_tls" name="poolBFbTLS"
-                             :colon="false" style="margin-bottom: 0;">
-                  <div class="ps-switch-row">
-                    <span class="ps-switch-label">{{ pl('stratum_tls') }}</span>
-                    <a-switch :checked="formState.poolBFbTLS === 1"
-                              @change="(checked: boolean) => formState.poolBFbTLS = checked ? 1 : 0" />
-                  </div>
-                </a-form-item>
               </div>
 
-              <div class="dual-split">
+              <!-- One panel per secondary pool. Identical, because the miner
+                   treats them identically. -->
+              <div v-for="(pool, i) in formState.secondary.slice(0, shownPools)" :key="i"
+                   class="pool-panel">
+                <div class="pool-panel-head">
+                  <span class="pool-panel-title">{{ dpl('pool_named').replace('%s', POOL_LETTERS[i]) }}</span>
+                  <span v-if="pool.FbURL" class="dual-fb-state" :class="{ 'is-live': usingFailover(i) }">
+                    {{ usingFailover(i) ? dpl('dual_fb_active') : dpl('dual_fb_primary') }}
+                  </span>
+                </div>
+
+                <a-form-item label="Quick Select">
+                  <a-select class="pool-quick-select" placeholder="Select a recommended solo pool"
+                            @focus="secondaryQuickSelectIndex = i"
+                            @change="onSecondaryPoolSelect" style="width: 100%"
+                            dropdownClassName="pool-quick-select-dropdown">
+                    <a-select-option v-for="p in recommendedPools" :key="p.id" :value="p.value">
+                      <div class="pool-option">
+                        <img :src="p.logo" class="pool-logo" />
+                        <div class="pool-info">
+                          <div class="pool-name">{{ p.label }}</div>
+                          <div class="pool-addr">{{ p.value }}</div>
+                        </div>
+                      </div>
+                    </a-select-option>
+                  </a-select>
+                </a-form-item>
+
+                <a-form-item :label="pl('stratum_host')">
+                  <a-input v-model:value="pool.URL" placeholder="host:port"></a-input>
+                </a-form-item>
+                <a-form-item :label="pl('stratum_user')">
+                  <a-input v-model:value="pool.User"></a-input>
+                </a-form-item>
+                <a-form-item :label="pl('stratum_password')">
+                  <a-input-password v-model:value="pool.Password"></a-input-password>
+                </a-form-item>
+
+                <!-- Only shown with more than two pools. With two, the A/B
+                     slider below says the same thing more plainly. -->
+                <a-form-item v-if="shownPools > 1" :label="dpl('weight')">
+                  <a-input-number v-model:value="pool.Weight" :min="0" :max="100" :step="5" />
+                  <span class="dual-hint" style="margin-left: .75rem;">{{ dpl('weight_hint') }}</span>
+                </a-form-item>
+
+                <a-form-item v-if="appStore.currentModelConfig?.support_tls" :colon="false" style="margin-bottom: 0;">
+                  <div class="ps-switch-row">
+                    <span class="ps-switch-label">{{ pl('stratum_tls') }}</span>
+                    <a-switch :checked="pool.TLS === 1"
+                              @change="(checked: boolean) => pool.TLS = checked ? 1 : 0" />
+                  </div>
+                </a-form-item>
+                <!-- A secondary pool could always receive an extranonce
+                     rotation; it just never asked for one, and there was no
+                     way to ask. -->
+                <a-form-item v-if="appStore.currentModelConfig?.support_xnsub" :colon="false" style="margin-bottom: 0;">
+                  <div class="ps-switch-row">
+                    <span class="ps-switch-label">{{ pl('stratum_xnsub') }}</span>
+                    <a-switch :checked="pool.ExtranonceSubscribe === 1"
+                              @change="(checked: boolean) => pool.ExtranonceSubscribe = checked ? 1 : 0" />
+                  </div>
+                </a-form-item>
+
+                <div class="dual-fb">
+                  <div class="dual-fb-head">
+                    <span class="ps-switch-label">{{ dpl('dual_fb') }}</span>
+                  </div>
+                  <div class="dual-hint" style="margin-bottom: .85rem;">{{ dpl('dual_fb_hint') }}</div>
+
+                  <a-form-item :label="pl('stratum_host')">
+                    <a-input v-model:value="pool.FbURL" placeholder="host:port"></a-input>
+                  </a-form-item>
+                  <a-form-item :label="pl('stratum_user')">
+                    <a-input v-model:value="pool.FbUser"></a-input>
+                  </a-form-item>
+                  <a-form-item :label="pl('stratum_password')">
+                    <a-input-password v-model:value="pool.FbPassword"></a-input-password>
+                  </a-form-item>
+                  <a-form-item v-if="appStore.currentModelConfig?.support_tls" :colon="false" style="margin-bottom: 0;">
+                    <div class="ps-switch-row">
+                      <span class="ps-switch-label">{{ pl('stratum_tls') }}</span>
+                      <a-switch :checked="pool.FbTLS === 1"
+                                @change="(checked: boolean) => pool.FbTLS = checked ? 1 : 0" />
+                    </div>
+                  </a-form-item>
+                </div>
+              </div>
+
+              <div v-if="formState.dualEnable === 1" class="dual-split">
                 <div class="dual-split-head">
                   <span class="ps-switch-label">{{ dpl('dual_split') }}</span>
                   <span class="dual-split-value">
-                    <span class="pool-a">A {{ formState.dualRatioA }}%</span>
-                    <span class="sep">/</span>
-                    <span class="pool-b">B {{ 100 - formState.dualRatioA }}%</span>
+                    <template v-for="(s, idx) in splitPreview" :key="s.letter">
+                      <span class="sep" v-if="idx > 0">/</span>
+                      <span :class="s.letter === 'A' ? 'pool-a' : 'pool-b'">{{ s.letter }} {{ s.pct }}%</span>
+                    </template>
                   </span>
                 </div>
                 <a-slider v-model:value="formState.dualRatioA" :min="0" :max="100" :step="5"
-                          :tip-formatter="(v: number) => `A ${v}% / B ${100 - v}%`" />
+                          :tip-formatter="(v: number) => `A ${v}%`" />
                 <div class="dual-hint">{{ dpl('dual_split_hint') }}</div>
               </div>
 
@@ -587,6 +730,41 @@ onMounted(async () => {
 }
 
 /* ---- dual pool ---- */
+/* The pool-count selector, above the panels it adds and removes. */
+.pool-mode {
+  margin-bottom: 1.5rem;
+}
+
+.pool-mode-head {
+  margin-bottom: .5rem;
+}
+
+/*
+ * One per secondary pool. Boxed rather than separated by a rule, because with
+ * three of them on the page a reader needs to see at a glance where pool C
+ * ends and pool D begins -- and each one carries its own failover block,
+ * which is itself rule-separated.
+ */
+.pool-panel {
+  border: 1px solid var(--surface-border);
+  border-radius: var(--card-border-radius);
+  padding: 1rem 1.1rem .4rem;
+  margin-bottom: 1.25rem;
+}
+
+.pool-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .9rem;
+}
+
+.pool-panel-title {
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
 .dual-fb {
   margin: 1.5rem 0 .5rem;
   padding-top: 1.25rem;
