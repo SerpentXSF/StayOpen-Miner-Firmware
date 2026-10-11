@@ -167,9 +167,15 @@ void create_jobs_task(void *pvParameters)
 
                             /* take each pool's newest notify if one has arrived */
                             for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
-                                while (GLOBAL_STATE->pool_session[id].queue.count > 0) {
-                                    mining_notify *fresh =
-                                        (mining_notify *)queue_dequeue(&GLOBAL_STATE->pool_session[id].queue);
+                                /* Polled, not a count test followed by a
+                                 * blocking dequeue: that pool's own task
+                                 * clears this queue, and a clear landing
+                                 * between the two left this task -- the only
+                                 * one that builds work for ANY pool -- parked
+                                 * on an empty queue. */
+                                for (;;) {
+                                    mining_notify *fresh = (mining_notify *)
+                                        queue_dequeue_timeout(&GLOBAL_STATE->pool_session[id].queue, 0);
                                     if (fresh == NULL) break;
                                     if (secondary_notify[id] != NULL) {
                                         STRATUM_V1_free_mining_notify(secondary_notify[id]);

@@ -1,4 +1,5 @@
 #include "work_queue.h"
+#include <time.h>
 #include "esp_log.h"
 
 void queue_init(work_queue *queue)
@@ -35,6 +36,38 @@ void *queue_dequeue(work_queue *queue)
     while (queue->count == 0)
     {
         pthread_cond_wait(&queue->not_empty, &queue->lock);
+    }
+
+    void *next_work = queue->buffer[queue->head];
+    queue->head = (queue->head + 1) % QUEUE_SIZE;
+    queue->count--;
+
+    pthread_cond_signal(&queue->not_full);
+    pthread_mutex_unlock(&queue->lock);
+
+    return next_work;
+}
+
+void *queue_dequeue_timeout(work_queue *queue, uint32_t timeout_ms)
+{
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec  += timeout_ms / 1000u;
+    deadline.tv_nsec += (long) (timeout_ms % 1000u) * 1000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&queue->lock);
+
+    while (queue->count == 0) {
+        if (pthread_cond_timedwait(&queue->not_empty, &queue->lock, &deadline) != 0) {
+            /* Timed out, or woken spuriously past the deadline. Either way
+             * there is nothing here and the caller wants control back. */
+            pthread_mutex_unlock(&queue->lock);
+            return NULL;
+        }
     }
 
     void *next_work = queue->buffer[queue->head];

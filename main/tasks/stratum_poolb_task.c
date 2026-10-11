@@ -297,9 +297,16 @@ static bool pool_handle(GlobalState *GLOBAL_STATE, pool_id_t id,
              */
             pool_abandon_work(GLOBAL_STATE, id);
         }
+        /* Poll rather than test-then-block: create_jobs_task drains this
+         * same queue, and if it emptied between the count test and the
+         * dequeue this task -- the only producer -- waited forever on a
+         * queue only it could fill, taking every secondary session with
+         * it. A NULL here just means someone else already made room. */
         if (ses->queue.count == QUEUE_SIZE) {
-            mining_notify *stale = (mining_notify *) queue_dequeue(&ses->queue);
-            STRATUM_V1_free_mining_notify(stale);
+            mining_notify *stale = (mining_notify *) queue_dequeue_timeout(&ses->queue, 0);
+            if (stale != NULL) {
+                STRATUM_V1_free_mining_notify(stale);
+            }
         }
         msg->mining_notification->difficulty = ses->stratum_difficulty;
         queue_enqueue(&ses->queue, msg->mining_notification);
