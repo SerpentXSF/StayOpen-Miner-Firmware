@@ -20,6 +20,16 @@ _Static_assert(POOL_MAX == 4, "SystemModule::pool[] must match POOL_MAX");
 
 static const char *TAG = "create_jobs_task";
 
+/*
+ * How long to wait on pool A before going round anyway.
+ *
+ * Long enough that a busy pool A costs no extra wakeups, short enough that
+ * the secondary pools keep being served while pool A is away. Jobs are
+ * buffered to QUEUE_LOW_WATER_MARK, so a gap this size is invisible.
+ */
+#define POOL_A_WAIT_MS 250
+
+
 #define QUEUE_LOW_WATER_MARK 10 // Adjust based on your requirements
 
 static bool should_generate_more_work(GlobalState *GLOBAL_STATE, uint32_t chain_num);
@@ -116,16 +126,42 @@ void create_jobs_task(void *pvParameters)
     uint16_t sched_interval = 0;
     bool sched_ready = false;
 
+    /*
+     * Pool A's latest notify, held the same way the others are.
+     *
+     * This used to be a blocking dequeue, and that made pool A a single point
+     * of failure for every pool: this is the only task that builds work for
+     * any of them, so while pool A was silent -- a disconnect, a slow
+     * reconnect, a DNS failure -- it sat here and pools B, C and D held open
+     * sockets with nothing to hash. The whole point of mining several pools
+     * is that one of them going away is survivable.
+     *
+     * Now it waits a bounded time, keeps whatever pool A last sent, and goes
+     * round regardless. With no pool A work yet there is still nothing to
+     * build for pool A, but the secondaries are served from their own held
+     * notifies as usual.
+     */
+    mining_notify *mining_notification = NULL;
+
     while (1)
     {
-        mining_notify *mining_notification = (mining_notify *)queue_dequeue(&GLOBAL_STATE->stratum_queue);
-        if (mining_notification == NULL) {
-            ESP_LOGE(TAG, "Failed to dequeue mining notification");
-            vTaskDelay(100 / portTICK_PERIOD_MS); // Wait a bit before trying again
-            continue;
+        mining_notify *fresh = (mining_notify *)
+            queue_dequeue_timeout(&GLOBAL_STATE->stratum_queue, POOL_A_WAIT_MS);
+
+        if (fresh != NULL) {
+            if (mining_notification != NULL) {
+                STRATUM_V1_free_mining_notify(mining_notification);
+            }
+            mining_notification = fresh;
+            ESP_LOGD(TAG, "New Work Dequeued %s", mining_notification->job_id);
         }
 
-        ESP_LOGD(TAG, "New Work Dequeued %s", mining_notification->job_id);
+        if (mining_notification == NULL) {
+            /* Pool A has not sent anything yet. Nothing of its own to build
+             * from, and the secondaries have no work either until their own
+             * notifies arrive, so there is nothing useful to do this pass. */
+            continue;
+        }
 
         if (GLOBAL_STATE->new_set_mining_difficulty_msg)
         {
@@ -266,7 +302,9 @@ void create_jobs_task(void *pvParameters)
             }
         }
 
-        STRATUM_V1_free_mining_notify(mining_notification);
+        /* Deliberately not freed here: it is pool A's latest notify and is
+         * held until pool A sends another, exactly as each secondary pool's
+         * is. Freeing it per pass is what forced the blocking dequeue. */
     }
 }
 

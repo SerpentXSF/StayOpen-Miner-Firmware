@@ -158,20 +158,33 @@ void ASIC_result_task(void *pvParameters)
                 pthread_mutex_unlock(&ses->transport_lock);
             } else {
                 char * user = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
-                /*TODO: submit a share without rolled version.*/
-                int ret = STRATUM_V1_submit_share(
-                    GLOBAL_STATE->transport,
-                    GLOBAL_STATE->send_uid++,
-                    user,
-                    job_jobid,
-                    job_en2,
-                    job_ntime,
-                    asic_result->nonce,
-                    asic_result->rolled_version ^ job_version);
 
-                if (ret < 0) {
-                    ESP_LOGI(TAG, "Unable to write share to transport. Closing connection. Ret: %d", ret);
-                    stratum_close_connection(GLOBAL_STATE);
+                /*
+                 * stratum_close_connection() nulls this on any disconnect,
+                 * and work built before that is still in flight afterwards.
+                 * The secondary branch above has always checked; this one
+                 * wrote regardless, which was survivable only because the
+                 * blocking dequeue meant no work was built while pool A was
+                 * down. It is built now, so the check has to be here.
+                 */
+                if (GLOBAL_STATE->transport == NULL) {
+                    ESP_LOGD(TAG, "pool A share dropped: not connected");
+                } else {
+                    /*TODO: submit a share without rolled version.*/
+                    int ret = STRATUM_V1_submit_share(
+                        GLOBAL_STATE->transport,
+                        GLOBAL_STATE->send_uid++,
+                        user,
+                        job_jobid,
+                        job_en2,
+                        job_ntime,
+                        asic_result->nonce,
+                        asic_result->rolled_version ^ job_version);
+
+                    if (ret < 0) {
+                        ESP_LOGI(TAG, "Unable to write share to transport. Closing connection. Ret: %d", ret);
+                        stratum_close_connection(GLOBAL_STATE);
+                    }
                 }
             }
         }
