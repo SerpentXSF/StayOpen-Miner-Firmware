@@ -1281,18 +1281,35 @@ static esp_err_t PATCH_update_settings(httpd_req_t * req)
                 (strcmp(field->nvs, "port") == 0 || strcmp(field->nvs, "fbport") == 0)) {
                 continue;
             }
-            nvs_config_set_u16(key, item->valueint);
+
+            int value = item->valueint;
+
+            /*
+             * Clamp the weight to what the scheduler can carry.
+             *
+             * build_pool_weights() assembles a uint8_t array, so a weight
+             * above 255 wraps: 256 becomes 0 and a pool the user asked for
+             * silently never wins a slice, while the "has anyone set a
+             * weight" test still sees the untruncated value and so does not
+             * fall back to an even split either. The web UI caps at 100, but
+             * nothing stops the API or a hand-edited NVS entry.
+             */
+            if (strcmp(field->nvs, "wt") == 0) {
+                if (value < 0)   value = 0;
+                if (value > 100) value = 100;
+            }
+            nvs_config_set_u16(key, value);
 
             /* Taken live as well as stored: the secondary task reads it each
              * time it subscribes, so turning it on need not wait for a
              * restart. */
             if (strcmp(field->nvs, "xnsub") == 0) {
-                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].extranonce_subscribe = item->valueint;
+                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].extranonce_subscribe = value;
             }
             /* Likewise the weight: create_jobs_task rebuilds the scheduler
              * whenever these change. */
             if (strcmp(field->nvs, "wt") == 0) {
-                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].weight = item->valueint;
+                GLOBAL_STATE->SYSTEM_MODULE.pool[pid].weight = value;
             }
         }
     }

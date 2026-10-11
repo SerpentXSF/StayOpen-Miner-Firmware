@@ -25,6 +25,13 @@ static const char *TAG = "create_jobs_task";
 static bool should_generate_more_work(GlobalState *GLOBAL_STATE, uint32_t chain_num);
 static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification, uint64_t extranonce_2, uint32_t difficulty, uint32_t chain_num, uint8_t pool_id);
 
+/* A pool's weight, clamped to what the scheduler's uint8_t array holds. */
+static uint8_t pool_weight(const SystemModule *module, pool_id_t id)
+{
+    uint16_t w = module->pool[id].weight;
+    return (uint8_t) (w > 100 ? 100 : w);
+}
+
 /*
  * Work out each pool's share of the slices.
  *
@@ -48,11 +55,19 @@ static void build_pool_weights(GlobalState *GLOBAL_STATE, uint8_t *weights)
 
     memset(weights, 0, POOL_MAX);
 
+    /*
+     * Clamped on the way in, because `weights` is a uint8_t array and the
+     * stored weight is a uint16_t. Above 255 it wraps -- 256 becomes 0, so a
+     * pool the owner asked for never wins a slice, while `stated` below still
+     * sees the untruncated value and so does not fall back to an even split
+     * either. The settings handler clamps too; this is the one that holds for
+     * a value written straight to NVS.
+     */
     for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
         const char *url = module->pool[id].url;
         if (url != NULL && url[0] != '\0') {
             configured++;
-            stated += module->pool[id].weight;
+            stated += pool_weight(module, id);
         }
     }
 
@@ -73,7 +88,7 @@ static void build_pool_weights(GlobalState *GLOBAL_STATE, uint8_t *weights)
         if (url == NULL || url[0] == '\0') {
             continue;
         }
-        weights[id] = (stated > 0) ? module->pool[id].weight
+        weights[id] = (stated > 0) ? pool_weight(module, id)
                                    : (uint8_t) (rest / configured);
     }
 }

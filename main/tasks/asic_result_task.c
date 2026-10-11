@@ -124,12 +124,24 @@ void ASIC_result_task(void *pvParameters)
 
                 /* Hold the pool's transport_lock across the write: its task
                  * can be tearing the handle down at any moment. */
+                /*
+                 * The worker this pool actually authorized as. A pool on its
+                 * failover endpoint subscribed and authorized with fb_user --
+                 * a different pool, so usually a different wallet and worker
+                 * -- and submitting under the primary's name gets every share
+                 * refused as an unauthorized worker for as long as the
+                 * failover lasts. Pool A's branch below has always read its
+                 * is_using_fallback for this reason; this one did not.
+                 */
+                const PoolConfig *cfg = &GLOBAL_STATE->SYSTEM_MODULE.pool[job_pool_id];
+                char *pool_user = cfg->is_using_failover ? cfg->fb_user : cfg->user;
+
                 pthread_mutex_lock(&ses->transport_lock);
                 if (ses->transport != NULL) {
                     int ret2 = STRATUM_V1_submit_share(
                         ses->transport,
                         ses->send_uid++,
-                        GLOBAL_STATE->SYSTEM_MODULE.pool[job_pool_id].user,
+                        pool_user,
                         job_jobid,
                         job_en2,
                         job_ntime,
