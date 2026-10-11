@@ -102,32 +102,48 @@ void ASIC_result_task(void *pvParameters)
         if (nonce_diff >= job_pool_diff)
         {
             /*
-             * A share belongs to the pool that issued its job. Sending pool B's
-             * work to pool A gets it rejected as an unknown job id, and would
-             * also credit the wrong pool. The job carries pool_id for exactly
-             * this reason.
+             * A share belongs to the pool that issued its job. Sending one
+             * pool's work to another gets it rejected as an unknown job id,
+             * and would credit the wrong pool. The job carries pool_id for
+             * exactly this reason.
+             *
+             * The test is "not pool A", not "is pool B". It was the latter
+             * once, when pool B was the only other pool, and a third pool
+             * made that silently wrong: a share from pool C or D is not
+             * POOL_B, so it fell into the pool A branch below and was
+             * submitted to pool A carrying another pool's job id, extranonce
+             * and ntime. Measured on a BC04 mining four pools: C and D
+             * reported zero shares over fourteen minutes where each should
+             * have found about thirty, while pool A's reject rate went from
+             * four in twenty thousand to thirty-one in two hundred and
+             * forty-eight. Both pools looked broken; neither was.
              */
-            if (GLOBAL_STATE->dual_enable && job_pool_id == POOL_B) {
-                /* Hold pool_session[POOL_B].transport_lock across the write: the pool B task can be
-                 * tearing this handle down at any moment. */
-                pthread_mutex_lock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
-                if (GLOBAL_STATE->pool_session[POOL_B].transport != NULL) {
-                    int retB = STRATUM_V1_submit_share(
-                        GLOBAL_STATE->pool_session[POOL_B].transport,
-                        GLOBAL_STATE->pool_session[POOL_B].send_uid++,
-                        GLOBAL_STATE->SYSTEM_MODULE.pool[POOL_B].user,
+            if (GLOBAL_STATE->dual_enable && job_pool_id != POOL_A &&
+                job_pool_id < POOL_MAX) {
+                PoolSession *ses = &GLOBAL_STATE->pool_session[job_pool_id];
+
+                /* Hold the pool's transport_lock across the write: its task
+                 * can be tearing the handle down at any moment. */
+                pthread_mutex_lock(&ses->transport_lock);
+                if (ses->transport != NULL) {
+                    int ret2 = STRATUM_V1_submit_share(
+                        ses->transport,
+                        ses->send_uid++,
+                        GLOBAL_STATE->SYSTEM_MODULE.pool[job_pool_id].user,
                         job_jobid,
                         job_en2,
                         job_ntime,
                         asic_result->nonce,
                         asic_result->rolled_version ^ job_version);
-                    if (retB < 0) {
-                        ESP_LOGW(TAG, "Unable to write share to pool B. Ret: %d", retB);
+                    if (ret2 < 0) {
+                        ESP_LOGW(TAG, "Unable to write share to pool %c. Ret: %d",
+                                 (char) ('A' + job_pool_id), ret2);
                     }
                 } else {
-                    ESP_LOGD(TAG, "pool B share dropped: not connected");
+                    ESP_LOGD(TAG, "pool %c share dropped: not connected",
+                             (char) ('A' + job_pool_id));
                 }
-                pthread_mutex_unlock(&GLOBAL_STATE->pool_session[POOL_B].transport_lock);
+                pthread_mutex_unlock(&ses->transport_lock);
             } else {
                 char * user = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
                 /*TODO: submit a share without rolled version.*/

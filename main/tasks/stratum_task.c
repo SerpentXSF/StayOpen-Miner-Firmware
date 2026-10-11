@@ -111,8 +111,8 @@ void cleanQueue(GlobalState * GLOBAL_STATE) {
                 if(NULL == GLOBAL_STATE->valid_jobs[chain_num])
                     continue;
                 if (GLOBAL_STATE->dual_enable &&
-                    GLOBAL_STATE->job_pool[chain_num][i] == POOL_B) {
-                    continue;   /* pool B's slot; not pool A's to invalidate */
+                    GLOBAL_STATE->job_pool[chain_num][i] != POOL_A) {
+                    continue;   /* another pool's slot; not pool A's to invalidate */
                 }
                 GLOBAL_STATE->valid_jobs[chain_num][i] = 0;
             }
