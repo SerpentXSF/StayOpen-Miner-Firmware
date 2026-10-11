@@ -88,6 +88,21 @@ void STRATUM_V1_parse(StratumApiV1Message *message, const char *stratum_json);
 
 void STRATUM_V1_free_mining_notify(mining_notify *params);
 
+/*
+ * Release the strings STRATUM_V1_parse() allocated into a message, and NULL
+ * them so the struct can be reused for the next line.
+ *
+ * Callers keep one StratumApiV1Message and parse into it over and over, so
+ * every reply that carries an error reason or an extranonce overwrote the
+ * last pointer and lost it. A pool that is rejecting shares leaks a little
+ * on every rejection -- on a board whose internal RAM runs to four figures,
+ * a pool having a bad hour is enough to matter.
+ *
+ * mining_notification is deliberately untouched: it is handed to a queue and
+ * the queue owns it from then on, which is why the handlers NULL it.
+ */
+void STRATUM_V1_free_message(StratumApiV1Message *message);
+
 int STRATUM_V1_authenticate(esp_transport_handle_t transport, int send_uid, const char *username, const char *pass);
 int STRATUM_V1_authorize(esp_transport_handle_t transport, int send_uid, const char * username, const char * pass);
 

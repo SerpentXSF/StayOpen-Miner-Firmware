@@ -461,6 +461,17 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
     cJSON_Delete(json);
 }
 
+void STRATUM_V1_free_message(StratumApiV1Message * message)
+{
+    if (message == NULL) {
+        return;
+    }
+    free(message->error_str);
+    message->error_str = NULL;
+    free(message->extranonce_str);
+    message->extranonce_str = NULL;
+}
+
 void STRATUM_V1_free_mining_notify(mining_notify * params)
 {
     free(params->job_id);

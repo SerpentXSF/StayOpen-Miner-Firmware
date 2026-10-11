@@ -115,6 +115,8 @@ static bool pool_allowed(GlobalState *GLOBAL_STATE, pool_id_t id)
     return ASIC_get_asic_count(GLOBAL_STATE) >= QUAD_POOL_MIN_ASICS;
 }
 
+static void pool_abandon_work(GlobalState *GLOBAL_STATE, pool_id_t id);
+
 static void pool_close(GlobalState *GLOBAL_STATE, pool_id_t id)
 {
     /*
@@ -135,6 +137,32 @@ static void pool_close(GlobalState *GLOBAL_STATE, pool_id_t id)
     GLOBAL_STATE->SYSTEM_MODULE.pool[id].connected = false;
     /* queue_clear frees each mining_notify it drops */
     queue_clear(&GLOBAL_STATE->pool_session[id].queue);
+
+    /*
+     * Everything that belonged to the session that just ended goes with it.
+     *
+     * Without this, a reconnect inherits the dead session's work. The jobs
+     * still sitting in the ASIC queue and in valid_jobs carry the old job
+     * ids, so every nonce they return is submitted on the new socket against
+     * a job the pool has never heard of and refused -- counted against this
+     * pool as a rejected share, which reads as the pool being difficult
+     * rather than as us sending it nonsense.
+     */
+    pool_abandon_work(GLOBAL_STATE, id);
+
+    /*
+     * And the extranonce, which is per-session: most pools hand out a new
+     * extranonce1 on every subscribe. Leaving the old one set means
+     * generate_work() finds it non-empty and builds work from it the moment
+     * the new transport is published -- before the new subscribe has even
+     * been answered -- so the first jobs of every reconnect are built on the
+     * previous session's extranonce and rejected.
+     */
+    pthread_mutex_lock(&GLOBAL_STATE->pool_session[id].extranonce_lock);
+    free(GLOBAL_STATE->pool_session[id].extranonce_str);
+    GLOBAL_STATE->pool_session[id].extranonce_str = NULL;
+    GLOBAL_STATE->pool_session[id].extranonce_2_len = 0;
+    pthread_mutex_unlock(&GLOBAL_STATE->pool_session[id].extranonce_lock);
 
     if (s_state[id].rxbuf != NULL) {
         free(s_state[id].rxbuf);
@@ -212,6 +240,9 @@ static bool pool_connect(GlobalState *GLOBAL_STATE, pool_id_t id)
     }
 
     pthread_mutex_lock(&GLOBAL_STATE->pool_session[id].transport_lock);
+    /* Clear before publishing the handle: a failure recorded against the
+     * session that just ended must not take down the one replacing it. */
+    GLOBAL_STATE->pool_session[id].write_failed = false;
     GLOBAL_STATE->pool_session[id].transport = transport;
     pthread_mutex_unlock(&GLOBAL_STATE->pool_session[id].transport_lock);
     module->pool[id].connected = true;
@@ -374,6 +405,25 @@ static bool pool_service(GlobalState *GLOBAL_STATE, pool_id_t id,
     secondary_state_t *st = &s_state[id];
     char *line = NULL;
 
+    /*
+     * A share write failed since the last visit, so the peer is gone even
+     * though the socket has not said so. Acting on it here rather than
+     * waiting for the read side matters: a peer that disappears without a
+     * FIN leaves the socket merely quiet, and quiet is what a healthy pool
+     * between notifies looks like. lwIP will work it out when its
+     * retransmits run out, minutes later, and until then this pool keeps a
+     * full share of the slices and loses every one.
+     */
+    if (GLOBAL_STATE->pool_session[id].write_failed) {
+        GLOBAL_STATE->pool_session[id].write_failed = false;
+        ESP_LOGW(TAG, "%s: a share could not be written, dropping the session",
+                 pool_name(id));
+        pool_close(GLOBAL_STATE, id);
+        pool_failover_step(&st->fo, PF_EV_DISCONNECTED);
+        st->next_attempt_us = esp_timer_get_time() + POOLB_RETRY_DELAY_MS * 1000LL;
+        return false;
+    }
+
     stratum_rx_t rc = STRATUM_V1_poll_jsonrpc_line_ctx(
         GLOBAL_STATE->pool_session[id].transport,
         &st->rxbuf, &st->rxsize, POOL_RX_SLICE_MS, &line);
@@ -392,7 +442,14 @@ static bool pool_service(GlobalState *GLOBAL_STATE, pool_id_t id,
     STRATUM_V1_parse(msg, line);
     free(line);
 
-    if (!pool_handle(GLOBAL_STATE, id, msg)) {
+    bool keep = pool_handle(GLOBAL_STATE, id, msg);
+
+    /* The strings the parse allocated into msg. The struct is reused for
+     * every line this task reads, so without this each rejection reason and
+     * each extranonce is overwritten and lost. */
+    STRATUM_V1_free_message(msg);
+
+    if (!keep) {
         pool_close(GLOBAL_STATE, id);
         pool_failover_step(&st->fo, PF_EV_DISCONNECTED);
         st->next_attempt_us = esp_timer_get_time() + POOLB_RETRY_DELAY_MS * 1000LL;

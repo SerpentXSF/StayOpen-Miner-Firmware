@@ -223,6 +223,28 @@ void create_jobs_task(void *pvParameters)
 
                             /* take each pool's newest notify if one has arrived */
                             for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
+                                /*
+                                 * A notify belongs to the session that sent
+                                 * it. When that session goes, so does the
+                                 * notify -- otherwise this task keeps the
+                                 * dead one indefinitely and treats the pool
+                                 * as having work, so the moment the new
+                                 * transport is published it builds from the
+                                 * previous session's job id and the pool
+                                 * refuses every share built that way.
+                                 */
+                                bool session_up = false;
+                                pthread_mutex_lock(&GLOBAL_STATE->pool_session[id].transport_lock);
+                                session_up = (GLOBAL_STATE->pool_session[id].transport != NULL);
+                                pthread_mutex_unlock(&GLOBAL_STATE->pool_session[id].transport_lock);
+
+                                if (!session_up && secondary_notify[id] != NULL) {
+                                    STRATUM_V1_free_mining_notify(secondary_notify[id]);
+                                    secondary_notify[id] = NULL;
+                                    secondary_difficulty[id] = 0;
+                                    secondary_extranonce_2[id] = 0;
+                                }
+
                                 /* Polled, not a count test followed by a
                                  * blocking dequeue: that pool's own task
                                  * clears this queue, and a clear landing

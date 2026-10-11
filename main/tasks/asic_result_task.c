@@ -148,6 +148,10 @@ void ASIC_result_task(void *pvParameters)
                         asic_result->nonce,
                         asic_result->rolled_version ^ job_version);
                     if (ret2 < 0) {
+                        /* Tell the pool task: a write that fails means the
+                         * peer is gone, and it will not find that out from
+                         * the receive side for minutes. */
+                        ses->write_failed = true;
                         ESP_LOGW(TAG, "Unable to write share to pool %c. Ret: %d",
                                  (char) ('A' + job_pool_id), ret2);
                     }

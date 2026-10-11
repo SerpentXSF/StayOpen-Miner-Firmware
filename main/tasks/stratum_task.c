@@ -619,6 +619,10 @@ void stratum_task(void * pvParameters)
             }else if (stratum_api_v1_message.method == CLIENT_RECONNECT) {
                 ESP_LOGE(TAG, "Pool requested client reconnect...");
                 stratum_close_connection(GLOBAL_STATE);
+                /* This break leaves the loop, so it misses the free at the
+                 * bottom. Once per reconnect is not much, but it is the one
+                 * path out of here that is not the loop condition. */
+                STRATUM_V1_free_message(&stratum_api_v1_message);
                 break;
             } else if (stratum_api_v1_message.method == STRATUM_RESULT) {
                 if (stratum_api_v1_message.response_success) {
@@ -680,6 +684,19 @@ void stratum_task(void * pvParameters)
                     }
                 }
             }
+
+            /*
+             * The strings this parse allocated. stratum_api_v1_message is
+             * reused for every line pool A reads, so each rejection reason
+             * and each extranonce was overwritten and lost -- a steady drain
+             * whenever a pool is refusing shares, on a board with about a
+             * kilobyte of internal RAM to spare.
+             *
+             * Safe to free here: both extranonce handlers above strdup what
+             * they keep rather than taking the pointer, and the mining
+             * notification -- which the queue does take -- is left alone.
+             */
+            STRATUM_V1_free_message(&stratum_api_v1_message);
         }
         STATUM_MODULE.isconnected = false;
     }

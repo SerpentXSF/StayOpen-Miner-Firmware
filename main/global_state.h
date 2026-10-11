@@ -145,6 +145,23 @@ typedef struct {
     esp_transport_handle_t transport;
     pthread_mutex_t        transport_lock;
     pthread_mutex_t        extranonce_lock;
+
+    /*
+     * Set by the share-submit path when a write to this pool fails, read by
+     * the pool task as "tear this session down".
+     *
+     * A write failing is the earliest sign a peer has gone. The receive side
+     * cannot tell: a socket whose peer vanished without a FIN -- a NAT drop,
+     * a WiFi roam, a pool host dying -- simply goes quiet, which is
+     * indistinguishable from a quiet pool until lwIP exhausts its
+     * retransmits minutes later. Until then the pool keeps its full share of
+     * the slices and every share built for it is dropped.
+     *
+     * A flag rather than a teardown in place: asic_result_task does not own
+     * these sessions, and closing one from under the task that is reading it
+     * is how the transport_lock dance started.
+     */
+    volatile bool          write_failed;
 } PoolSession;
 
 typedef struct
