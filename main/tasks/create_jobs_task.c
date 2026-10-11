@@ -156,13 +156,20 @@ void create_jobs_task(void *pvParameters)
             ESP_LOGD(TAG, "New Work Dequeued %s", mining_notification->job_id);
         }
 
-        if (mining_notification == NULL) {
-            /* Pool A has not sent anything yet. Nothing of its own to build
-             * from, and the secondaries have no work either until their own
-             * notifies arrive, so there is nothing useful to do this pass. */
-            continue;
-        }
-
+        /*
+         * No early exit when pool A has nothing.
+         *
+         * This used to `continue` here, which was the same bug in a new
+         * place: pool A never sends while it is down, so the loop turned
+         * round forever and never reached the job building below -- the one
+         * thing that serves pools B, C and D. Tested by pointing pool A's
+         * primary and failover at an unroutable address: all three
+         * secondaries connected and subscribed, and the miner sat at 0 GH/s
+         * for four minutes with not one share from any of them.
+         *
+         * Pool A's own slices are skipped further down while it has no
+         * notify to build from. Everything else proceeds.
+         */
         if (GLOBAL_STATE->new_set_mining_difficulty_msg)
         {
             ESP_LOGI(TAG, "New job difficulty %lu", GLOBAL_STATE->stratum_difficulty);
@@ -176,7 +183,20 @@ void create_jobs_task(void *pvParameters)
             GLOBAL_STATE->new_stratum_version_rolling_msg = false;
         }
 
-        while (GLOBAL_STATE->stratum_queue.count < 1 && GLOBAL_STATE->abandon_work == 0)
+        /*
+         * Time-boxed, so the outer poll above runs even when pool A is silent.
+         *
+         * The exit condition is "pool A has queued something", which never
+         * becomes true while pool A is down -- so without a deadline this
+         * loop would keep the secondaries fed but never look to see whether
+         * pool A had come back. A healthy pool A leaves long before this
+         * expires, so it costs nothing in the normal case.
+         */
+        int64_t inner_deadline_us = esp_timer_get_time() + 1000 * 1000;
+
+        while (GLOBAL_STATE->stratum_queue.count < 1 &&
+               GLOBAL_STATE->abandon_work == 0 &&
+               esp_timer_get_time() < inner_deadline_us)
         {
             for(uint32_t chain_num = 0; chain_num < MAX_CHAIN_NUM; chain_num++)
             {
@@ -260,6 +280,21 @@ void create_jobs_task(void *pvParameters)
                             /* chosen but not served means the job fell through
                              * to pool A; the counters make that visible */
                         }
+                        if (pool_id == POOL_A && mining_notification == NULL) {
+                            /*
+                             * Pool A's slice with nothing of pool A's to
+                             * build from -- it is down, or has not sent its
+                             * first notify yet. Skip the slice rather than
+                             * dereference the notify, and do not count it as
+                             * served: jobs_selected outrunning jobs_served is
+                             * exactly how a pool's shortfall is meant to
+                             * show. A short yield so a dead pool A cannot
+                             * spin this loop.
+                             */
+                            vTaskDelay(10 / portTICK_PERIOD_MS);
+                            continue;
+                        }
+
                         GLOBAL_STATE->jobs_served[pool_id]++;
 
                         if (pool_id != POOL_A) {
