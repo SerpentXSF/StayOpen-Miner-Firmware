@@ -335,14 +335,25 @@ typedef struct
 
     /*
      * Jobs the scheduler assigned to each pool, and jobs actually built for
-     * it. Counted per job rather than per wall-clock slice, because
-     * pool_scheduler_select() is consulted once per job and several jobs are
-     * built inside one slice -- so these measure the work split directly.
+     * it. Indexed by pool id.
      *
-     * The gap between them is what a pool lost to the other, because it had
-     * nothing queued to build from. Without it a shortfall could only be
-     * inferred from share counts against two moving vardiffs.
-     * Index by pool_id.
+     * The gap between them is what a pool lost to another, because it had
+     * nothing queued to build from. That is what these are for, and it is a
+     * number worth having: without it a shortfall could only be inferred from
+     * share counts against several moving vardiffs.
+     *
+     * What they are NOT is the hashrate split, and an earlier comment here
+     * claimed they were. They count job-building events, not time, so a pool
+     * whose work is invalidated often rebuilds often and is over-reported.
+     * Measured on a BC04 mining four pools at an even 25% each: pool A, a
+     * local solo node issuing clean_jobs far more often than the three
+     * remote pools, built 8.06 jobs per slice against 6.49, 6.44 and 6.91 --
+     * 22% more, reading as a 29/23/23/25 split when every pool in fact owned
+     * exactly a quarter of the slices.
+     *
+     * The hashrate split is decided by pool_scheduler_select(), which divides
+     * wall-clock slices. To measure what each pool actually received, use
+     * accepted shares times that pool's difficulty.
      */
     uint32_t jobs_selected[4];
     uint32_t jobs_served[4];
