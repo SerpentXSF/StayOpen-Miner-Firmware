@@ -14,7 +14,7 @@ anything else. See docs/OTA-FORMAT.md, and ota_tool.py pack.
 
     python tools/ota_tool.py pack build/bc04/stayopen-miner.bin \\
         -o /tmp/update.bin --pad <hex>
-    python tools/push_ota.py 192.168.50.135 ../secrets/bc04-api-password.txt \\
+    python tools/push_ota.py <host> ../secrets/bc04-api-password.txt \\
         /tmp/update.bin
 
 The web UI lives in its own partition behind its own endpoint, so a 0x55
