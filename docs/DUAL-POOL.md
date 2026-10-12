@@ -1,38 +1,62 @@
-# Dual-pool mining
+# Multi-pool mining
 
-Two Stratum sessions, both permanently connected, with the ASIC's time sliced
-between them.
+Up to four Stratum sessions, all permanently connected, with the ASIC's time
+sliced between them. The file is still called `DUAL-POOL.md` because that is
+what it started as and README links to it; two pools is now the common case
+rather than the only one.
 
 **It splits your hashrate. It does not add any.** There is one ASIC and it does
-one thing at a time. Both pools must be SHA-256d — Bitcoin, Bitcoin Cash,
+one thing at a time. Every pool must be SHA-256d — Bitcoin, Bitcoin Cash,
 DigiByte-SHA256. Scrypt and everything else is physically impossible on this
 silicon.
 
-Off unless you enable it *and* configure a pool B, so an existing miner behaves
-exactly as it did before.
+Off unless you configure a second pool, so an existing miner behaves exactly as
+it did before.
+
+**Three and four pools need a board with four ASICs** — in practice a BC04. The
+limit is in `stratum_poolb_task.c` (`QUAD_POOL_MIN_ASICS`), and the mode buttons
+for Triple and Quad are disabled below it. A single-ASIC board sliced four ways
+spends more time switching than hashing.
 
 ---
 
 ## Setting it up
 
-**Pool settings → Dual Pool.** Host, user, password, TLS, the same as the other
-two tabs, plus:
+**Pool settings.** A **Pools** selector — Single, Dual, Triple, Quad — then one
+identical panel per pool after the first, each with host, user, password, TLS,
+its own failover, and:
 
 | | |
 |---|---|
-| **Enable dual mining** | off by default |
-| **Hashrate split** | percent to pool A; the rest goes to pool B |
+| **Share** | this pool's weight relative to the others. Not a percentage. Leave every pool at 0 for an even split. |
 | **Slice length** | how long each pool owns the ASIC before handing over, 100–60000 ms |
 
-The ratio and slice length are re-read live, so they can be tuned without a
-restart. Changing the pool B endpoint needs one.
+**There is no stored "mode".** A pool is in play when it has a host, and the
+selector only adds and removes panels — choosing fewer pools clears the ones it
+drops. So the hosts decide, not a switch, and a pool left configured keeps
+mining whatever the selector last showed.
+
+In two-pool setups the older **Hashrate split** control still applies: a
+percentage to pool A, the rest to pool B. With more than two pools the per-pool
+**Share** weights are what count instead.
+
+Weights and slice length are re-read live, so the split can be tuned without a
+restart. Changing a pool's host or port needs one — those are read at start-up.
+A session can be ended without a restart; see *Ending a pool's session on
+purpose* below.
 
 ## How it divides the work
 
 `components/dual_pool/pool_scheduler.c` assigns each slice by error diffusion —
-a Bresenham accumulator — rather than alternating. Over any run the fraction of
-slices given to pool A converges on the ratio, and the pattern does not fall
-into lockstep with a pool's job cadence the way strict alternation can.
+a Bresenham accumulator per pool — rather than cycling. Each pool accumulates
+its weight every slice; the largest accumulator wins and pays back the total.
+Over any run each pool's share of the slices converges on its weight, and the
+pattern does not fall into lockstep with a pool's job cadence the way strict
+rotation can.
+
+Weights are clamped to 0–100 wherever they enter, including over the API. The
+scheduler assembles them into a `uint8_t` array, so an unclamped 256 would wrap
+to 0 and silently drop a pool the user had asked for.
 
 Each job is tagged with the pool that issued it (`bm_job.pool_id`), built with
 that pool's extranonce and version mask, and its nonce is submitted back to
@@ -99,15 +123,16 @@ simpler and wrong: that array is written outside `valid_jobs_lock`, so
 following those pointers from another task is a use-after-free waiting to
 happen.
 
-## Pool B has its own failover
+## Every secondary pool has its own failover
 
-Pool B keeps a second endpoint of its own, stepped independently of pool A's.
-Set it in the Dual Pool tab, or over the API as `poolBFbUrl`, `poolBFbPort`,
-`poolBFbUser`, `poolBFbPass` and `poolBFbTLS`.
+Each pool after the first keeps a second endpoint of its own, stepped
+independently of pool A's and of the other pools'. Set it in that pool's panel,
+or over the API as `pool<X>FbUrl`, `pool<X>FbPort`, `pool<X>FbUser`,
+`pool<X>FbPass` and `pool<X>FbTLS`, where `<X>` is `B`, `C` or `D`.
 
-Without it, a pool B outage meant it retried a dead host forever while every
-job the scheduler assigned it fell through to pool A -- the miner quietly
-stopped dual mining and nothing said so. `poolBUsingFailover` in
+Without it, an outage on a secondary meant it retried a dead host forever while
+every job the scheduler assigned it fell through to pool A -- the miner quietly
+stopped splitting and nothing said so. `pool<X>UsingFailover` in
 `/api/system/info` now reports which endpoint is live.
 
 The state machine (`components/dual_pool/pool_failover.c`) tries the primary,
@@ -120,22 +145,40 @@ to the failover, and connected there after about 86 seconds.
 
 ## What is not done
 
-- Nothing outstanding on the failover path. The remaining gap is that a pool
-  which is up but silent -- accepting the connection and never sending work --
-  is not treated as a failure, because nothing distinguishes it from a quiet
-  pool.
+- **A pool which is up but silent** -- accepting the connection and never
+  sending work -- is not treated as a failure, because nothing distinguishes it
+  from a quiet pool. Nothing else is outstanding on the failover path.
+- **A down pool's slices are not redistributed among the pools still up.**
+  Fallthrough is one-way: work a secondary cannot take goes to pool A, not to
+  the other secondaries. With pool C down in a four-pool setup, pool A gets
+  C's share rather than B and D splitting it. Deferred deliberately -- it is a
+  change to the scheduler's weighting rather than to the failover path, and
+  nothing is lost in the meantime; the hashrate just lands somewhere other than
+  where the weights asked.
+- **Per-ASIC pool assignment is impossible on this silicon**, not merely
+  unimplemented. `BM1370_job` carries no chip address field, so a job cannot be
+  directed at one ASIC. Time-slicing is the only mechanism available, which is
+  why this splits across time rather than across chips.
 
 ## Checking the split directly
 
-`/api/system/info` reports `poolAJobsSelected` / `poolAJobsServed` and the pool
-B pair. Selected is what the scheduler assigned; served is what was actually
-built. The gap is work one pool lost to the other for want of anything queued
-to build from.
+`/api/system/info` reports `pool<X>JobsSelected` / `pool<X>JobsServed` for each
+pool in play. Selected is what the scheduler assigned; served is what was
+actually built. The gap is work a pool lost for want of anything queued to
+build from, which falls through to pool A.
 
-On this miner that gap is about a dozen jobs at start-up, before pool B's first
-notify arrives, and flat afterwards -- so the residual difference from an even
-split is a fixed cost at boot rather than a leak that grows. Read these rather
-than inferring a shortfall from share counts against two moving vardiffs.
+On this miner that gap is about a dozen jobs at start-up, before each
+secondary's first notify arrives, and flat afterwards -- so the residual
+difference from an even split is a fixed cost at boot rather than a leak that
+grows. Read these rather than inferring a shortfall from share counts against
+several moving vardiffs.
+
+Measured on a BC04 with four pools at equal weight: the interval-accurate split
+held within 1σ of 25% each, over 2,754 shares with none rejected across two
+hours.
+
+`pool<X>Connected`, `pool<X>SharesAccepted`, `pool<X>SharesRejected` and
+`pool<X>Diff` are reported per pool as well.
 
 ## Ending a pool's session on purpose
 

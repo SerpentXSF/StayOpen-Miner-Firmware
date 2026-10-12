@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SerpentX | Stay Open — flash a Hammer miner</title>
 <link rel="icon" href="favicon.ico" sizes="any">
-<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<!-- Pinned, not @10. The erase behaviour of the update mode depends on this
+     library's internals: whether it prompts before erasing, and what it does
+     when it does not prompt. A floating major can change that under us without
+     a commit here, and the failure is silent and expensive -- an owner's pool,
+     payout address and WiFi. Bump it deliberately, and re-check the no-Improv
+     branch in dist/install-dialog.js when you do. -->
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
 <style>
   :root{
     --bg:#050910; --card:#050b16; --line:#1f2937;
@@ -197,10 +203,14 @@
         <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware">Full source</a>,
         GPL-3.0.</td></tr>
     <tr><th>Flash with esptool</th>
-        <td><code>esptool.py --chip esp32s3 write_flash 0x0 <span id="esptool-file">stay-open-bc01-full.bin</span></code></td></tr>
+        <td><code>esptool.py --chip esp32s3 write_flash <span id="esptool-file">0x0 stay-open-bc01-full.bin</span></code></td></tr>
     <tr><th>Update over the air</th>
-        <td>Upload the <code>-ota.bin</code> through the miner's own update
-        page. Keeps your settings.</td></tr>
+        <td>The miner's own <b>Settings &rarr; Check for Updates</b> does this
+        for you and picks the right files for your board. By hand, upload
+        <code>-ota.bin</code> (the firmware) and <code>-www-ota.bin</code> (the
+        web interface) on that same page &mdash; firmware first, interface
+        second, each one rebooting before the next. This keeps your settings and
+        never erases the flash, so it is the safer way to update.</td></tr>
   </table>
   <p>Every file, with digests, is on the
   <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/releases/latest">releases page</a>.</p>
@@ -231,13 +241,22 @@
      what a board arriving on vendor firmware needs -- and what wipes an
      owner's pool, payout address and WiFi if they use it to update.
 
-     Update writes every region except 0xE000, so those survive. It is not the
-     default, because a board that has never run this firmware has no settings
-     of ours to keep and would be left holding the vendor's. */
+     Update lists every region except 0xE000, so nvs survives -- but only if
+     the flash is not erased before those parts are written, and that is not
+     this page's decision. esp-web-tools erases by default on a device that
+     does not answer Improv Serial, which this firmware does not implement.
+     The update manifest therefore sets new_install_prompt_erase: true, which
+     despite its name means "ask first", and the prompt's checkbox starts
+     unticked. Leaving it unticked is what keeps the settings; ticking it
+     throws them away. That dialog is not optional and the note below says so,
+     because a user who ticks the box on a screen headed "keeps settings" has
+     been misled by us rather than by the library. See tools/make_release.py. */
   const MODE_NOTE = {
     install: 'Writes the whole flash. Use this the first time, or to recover a '
            + 'board. It erases your WiFi, pool, payout address and API password.',
-    update:  'Keeps your settings. Only for a miner already running Stay Open.'
+    update:  'Keeps your settings. Only for a miner already running Stay Open. '
+           + 'It will ask about erasing the device -- leave that box unticked, '
+           + 'or your settings go with it.'
   };
 
   async function pick(board) {
@@ -253,13 +272,23 @@
     badge.textContent = names[board];
     installer.setAttribute('manifest', manifestFor(board, mode));
 
-    /* Name the artifact that is actually published rather than a hardcoded
-       filename, so the manual instructions cannot drift from the release. */
+    /* Name the artifacts that are actually published rather than a hardcoded
+       filename, so the manual instructions cannot drift from the release.
+
+       Every part with its offset, not parts[0]. Install has one part and the
+       old code happened to be right for it; update has five, and parts[0] is
+       the bootloader -- so this row used to tell an updater to write a 20 KB
+       bootloader at 0x0 and nothing else, which changes nothing and looks like
+       the update silently failing. */
     try {
       const r = await fetch(manifestFor(board, mode), { cache: 'no-store' });
       const m = await r.json();
-      const path = m.builds && m.builds[0] && m.builds[0].parts[0].path;
-      if (path) { esptoolFile.textContent = path; }
+      const parts = m.builds && m.builds[0] && m.builds[0].parts;
+      if (parts && parts.length) {
+        esptoolFile.textContent = parts
+          .map(function (p) { return '0x' + p.offset.toString(16) + ' ' + p.path; })
+          .join(' ');
+      }
     } catch (e) { /* leave the fallback text */ }
   }
 

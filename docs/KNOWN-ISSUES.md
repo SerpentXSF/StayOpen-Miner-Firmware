@@ -3,23 +3,81 @@
 Things that are understood, worked around, and worth doing properly.
 
 **"Fixed" here means fixed in this tree, which is ahead of the latest
-release.** The current release is **2.0.28** (tag `v2.0.28`, 26 h BC04 soak).
+release.** The current release is **2.0.30** (tag `v2.0.30`, 10 h BC04 soak).
 If you are running it, these are fixed in your firmware and these are not:
 
-| Fixed in 2.0.28 | Fixed in the tree, not yet released |
+| Fixed in 2.0.30 and earlier | Fixed in the tree, not yet released |
 | --- | --- |
-| Self test runs its Ethernet check after the core rail | The W5500 is held in hardware reset across the rail step (verified on hardware 2026-09-30) |
-| The stall watchdog waits past the regulator's retries | Dual pool no longer feeds a pool that has disconnected (verified on hardware 2026-10-01) |
-| A masked password is never stored as the password | A share can no longer be scored from a freed job (reasoned, not proven) |
-| Both interfaces cannot share one static IP | The bridge test no longer calls stuck-low pins shorts |
-| The I2C timeout is bounded; no model rewrite on an empty bus | Two sdkconfig values that were silently out of range |
+| Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited |
+| The stall watchdog waits past the regulator's retries | A failed share write counts as a disconnect instead of waiting on lwIP |
+| A masked password is never stored as the password | The parsed Stratum strings are freed |
+| Both interfaces cannot share one static IP | Up to four pools, gated to four-ASIC boards |
+| The I2C timeout is bounded; no model rewrite on an empty bus | A session can be ended on demand over the API |
 | A pool cannot crash or reboot the miner; crash dumps kept | |
 | Both fan tachometers reported; fan protection can fire | |
 | Kernel log download works while signed in | |
 | Releases carry LICENSE and a source pointer | |
+| The W5500 is held in hardware reset across the rail step (2.0.29) | |
+| Dual pool no longer feeds a pool that has disconnected (2.0.29) | |
+| A share can no longer be scored from a freed job (2.0.29, reasoned, not proven) | |
+| The bridge test no longer calls stuck-low pins shorts (2.0.29) | |
+| Five reset reasons have names instead of "Not specified" (2.0.29) | |
+| A pool offering difficulty 8192 no longer leaves jobs at zero (2.0.30) | |
+| The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |
+| A dropped firmware upload is retried rather than handed back (2.0.30) | |
 
-The right-hand column is unreleased **and not yet verified on hardware**. It
-lands in 2.0.29 after its own soak. Nothing in it is in a published image.
+The right-hand column is unreleased. Everything in it is verified on hardware
+except where an entry says otherwise, but none of it is in a published image.
+
+## The web flasher's "Update" mode erases the settings it promises to keep (fixed in the tree, still live)
+
+**Status: fixed in `tools/make_release.py`, and still wrong on the published
+flasher** until the next `publish_flasher.py` run. Checked 2026-10-11:
+`https://serpentxsf.github.io/StayOpen-Miner-Firmware/flasher/manifest-bc01-update.json`
+and the BC04 one both still report `"new_install_prompt_erase": false`.
+
+**What happens to an owner.** They pick **Update**, whose note says "Keeps your
+settings. Only for a miner already running Stay Open." The browser erases the
+entire flash, then writes bootloader, partition table, otadata, app and www —
+every region the update manifest lists. `nvs` at 0xE000 is not in that list, by
+design, so it is never rewritten after the erase. It comes back blank. The
+firmware falls back to compiled defaults, so the miner does not join WiFi, has
+no pool and no payout address, and sits there until it is set up again from its
+own access point. Nothing is damaged and nothing mines to anyone else, but the
+one thing the mode exists to protect is the thing it destroys.
+
+**Why the flag was wrong.** `new_install_prompt_erase: false` reads as "do not
+erase" and means "do not *ask*". For a device that does not answer Improv
+Serial — and this firmware does not implement it — esp-web-tools then erases by
+default. Its own source says so; in the 10.4.0 package, `dist/install-dialog.js`
+in the no-Improv branch:
+
+    if (manifest.new_install_prompt_erase) { state = "ASK_ERASE" }
+    else { /* Default is to erase a device that does not support
+             Improv Serial */ _startInstall(true) }
+
+and `_startInstall(true)` reaches `await esploader.eraseFlash()` in `flash.js`
+before a single part is written. Setting it **true** puts up the erase prompt
+with its checkbox unticked; Next with it unticked calls `_startInstall(false)`
+and `nvs` survives.
+
+**How it got missed.** The mode was never flashed on hardware — `bc0a013` says
+so in as many words: "Not yet verified on hardware -- no board was on USB." The
+note in `make_release.py` that reads "Verified on a BC01 by writing exactly
+these five parts at these offsets" is about the part list and the offsets, which
+are correct; it says nothing about what the browser does before writing them.
+The page is also now pinned to `esp-web-tools@10.4.0` rather than `@10`, because
+this behaviour lives in the library's internals and a floating major can change
+it with no commit here.
+
+**Until the flasher is republished**, update through the miner's own
+**Settings → Check for Updates**, or by uploading `-ota.bin` and `-www-ota.bin`
+on that page. That route never erases the flash.
+
+**Still not verified on hardware.** The chain above is read from the published
+package and the published manifests, not observed on a board. Confirming it
+takes one BC04 on USB: update a configured miner from the browser and read
+`stratumuser` afterwards.
 
 ## A www update needed a restart the caller had to know about (fixed)
 
@@ -90,8 +148,8 @@ on WiFi throughout, the cable added live, and the interface then carrying
 | Build | What happens at the rail step |
 | --- | --- |
 | Before 2.0.28 | The self test could bring Ethernet fully up first, and the stall watchdog could start it mid-way through the regulator's retries. The controller was live, linked and holding a lease. This is the configuration that is believed to have killed a board. |
-| **2.0.28 (current release)** | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
-| 2.0.29 (unreleased) | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
+| 2.0.28 | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
+| **2.0.29 and later (current release 2.0.30)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
 
 **So, plainly: on 2.0.28 a cold boot with the cable attached is not fully
 addressed.** Deferring the driver protects this firmware's view of the
@@ -103,13 +161,16 @@ to be. The honest summary for an owner on the current release is that the
 known software paths are closed and the residual hardware exposure is real
 but unquantified.
 
-**If you are on 2.0.28 and want the cable in, the conservative order is the
-one that avoids the question**: leave the cable out until the miner is up and
-hashing, then plug it in. That is safe on every build, for the reason in the
-second paragraph. It costs one reconnection after a power cut.
+**If you are on 2.0.28 or earlier and want the cable in, the conservative
+order is the one that avoids the question**: leave the cable out until the
+miner is up and hashing, then plug it in. That is safe on every build, for the
+reason in the second paragraph. It costs one reconnection after a power cut.
 
-The 2.0.29 hold removes the need for that care, and is verified on hardware
-(see the W5500 entry below). Until it ships, the care is worth taking.
+The hold shipped in 2.0.29 removes the need for that care, and is verified on
+hardware (see the W5500 entry below). On 2.0.29 or later the staging no longer
+matters. Note that the verification added the cable after the rail had
+settled: the protection is demonstrated, a cold boot with the cable already
+in is still untried, and the reason that is acceptable is in that entry.
 
 ## BC04 Ethernet had to be started after the hashboard (fixed)
 
@@ -398,14 +459,29 @@ It does not: `dist/stay-open-bc04-*-full.bin` carries `devicemodel=BC04` and
 `selftest=0` preloaded at `0xe000`. The advice was right for the wrong
 reason.)
 
-## Two stratum defects found beside another change (open)
+## Two stratum defects found beside another change (one fixed, one open)
 
-**Status: open.** Both pre-date the change that surfaced them and neither was
-introduced by it. Recorded here rather than folded into 2.0.22, because
-fixing unrelated memory bugs inside a release is how the last two regressions
-in this project got out.
+Both pre-date the change that surfaced them and neither was introduced by it.
+Recorded here rather than folded into 2.0.22, because fixing unrelated memory
+bugs inside a release is how the last two regressions in this project got out.
 
-### `error_str` is never freed
+### `error_str` is never freed (fixed in the tree, unreleased)
+
+**Status: fixed**, not yet in a published image.
+`STRATUM_V1_free_message()` in `components/stratum/stratum_api.c` releases the
+parsed strings, and both stratum tasks call it -- including on the path that
+breaks out of pool A's loop rather than leaving by its condition.
+`mining_notification` is deliberately untouched: the queue owns that one.
+
+This was worse than the entry below described. Both tasks keep a single
+`StratumApiV1Message` and parse into it repeatedly, so every error reason and
+every extranonce overwrote the previous pointer and lost it -- not only the
+rejection paths. On a board with about a kilobyte of internal RAM spare that
+is a steady drain whenever a pool is rejecting, and it was pool A's leak as
+much as the secondaries', predating dual pool entirely.
+
+The original description follows, since the ownership problem it names is the
+reason the leak existed.
 
 `components/stratum/stratum_api.c` allocates `error_str` on the rejection
 paths (around lines 224, 239, 245 and 260). Nothing in `main/` or
@@ -419,7 +495,12 @@ retry loop leaks steadily and forever. A share-rejection storm leaks faster.
 Fix by freeing it in the consumer after use, or by making ownership explicit
 rather than implied.
 
-### The settings handler can free a string stratum_task is using
+### The settings handler can free a string stratum_task is using (open)
+
+**Status: open.** Still present: `free()` then `strdup()` at
+`http_server.c:920-921` from the HTTP task, with `stratum_task.c:476` taking a
+raw pointer into `username` and holding it across the placeholder check and
+`STRATUM_V1_authorize` at :506.
 
 `main/http_server/http_server.c` (around lines 849-852) does
 `free(pool_user)` then `pool_user = strdup(...)`, from the HTTP task.

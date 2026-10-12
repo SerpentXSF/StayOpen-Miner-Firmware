@@ -344,8 +344,30 @@ def main():
         "name": "SerpentX / Stay Open (%s) -- update, keeps settings" % board.upper(),
         "version": ver,
         "home_assistant_domain": None,
-        # Erasing is exactly what this manifest exists to avoid.
-        "new_install_prompt_erase": False,
+        #
+        # TRUE, and it has to be. The name reads like "do not erase" and means
+        # the opposite of what it sounds like: it asks esp-web-tools to *prompt*
+        # before erasing. False means do not prompt -- and for a device that
+        # does not answer Improv Serial, which this firmware does not implement,
+        # the library's documented default is then to erase. Its own source says
+        # so: in dist/install-dialog.js the no-Improv branch reads
+        #
+        #     if (manifest.new_install_prompt_erase) { state = "ASK_ERASE" }
+        #     else { /* Default is to erase a device that does not support
+        #              Improv Serial */ _startInstall(true) }
+        #
+        # and _startInstall(true) reaches `await esploader.eraseFlash()` in
+        # flash.js before a single part is written. So False erased the whole
+        # chip -- nvs at 0xE000 included -- and then wrote every region except
+        # nvs, which is the one thing this manifest exists to preserve. A miner
+        # updated that way came back with no pool, no payout address and no
+        # WiFi, from a button labelled "keeps settings".
+        #
+        # True puts up the erase prompt with its checkbox UNTICKED, and Next
+        # with it unticked calls _startInstall(false): no erase, nvs survives.
+        # The user sees one extra dialog, which is the cost of the mode doing
+        # what it says.
+        "new_install_prompt_erase": True,
         "builds": [{
             "chipFamily": "ESP32-S3",
             "parts": parts_json,

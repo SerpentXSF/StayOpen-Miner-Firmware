@@ -131,9 +131,14 @@ display. An LT0051 scrypt ASIC path also exists in the tree.
 
 ## Dual-pool mining
 
-Two pools connected at once, with the ASIC's time split between them. It
-divides your hashrate rather than adding to it, and both pools must be
-SHA-256d. Off unless you turn it on and configure a second pool.
+Up to four pools connected at once, with the ASIC's time split between them. It
+divides your hashrate rather than adding to it, and every pool must be
+SHA-256d. Off unless you configure a second pool.
+
+Two pools work on any supported board. **Three and four need a board with four
+ASICs** — in practice a BC04 — and the mode buttons for them are disabled
+otherwise. Each pool gets a relative **Share** weight rather than a percentage;
+leave them all at zero for an even split.
 
 Share counts will not match the ratio you set: each pool runs its own vardiff,
 so the same work produces different share counts. The dashboard prints each
@@ -144,18 +149,21 @@ shares.
 
 ## Which device
 
-**The published builds are for the Hammer BC01 only.**
+**The published builds are for the Hammer BC01 and BC04.** Pick the one named
+for your board. There is no universal image and flashing the wrong one does not
+fail cleanly -- see below.
 
 The board model is fixed at compile time and the boards do not share a pinout.
 BC01 and BC04 have their ASIC UART lines **swapped** -- TX 18 / RX 17 against
 TX 17 / RX 18 -- so a BC01 image on a BC04 crosses transmit and receive. The
 miner boots, the web UI works, the ASIC is even detected, and no share is ever
-returned. It reads as dead hardware and it is not.
+returned. It reads as dead hardware and it is not. The same applies in reverse.
 
 | Model | Source | Published build |
 |---|---|---|
 | BC01 | Yes | **Yes**, verified on hardware |
-| BC02, BC04, BC06, BC08 | Yes | No -- build from source, and see `sdkconfig.bc04-reference` |
+| BC04 | Yes | **Yes**, verified on hardware -- both recent soaks were on a BC04 |
+| BC02, BC06, BC08 | Yes | No -- build from source, and see `sdkconfig.bc04-reference` |
 
 Every release is named for its board, and so is every image inside it
 (`stay-open-bc01-...`). The device model is also written into the settings
@@ -196,11 +204,25 @@ and upload one of these on the same page:
 
 | File | Updates |
 |---|---|
-| `stay-open-bc01-<version>-ota.bin` | the firmware |
-| `stay-open-bc01-<version>-www-ota.bin` | the web interface only |
+| `stay-open-<board>-<version>-ota.bin` | the firmware |
+| `stay-open-<board>-<version>-www-ota.bin` | the web interface only |
+
+`<board>` is `bc01` or `bc04` — take the one named for your board. Uploading
+the other board's image is accepted, because the update endpoints check the
+image type and project, not the board; the miner then comes up reporting
+**Wrong firmware for this board** on its display and returns no shares. It is
+recoverable — the web interface still runs, so upload the right `-ota.bin` —
+but it is an avoidable hour.
+
+If you are uploading both, do the firmware first and the interface second; each
+reboots when it finishes.
 
 You do not have to say which is which. The page reads the first byte and routes
 the file itself, and refuses anything that is neither.
+
+**This route never erases the flash.** The browser flasher's Update mode has to
+be told not to, which is a dialog the user can get wrong; the miner's own update
+page has no such step. Prefer it when the miner is reachable.
 
 Both are needed to move fully between releases; the web-UI file alone is enough
 when a release only changes the interface. The raw `-app.bin` and `-www.bin` are
