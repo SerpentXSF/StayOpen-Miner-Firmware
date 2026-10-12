@@ -65,9 +65,10 @@ functions holding them return.
 ### What is protected
 
 Every API endpoint: `/api/system` (`PATCH`), `/api/system/restart`,
-`/api/system/OTA`, `/api/system/OTAWWW`, `/api/system/info`,
-`/api/system/log/download`, `/api/get_*`, `/api/set_network`,
-`/api/influx*`, `/api/sync_time`, and the `/api/ws` websocket.
+`/api/system/pool/drop`, `/api/system/OTA`, `/api/system/OTAWWW`,
+`/api/system/info`, `/api/system/log/download`, `/api/get_*`,
+`/api/set_network`, `/api/influx*`, `/api/sync_time`, and the `/api/ws`
+websocket.
 
 Deliberately left open:
 

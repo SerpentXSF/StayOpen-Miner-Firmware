@@ -137,6 +137,50 @@ notify arrives, and flat afterwards -- so the residual difference from an even
 split is a fixed cost at boot rather than a leak that grows. Read these rather
 than inferring a shortfall from share counts against two moving vardiffs.
 
+## Ending a pool's session on purpose
+
+```
+POST /api/system/pool/drop   {"pool": "C"}
+```
+
+Ends that pool's Stratum session. The pool reconnects by itself afterwards, the
+same way it would after any disconnect. The response says what was recorded,
+not what has happened -- the pool task acts on its next pass, measured at 0.0
+to 0.6 s -- so poll `pool<X>Connected` to watch it:
+
+```json
+{"pool": "C", "wasConnected": true, "status": "drop requested"}
+```
+
+`B`, `C` or `D`, upper or lower case. Pool A is refused: its transport has no
+lock and its receive timeout is ten minutes, so there is no prompt and safe way
+to end its session from the HTTP task. An unconfigured pool gives 404.
+
+**Why this exists.** The defects fixed on this path were all about what a new
+session inherits from the one it replaced -- work, extranonce, a held notify --
+and a session can only end from the far side. Nothing in the API could cause
+one: changing a pool's host needs a restart, and a restart is two cold starts
+rather than a reconnect, so it cannot exercise this at all. Confirming those
+fixes meant standing a Stratum relay in front of the pool, repointing the pool
+at it, opening a firewall port and restarting twice. Blocking the pool's
+hostname at a router does nothing, incidentally: that is DNS filtering, and the
+firmware resolved the name once at connect time and holds a socket to the
+address.
+
+It is not behind a build flag. A flag would mean the binary that gets tested is
+not the binary that ships, and every fix on this path was settled by what the
+firmware did rather than by reading it. It needs the API password, and the most
+an authorised caller achieves is a reconnect.
+
+Measured over eight forced reconnects across all three secondary pools:
+`jobsServed` frozen for every disconnected window, a distinct extranonce from
+the pool on every reconnect, work resumed 2.0-2.9 s after reconnecting, nothing
+rejected, and the other pools undisturbed.
+
+A requested drop is logged as such -- `dropping the session, asked over the
+API` -- and not as the failed share write that shares its teardown path, so the
+log still says why a session ended.
+
 ## Credit
 
 Ported from the SerpentX dual-pool work for BitAxe and NerdAxe, GPL-3.0.

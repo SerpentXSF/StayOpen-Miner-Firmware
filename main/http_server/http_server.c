@@ -1456,6 +1456,139 @@ static esp_err_t POST_restart(httpd_req_t * req)
     // This return statement will never be reached, but it's good practice to include it
     return ESP_OK;
 }
+
+/*
+ * POST /api/system/pool/drop  with  {"pool":"C"}
+ *
+ * Ends one secondary pool's Stratum session. The pool reconnects on its own
+ * afterwards, the way it would after any disconnect.
+ *
+ * This exists because nothing else could cause one. The reconnect defects --
+ * work, extranonce and held notify outliving the session that owned them --
+ * are all about what is inherited when a session ends, and a session can only
+ * end from the far side. Testing them meant standing a Stratum relay in front
+ * of the pool, repointing the pool at it and restarting twice; a config change
+ * plus a restart is two cold starts, not a reconnect, so it cannot test this
+ * at all. Without a way to end a session on demand the fixes were not
+ * falsifiable.
+ *
+ * Not gated behind a build flag. A flag would mean the binary that gets tested
+ * is not the binary that ships, and every reconnect fix here was confirmed or
+ * refuted by what the firmware did on the wire rather than by reading it.
+ * Worth saying plainly: it needs the API password, and the worst an authorised
+ * caller achieves is a reconnect the pool was always free to force itself.
+ *
+ * Pool A is not accepted. Its transport has no lock and its receive timeout is
+ * ten minutes, so there is no prompt and safe way to end its session from
+ * here. See the note on PoolSession::drop_requested.
+ */
+static esp_err_t POST_pool_drop(httpd_req_t * req)
+{
+    if (is_network_allowed(req) != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_401_UNAUTHORIZED, "Unauthorized");
+    }
+
+    if (api_auth_require(req) != ESP_OK) {
+        return ESP_OK; /* 401 already sent */
+    }
+
+    if (set_cors_headers(req) != ESP_OK) {
+        httpd_resp_send_500(req);
+        return ESP_OK;
+    }
+
+    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
+
+    int total_len = req->content_len;
+    int cur_len = 0;
+    char * buf = ((rest_server_context_t *) (req->user_ctx))->scratch;
+    int received = 0;
+
+    if (total_len <= 0 || total_len >= SCRATCH_BUFSIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "expected a body of {\"pool\":\"B\"|\"C\"|\"D\"}");
+        return ESP_OK;
+    }
+    while (cur_len < total_len) {
+        received = httpd_req_recv(req, buf + cur_len, total_len - cur_len);
+        if (received <= 0) {
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "failed to read body");
+            return ESP_OK;
+        }
+        cur_len += received;
+    }
+    buf[total_len] = '\0';
+
+    cJSON * root = cJSON_Parse(buf);
+    if (root == NULL) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_OK;
+    }
+
+    cJSON * item = cJSON_GetObjectItem(root, "pool");
+    if (!cJSON_IsString(item) || item->valuestring == NULL ||
+        item->valuestring[0] == '\0' || item->valuestring[1] != '\0') {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "\"pool\" must be a single letter: B, C or D");
+        return ESP_OK;
+    }
+
+    char letter = item->valuestring[0];
+    if (letter >= 'a' && letter <= 'z') {
+        letter = (char) (letter - 'a' + 'A');
+    }
+    cJSON_Delete(root);
+
+    if (letter == 'A') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "pool A cannot be dropped from here");
+        return ESP_OK;
+    }
+    if (letter < 'A' + (int) POOL_B || letter > 'A' + (int) (POOL_MAX - 1)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "\"pool\" must be a single letter: B, C or D");
+        return ESP_OK;
+    }
+
+    pool_id_t id = (pool_id_t) (letter - 'A');
+
+    /* Same test the pool task uses for "is there anything to connect to". */
+    const char * url = module->pool[id].url;
+    if (url == NULL || url[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "that pool is not configured");
+        return ESP_OK;
+    }
+
+    bool was_connected = module->pool[id].connected;
+
+    /*
+     * The flag is the whole of it. The pool task owns the session and tears it
+     * down itself on its next pass, which is what makes this safe from here --
+     * closing a transport from under the task reading it is what the
+     * transport_lock exists to prevent.
+     */
+    GLOBAL_STATE->pool_session[id].drop_requested = true;
+
+    ESP_LOGW(TAG, "pool %c: session drop requested over the API (was %s)",
+             letter, was_connected ? "connected" : "not connected");
+
+    cJSON * resp = cJSON_CreateObject();
+    char name[2] = { letter, '\0' };
+    cJSON_AddStringToObject(resp, "pool", name);
+    cJSON_AddBoolToObject(resp, "wasConnected", was_connected);
+    /* Says what was recorded, not what has happened: the task acts on its next
+     * pass. A caller watching for the drop should poll pool<X>Connected. */
+    cJSON_AddStringToObject(resp, "status", "drop requested");
+
+    const char * out = cJSON_PrintUnformatted(resp);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out);
+    free((void *) out);
+    cJSON_Delete(resp);
+    return ESP_OK;
+}
+
 /*
 // URL解码函数
 static void urldecode(char *dst, const char *src, size_t dst_size) {
@@ -3621,6 +3754,23 @@ esp_err_t start_rest_server(void * pvParameters)
         .user_ctx = rest_context
     };
     httpd_register_uri_handler(server, &system_restart_uri);
+
+    /* URI handler for ending one secondary pool's session. See POST_pool_drop. */
+    httpd_uri_t system_pool_drop_uri = {
+        .uri = "/api/system/pool/drop",
+        .method = HTTP_POST,
+        .handler = POST_pool_drop,
+        .user_ctx = rest_context
+    };
+    httpd_register_uri_handler(server, &system_pool_drop_uri);
+
+    httpd_uri_t system_pool_drop_options_uri = {
+        .uri = "/api/system/pool/drop",
+        .method = HTTP_OPTIONS,
+        .handler = handle_options_request,
+        .user_ctx = NULL
+    };
+    httpd_register_uri_handler(server, &system_pool_drop_options_uri);
 
     /* The vendor web UI already posted here; the route never existed.
      * See docs/SECURITY.md finding 1. */

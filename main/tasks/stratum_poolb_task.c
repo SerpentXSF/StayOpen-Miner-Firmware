@@ -241,8 +241,11 @@ static bool pool_connect(GlobalState *GLOBAL_STATE, pool_id_t id)
 
     pthread_mutex_lock(&GLOBAL_STATE->pool_session[id].transport_lock);
     /* Clear before publishing the handle: a failure recorded against the
-     * session that just ended must not take down the one replacing it. */
+     * session that just ended must not take down the one replacing it. The
+     * same goes for a drop asked for while the old session was on its way
+     * out -- it has already been honoured. */
     GLOBAL_STATE->pool_session[id].write_failed = false;
+    GLOBAL_STATE->pool_session[id].drop_requested = false;
     GLOBAL_STATE->pool_session[id].transport = transport;
     pthread_mutex_unlock(&GLOBAL_STATE->pool_session[id].transport_lock);
     module->pool[id].connected = true;
@@ -414,10 +417,23 @@ static bool pool_service(GlobalState *GLOBAL_STATE, pool_id_t id,
      * retransmits run out, minutes later, and until then this pool keeps a
      * full share of the slices and loses every one.
      */
-    if (GLOBAL_STATE->pool_session[id].write_failed) {
+    if (GLOBAL_STATE->pool_session[id].write_failed ||
+        GLOBAL_STATE->pool_session[id].drop_requested) {
+        /* Which one fired decides only what gets logged. Both end the session
+         * by the same path on purpose: a drop asked for over the API is only
+         * worth having if it exercises the teardown a real failure takes. */
+        bool asked = GLOBAL_STATE->pool_session[id].drop_requested;
+
         GLOBAL_STATE->pool_session[id].write_failed = false;
-        ESP_LOGW(TAG, "%s: a share could not be written, dropping the session",
-                 pool_name(id));
+        GLOBAL_STATE->pool_session[id].drop_requested = false;
+
+        if (asked) {
+            ESP_LOGW(TAG, "%s: dropping the session, asked over the API",
+                     pool_name(id));
+        } else {
+            ESP_LOGW(TAG, "%s: a share could not be written, dropping the session",
+                     pool_name(id));
+        }
         pool_close(GLOBAL_STATE, id);
         pool_failover_step(&st->fo, PF_EV_DISCONNECTED);
         st->next_attempt_us = esp_timer_get_time() + POOLB_RETRY_DELAY_MS * 1000LL;

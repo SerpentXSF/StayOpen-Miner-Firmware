@@ -162,6 +162,22 @@ typedef struct {
      * is how the transport_lock dance started.
      */
     volatile bool          write_failed;
+
+    /*
+     * Set by the API to end this session on purpose, read by the pool task
+     * in the same place as write_failed and torn down the same way.
+     *
+     * Kept separate from write_failed rather than reusing it so the log says
+     * which happened. A requested drop recorded as "a share could not be
+     * written" would read as a network fault in the one record anyone has to
+     * work from afterwards, and this flag exists to make faults legible.
+     *
+     * There is no equivalent for pool A. Its transport has no lock, and its
+     * receive timeout is ten minutes, so neither closing the socket from
+     * another task nor polling a flag in its loop would be safe or prompt.
+     * Giving pool A one means locking its transport first.
+     */
+    volatile bool          drop_requested;
 } PoolSession;
 
 typedef struct
