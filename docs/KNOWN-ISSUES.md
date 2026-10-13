@@ -26,15 +26,64 @@ If you are running it, these are fixed in your firmware and these are not:
 | The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |
 | A dropped firmware upload is retried rather than handed back (2.0.30) | |
 
-The right-hand column is unreleased. Everything in it is verified on hardware
-except where an entry says otherwise, but none of it is in a published image.
+The right-hand column is unreleased and none of it is in a published image. How
+far each row has been checked differs, so it is stated per row rather than
+blanket:
 
-## The web flasher's "Update" mode erases the settings it promises to keep (fixed in the tree, still live)
+| unreleased fix | how far it is checked |
+| --- | --- |
+| A dead secondary pool's work, extranonce and held notify are released rather than inherited | On hardware, over eight forced reconnects across all three secondaries: nothing built between the pool going down and the new session's extranonce, a distinct extranonce each time, nothing rejected |
+| A failed share write counts as a disconnect instead of waiting on lwIP | **The shared teardown is exercised on hardware; a genuinely failing write is not.** The API drop and a write failure take the same path, and that path was measured at 0.0–0.6 s. Nothing provoked a real write failure |
+| The parsed Stratum strings are freed | **Reviewed, not measured.** No pool rejected anything during testing, so the error-reason path never ran. Internal heap was flat (+172 bytes over 8 min), which is consistent but does not exercise it |
+| Up to four pools, gated to four-ASIC boards | On hardware: all four pools mining, the split within 1σ of its configured weights, 2,754 shares and 0 rejects over two hours |
+| A session can be ended on demand over the API | On hardware: every refusal case, and eight drops across three pools |
 
-**Status: fixed in `tools/make_release.py`, and still wrong on the published
-flasher** until the next `publish_flasher.py` run. Checked 2026-10-11:
-`https://serpentxsf.github.io/StayOpen-Miner-Firmware/flasher/manifest-bc01-update.json`
-and the BC04 one both still report `"new_install_prompt_erase": false`.
+## Pool A keeps building from a dead session after it drops (open)
+
+**Status: open**, and it is the same defect that `5325e52` fixed for the
+secondary pools, still present for pool A.
+
+`mining_notification` is a local in `create_jobs_task` (`:144`), replaced only
+when a fresh notify is dequeued (`:155`), and never cleared when pool A's
+session ends. The guard that skips pool A's slice (`:305`) tests that pointer
+for NULL, so it only fires before pool A's **first** notify since boot. Once
+pool A has connected even once, the pointer stays set for the life of the task.
+
+So after pool A connects and then drops, its slices keep being spent building
+work from the dead session's job id and extranonce. `jobs_served[POOL_A]` keeps
+counting, the display and API show pool A producing work, and the shares are
+discarded later at submit --- `asic_result_task.c:166-175` concedes it in a
+comment: the job "is built now", so the check has to be there. With the
+Hashrate split at its default 50, that is half the miner's output going nowhere
+with nothing saying so.
+
+**What the existing tests do and do not cover.** `bbab966`'s pool A outage test
+pointed pool A's primary and failover at an unroutable address *from boot*, so
+`mining_notification` was never set and the NULL guard did fire --- which is
+why that test passed and this went unnoticed. The case that fails is pool A
+working and then going away, which is the ordinary one.
+
+**The fix has a model to copy.** `5325e52` dropped a secondary's held notify
+when its transport went NULL. Pool A needs the equivalent, which means
+reaching its transport state from `create_jobs_task` --- and pool A's transport
+has no lock (see the note on `PoolSession::drop_requested`), so this is not a
+one-line change. Not attempted here rather than attempted untested.
+
+The header table's "Dual pool no longer feeds a pool that has disconnected
+(2.0.29)" is therefore true of the **secondaries only**.
+
+## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
+
+**Status: fixed.** `tools/make_release.py` sets the flag correctly, and the
+flasher was republished on 2026-10-11 (`gh-pages` `8881764`, carrying 2.0.30 for
+both boards). Verified live the same day: both `manifest-*-update.json` now
+report `"new_install_prompt_erase": true`, both install manifests still
+`false`, and every part the manifests name is served.
+
+Fixing the generator is not what fixed this. `dist/` is gitignored and the live
+page is served from the `gh-pages` branch, so the commit changed nothing an
+owner could reach until `publish_flasher.py` was run against the 2.0.30
+artifacts. If this breaks again, both steps are needed.
 
 **What happens to an owner.** They pick **Update**, whose note says "Keeps your
 settings. Only for a miner already running Stay Open." The browser erases the
@@ -70,14 +119,17 @@ The page is also now pinned to `esp-web-tools@10.4.0` rather than `@10`, because
 this behaviour lives in the library's internals and a floating major can change
 it with no commit here.
 
-**Until the flasher is republished**, update through the miner's own
-**Settings → Check for Updates**, or by uploading `-ota.bin` and `-www-ota.bin`
-on that page. That route never erases the flash.
+**The miner's own Settings → Check for Updates never erases the flash**, so it
+remains the route to prefer when the miner is reachable. The browser's Update
+mode now asks about erasing and the box starts unticked; leaving it unticked is
+what keeps the settings.
 
-**Still not verified on hardware.** The chain above is read from the published
-package and the published manifests, not observed on a board. Confirming it
-takes one BC04 on USB: update a configured miner from the browser and read
-`stratumuser` afterwards.
+**Neither the defect nor the fix has been seen on hardware.** Everything above
+is read from the published esp-web-tools package and the published manifests.
+The only owner incident on record was a `-full.bin` flash, which erases by
+design, so nobody has reported losing settings to Update mode — the failure is
+derived, not observed. Confirming it takes one BC04 on USB: update a configured
+miner from the browser with the box unticked, then read `stratumuser`.
 
 ## A www update needed a restart the caller had to know about (fixed)
 

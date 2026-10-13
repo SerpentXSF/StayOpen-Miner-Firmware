@@ -155,8 +155,10 @@
     You flash at your own risk. We are not responsible for damage caused by
     running a device beyond its limits, or by the flashing process leaving it
     unusable.</p>
-    <p>Flashing <strong>erases your configuration</strong>: WiFi credentials,
-    pool settings and payout address all go. Note them down first.</p>
+    <p><strong>New install erases your configuration</strong>: WiFi
+    credentials, pool settings and payout address all go. Note them down first.
+    <strong>Update</strong> keeps them &mdash; but it asks about erasing the
+    device on the way through, and ticking that box erases them after all.</p>
     <p>Two protections in this firmware are known <em>not</em> to work, and
     both are documented rather than hidden:
     <a href="https://github.com/SerpentXSF/StayOpen-Miner-Firmware/blob/main/docs/HARDWARE-SAFETY.md">HARDWARE-SAFETY.md</a>
@@ -289,7 +291,16 @@
           .map(function (p) { return '0x' + p.offset.toString(16) + ' ' + p.path; })
           .join(' ');
       }
-    } catch (e) { /* leave the fallback text */ }
+    } catch (e) {
+      /* Say so rather than leaving whatever was rendered last. After the first
+         successful pick() that is the *other* board's or mode's part list, and
+         a stale list is worse than no list: the filenames look plausible and
+         name the wrong board. The static markup is only ever seen before the
+         first fetch, and names an unversioned file that is not published, so
+         it cannot be restored here either. */
+      esptoolFile.textContent =
+        '(could not read the manifest -- take the filenames from the releases page)';
+    }
   }
 
   function manifestFor(b, m) {

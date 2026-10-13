@@ -137,12 +137,20 @@ SHA-256d. Off unless you configure a second pool.
 
 Two pools work on any supported board. **Three and four need a board with four
 ASICs** — in practice a BC04 — and the mode buttons for them are disabled
-otherwise. Each pool gets a relative **Share** weight rather than a percentage;
-leave them all at zero for an even split.
+otherwise.
+
+**Pool A's share is the Hashrate split slider, and nothing else changes it.**
+It defaults to 50, so a freshly configured four-pool miner gives pool A half
+and splits the other half between B, C and D — about 16% each, not 25. The
+per-pool **Share** weights divide only what the slider leaves over. For an even
+four-way split, set the slider to 25 too.
 
 Share counts will not match the ratio you set: each pool runs its own vardiff,
-so the same work produces different share counts. The dashboard prints each
-pool's difficulty beside its counts for that reason.
+so the same work produces different share counts. The dashboard prints pool
+B's difficulty beside its counts for that reason — **it has no cards for pools
+C and D yet, and its A/B split bar ignores them**, so on a three- or four-pool
+miner read `pool<X>JobsSelected` and `pool<X>JobsServed` from
+`/api/system/info` instead.
 [docs/DUAL-POOL.md](docs/DUAL-POOL.md) covers the setup, how the split is
 measured honestly, and the clean_jobs bug that used to discard the other pool's
 shares.

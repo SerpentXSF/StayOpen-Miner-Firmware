@@ -357,11 +357,17 @@ def main():
         #              Improv Serial */ _startInstall(true) }
         #
         # and _startInstall(true) reaches `await esploader.eraseFlash()` in
-        # flash.js before a single part is written. So False erased the whole
-        # chip -- nvs at 0xE000 included -- and then wrote every region except
+        # flash.js before a single part is written. So False erases the whole
+        # chip -- nvs at 0xE000 included -- and then writes every region except
         # nvs, which is the one thing this manifest exists to preserve. A miner
-        # updated that way came back with no pool, no payout address and no
-        # WiFi, from a button labelled "keeps settings".
+        # updated that way would come back with no pool, no payout address and
+        # no WiFi, from a button labelled "keeps settings".
+        #
+        # Derived, not observed: that chain is read from the published package,
+        # and nobody has reported losing settings this way. The one owner
+        # incident on record was a -full.bin flash, which erases by design. The
+        # fix is not observed either -- see docs/KNOWN-ISSUES.md for what a
+        # hardware check would involve.
         #
         # True puts up the erase prompt with its checkbox UNTICKED, and Next
         # with it unticked calls _startInstall(false): no erase, nvs survives.

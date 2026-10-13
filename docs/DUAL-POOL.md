@@ -28,17 +28,45 @@ its own failover, and:
 
 | | |
 |---|---|
-| **Share** | this pool's weight relative to the others. Not a percentage. Leave every pool at 0 for an even split. |
+| **Hashrate split** | pool A's percentage. Always applies, in every mode. Default **50**. |
+| **Share** | a secondary pool's weight relative to the *other secondaries*. Not a percentage, and it does not affect pool A. Shown in Triple and Quad only. |
 | **Slice length** | how long each pool owns the ASIC before handing over, 100–60000 ms |
 
-**There is no stored "mode".** A pool is in play when it has a host, and the
-selector only adds and removes panels — choosing fewer pools clears the ones it
-drops. So the hosts decide, not a switch, and a pool left configured keeps
-mining whatever the selector last showed.
+**Pool A's share is the slider, never a Share weight.** This is the part worth
+reading twice, because the obvious reading is wrong.
+`build_pool_weights()` in `main/tasks/create_jobs_task.c` gives pool A
+`dual_ratio_a` — the Hashrate split — and then divides **only what is left**
+among the configured secondaries: by their Share weights if any is non-zero,
+and evenly between them if all are zero.
 
-In two-pool setups the older **Hashrate split** control still applies: a
-percentage to pool A, the rest to pool B. With more than two pools the per-pool
-**Share** weights are what count instead.
+So with everything left at its default — slider at 50, three secondaries at
+Share 0 — a four-pool miner runs:
+
+| pool | share of slices |
+|---|---|
+| A | 50% |
+| B, C, D | 16% each (the remaining 50 split three ways) |
+
+**Not 25% each.** For an even four-way split you have to set the slider to 25
+as well; the Share weights alone cannot take anything away from pool A.
+
+**The selector is not itself stored, but a switch behind it is.** The Pools
+buttons only add and remove panels — choosing fewer clears the ones they drop —
+so from the page it feels like the hosts decide. Underneath, the page also
+writes `dualEnable`, which it derives as "more than one pool". Nothing else is
+stored about the mode.
+
+That matters only if you drive the API directly, and then it matters a lot:
+
+- **`dualEnable` must be 1**, or every secondary idles. `stratum_poolb_task`
+  checks it before connecting anything and `create_jobs_task` gates the
+  scheduler on it. Setting `poolBUrl` alone leaves the miner on pool A with no
+  error anywhere.
+- **Pool B specifically must have a host.** At boot `dual_enable` is
+  `dualenable && pool[POOL_B].url non-empty`, so configuring pool C or D while
+  leaving B blank disables all of them, not just B.
+- It defaults to **0**, so a miner that has never been set up for several pools
+  stays single-pool regardless of what else is stored.
 
 Weights and slice length are re-read live, so the split can be tuned without a
 restart. Changing a pool's host or port needs one — those are read at start-up.
@@ -148,13 +176,20 @@ to the failover, and connected there after about 86 seconds.
 - **A pool which is up but silent** -- accepting the connection and never
   sending work -- is not treated as a failure, because nothing distinguishes it
   from a quiet pool. Nothing else is outstanding on the failover path.
-- **A down pool's slices are not redistributed among the pools still up.**
+- **A down secondary's slices are not redistributed among the pools still up.**
   Fallthrough is one-way: work a secondary cannot take goes to pool A, not to
   the other secondaries. With pool C down in a four-pool setup, pool A gets
   C's share rather than B and D splitting it. Deferred deliberately -- it is a
   change to the scheduler's weighting rather than to the failover path, and
-  nothing is lost in the meantime; the hashrate just lands somewhere other than
-  where the weights asked.
+  nothing is lost; the hashrate just lands somewhere other than where the
+  weights asked.
+- **If pool A drops after having connected, its slices ARE lost.** Work keeps
+  being built from the dead session and discarded at submit, while the counters
+  show pool A producing. This is the same defect `5325e52` fixed for the
+  secondaries and it is still open for pool A; see `docs/KNOWN-ISSUES.md`. At
+  the default Hashrate split that is half the miner's output. A pool A that was
+  never reachable since boot is handled correctly -- it is specifically the
+  up-then-down case.
 - **Per-ASIC pool assignment is impossible on this silicon**, not merely
   unimplemented. `BM1370_job` carries no chip address field, so a job cannot be
   directed at one ASIC. Time-slicing is the only mechanism available, which is
@@ -173,9 +208,10 @@ difference from an even split is a fixed cost at boot rather than a leak that
 grows. Read these rather than inferring a shortfall from share counts against
 several moving vardiffs.
 
-Measured on a BC04 with four pools at equal weight: the interval-accurate split
-held within 1σ of 25% each, over 2,754 shares with none rejected across two
-hours.
+Measured on a BC04 with **the Hashrate split set to 25 and each secondary's
+Share set to 25** — not at the defaults, which would have given pool A half —
+the interval-accurate split held within 1σ of 25% each, over 2,754 shares with
+none rejected across two hours.
 
 `pool<X>Connected`, `pool<X>SharesAccepted`, `pool<X>SharesRejected` and
 `pool<X>Diff` are reported per pool as well.
