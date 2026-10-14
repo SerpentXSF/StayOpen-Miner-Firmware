@@ -12,9 +12,13 @@ void analyze_task_memory(void);
 
 /*
  * Reports the internal pool when the floor moves, and at named points during
- * start-up. Both allocate nothing and run on whatever task calls them, which
- * is the whole design: a 3 KB stack for a monitor task of its own is what
- * stopped asic_result_0 being created once already.
+ * start-up. Both run on whatever task calls them -- a 3 KB stack for a monitor
+ * task of its own is what stopped asic_result_0 being created once already.
+ *
+ * They are not allocation-free: the log hook malloc()s twice per line, from
+ * the same pool these measure. See the comment on heap_mark() in main.c before
+ * calling either from anywhere new, and keep heap_watermark_moved() to one
+ * caller -- its floor is a function-local static.
  */
 void heap_mark(const char *stage);
 bool heap_watermark_moved(void);

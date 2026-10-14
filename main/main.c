@@ -12,6 +12,7 @@
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
 #include "esp_timer.h"       /* esp_timer_get_time(), for the heap marks */
+#include "esp_task.h"        /* ESP_TASK_MAIN_STACK: the config size + padding */
 #include "esp_wifi.h"
 #include "mbedtls/platform.h"
 #include <stdlib.h>
@@ -231,11 +232,31 @@ void analyze_task_memory(void) {
  * only a start-up cost. The census that exists fires once at two minutes, long
  * after the dip, and cannot say when or where.
  *
- * Both of these allocate nothing and run on the caller's stack. That is not
- * incidental: the task that used to do this work is deliberately not started
- * because its 3 KB of internal stack was once enough to stop asic_result_0
- * being created, and instrumenting a shortage by consuming the thing that is
- * short would be its own kind of wrong.
+ * Both run on the caller's stack, which is the point: the task that used to do
+ * this work is deliberately not started because its 3 KB of internal stack was
+ * once enough to stop asic_result_0 being created.
+ *
+ * THEY ARE NOT FREE, and an earlier version of this comment claimed they were.
+ * init_logging_system() is app_main's first statement and installs
+ * log_to_queue() as the vprintf hook, which malloc()s twice per line -- the
+ * formatted string and a timestamped copy for the web log queue. With
+ * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192 those go to the internal pool
+ * first, so each line reported here costs that pool roughly twice the line's
+ * length, transiently, and the queued copy until the websocket drain runs.
+ *
+ * Two consequences worth holding on to:
+ *
+ *   - a reported floor may include this instrument's own allocations, and
+ *     cannot be separated from them after the fact;
+ *   - heap_watermark_moved() can therefore push the floor down itself and
+ *     report its own effect on the next pass, so "monotonic, so the line count
+ *     is bounded" is weaker than it sounds.
+ *
+ * It is still worth having -- it is the only reading of this window that
+ * exists -- but the figures are an upper bound on the pressure, not a clean
+ * one. Bypassing the hook with esp_rom_printf() would fix that and would also
+ * take the lines off the kernel log the API serves, which is the only way they
+ * can be read on a board with no serial attached.
  */
 void heap_mark(const char *stage)
 {
@@ -815,6 +836,36 @@ void app_main(void)
     init_jobs(&GLOBAL_STATE);
 
     heap_mark("before task fleet");
+
+    /*
+     * Stack sizes below are measured, not guessed.
+     *
+     * analyze_task_memory() prints each task's unused stack two minutes in.
+     * Read on three boots and kept at its WORST, that gave:
+     *
+     *   stratum_manager  8192, unused 1144    left alone
+     *   stratum_poolb    8192, unused 1240    left alone
+     *   asic_result_0    6144, unused 1440    left alone
+     *   http task        6144, unused 2428    left alone
+     *   stratum_worker   6144, unused 3316 -> 4608
+     *   asic_task_0      5120, unused 2964 -> 3584
+     *   hashrate_task_0  4096, unused 2940 -> 2560
+     *
+     * Three were cut, each left with about 1.4 KB spare. The rest were not:
+     * the two stratum tasks and asic_result_0 are already inside 1.5 KB, and
+     * asic_result_0 is the one that failed to be created on a board that ran
+     * out -- taking anything from it would be aiming at the wrong target.
+     *
+     * http task was left alone despite 2428 spare. It is the only one of these
+     * that does TLS, its retry paths are not all exercised by a healthy boot,
+     * and it was worth the least of the four.
+     *
+     * Unlike the main task's stack these are held for the life of the miner,
+     * so what they give back is steady-state internal RAM rather than a
+     * start-up peak. A figure from one boot would not be enough to size any of
+     * them: a task that has not yet taken its deepest path reports slack it
+     * does not have.
+     */
     /*create the stratum task.*/
     create_task_checked(&GLOBAL_STATE, stratum_task, "stratum_manager",
                         8192, (void *)&GLOBAL_STATE, 5, true);
@@ -825,7 +876,7 @@ void app_main(void)
                         8192, (void *)&GLOBAL_STATE, 5, false);
     /*create the uart task.*/
     create_task_checked(&GLOBAL_STATE, create_jobs_task, "stratum_worker",
-                        6144, (void *)&GLOBAL_STATE, 10, true);
+                        4608, (void *)&GLOBAL_STATE, 10, true);
     /*create the socket api task.*/
     #ifdef SOCKET_API_FEAUTRE
     create_task_checked(&GLOBAL_STATE, socket_api_task, "socket-api",
@@ -877,7 +928,7 @@ void app_main(void)
             {
                 /* Sends work to the chips. */
                 sprintf(tmp_name, "asic_task_%"PRIu32"", i);
-                create_task_checked(&GLOBAL_STATE, ASIC_task, tmp_name, 5120,
+                create_task_checked(&GLOBAL_STATE, ASIC_task, tmp_name, 3584,
                                     (void *)&(chain_param[i]), 10, true);
             }
 
@@ -894,7 +945,7 @@ void app_main(void)
                  * the mining, so it is reported rather than raised. */
                 sprintf(tmp_name, "hashrate_task_%"PRIu32"", i);
                 create_task_checked(&GLOBAL_STATE, hashrate_monitor_task,
-                                    tmp_name, 4096,
+                                    tmp_name, 2560,
                                     (void *)&(chain_param[i]), 5, false);
             }
             #endif
@@ -944,9 +995,22 @@ void app_main(void)
      * CONFIG_ESP_MAIN_TASK_STACK_SIZE rather than a number written in prose is
      * why that could be noticed at all.
      */
-    ESP_LOGI(TAG, "main task stack: %u of %d bytes still unused",
+    /*
+     * The denominator is the configured size PLUS TASK_EXTRA_STACK_SIZE.
+     * app_startup.c creates "main" with ESP_TASK_MAIN_STACK, which
+     * esp_task.h defines as CONFIG_ESP_MAIN_TASK_STACK_SIZE + 512 unless
+     * CONFIG_NEWLIB_NANO_FORMAT is set, and it is not on this build. Printing
+     * the config value alone understated the stack by 512 and so understated
+     * use by the same -- it read 2,936 when the real figure is 3,448. The
+     * differences were unaffected, so the trim this sized was not, but anyone
+     * repeating the measurement from the old line would have been 512 out.
+     */
+    ESP_LOGI(TAG, "main task stack: %u of %d bytes still unused "
+                  "(%d configured + %d padding)",
              (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
-             CONFIG_ESP_MAIN_TASK_STACK_SIZE);
+             (int) ESP_TASK_MAIN_STACK,
+             CONFIG_ESP_MAIN_TASK_STACK_SIZE,
+             (int) (ESP_TASK_MAIN_STACK - CONFIG_ESP_MAIN_TASK_STACK_SIZE));
 
     /*
      * The last word app_main has on the internal pool. Everything after this

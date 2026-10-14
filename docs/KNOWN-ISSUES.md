@@ -181,9 +181,15 @@ the floor to 1,639 bytes by 36 s without any one allocation standing out.
 
 ### The main task stack, trimmed 8192 to 5120 (2026-10-14)
 
-`uxTaskGetStackHighWaterMark()` says the main task uses **2,936 bytes**, and it
-said exactly that on six boots across both sizes -- the path is deterministic.
-8,192 left 64% of it unused, so 5,120 was taken, leaving 2,184 spare.
+`uxTaskGetStackHighWaterMark()` reported the same free figure on six boots
+across both sizes, so the path is deterministic. The task's real stack is the
+configured size **plus 512**: `app_startup.c` creates "main" with
+`ESP_TASK_MAIN_STACK`, which is `CONFIG_ESP_MAIN_TASK_STACK_SIZE +
+TASK_EXTRA_STACK_SIZE`, and nano format is off on this build. So the stack was
+8,704 and use is **3,448 bytes** -- not the 2,936 first recorded here, which
+came from printing the config value as the denominator. The differences below
+are unaffected, because the padding cancels in a subtraction, so the trim this
+sized stands. 5,120 configured is 5,632 real, leaving 2,184 spare.
 
 Three boots each, measured at the marks above:
 
@@ -195,8 +201,12 @@ Three boots each, measured at the marks above:
 | steady-state floor | 380 | 545 |
 | boots with a task that failed | 0 of 3 | 0 of 3 |
 
-**+2,516 bytes free at the moment the task fleet is created**, which is about
-82% of the 3,072 given up; the rest goes to allocator overhead.
+**+2,516 bytes free at the end of app_main**, and +2,539 at *before task
+fleet*. Both are close to but under the 3,072 given up. Why they are not the
+full 3,072 is not established -- an earlier version of this entry said
+"allocator overhead", which does not hold up: a block header does not scale
+with block size like that, and boot-to-boot variance at one configuration is of
+the same order as the gap.
 
 **The largest block did not move.** 7,680 bytes, identical on all six boots. A
 task stack has to come from one contiguous block, so if the goal is to make
@@ -205,11 +215,59 @@ not carved from the block that limits that, and giving 3 KB back does not
 coalesce into it. What the trim buys is pool headroom during start-up, not a
 bigger hole.
 
-**The steady-state floor is unchanged.** 380 against 545 sits inside the
-boot-to-boot spread already seen (215 to 927), and it should not change: the
+**The steady-state floor is unchanged.** 380 against 545, where the six
+individual boots behind those means ran 215 to 927 -- so the gap sits inside
+the spread, and it should not change: the
 main task deletes itself when app_main returns, so its stack is handed back
 before the miner settles. Anyone reading a lower floor into this change is
 reading the wrong number.
+
+### The other task stacks, trimmed (2026-10-14)
+
+`analyze_task_memory()` prints each task's unused stack two minutes in. Read on
+three boots and kept at its **worst**, because a task that has not yet taken
+its deepest path reports slack it does not have:
+
+| task | was | worst unused | used | now |
+| --- | --- | --- | --- | --- |
+| stratum_manager | 8192 | 1,144 | 7,048 | unchanged |
+| stratum_poolb | 8192 | 1,240 | 6,952 | unchanged |
+| asic_result_0 | 6144 | 1,440 | 4,704 | unchanged |
+| http task | 6144 | 2,428 | 3,716 | unchanged |
+| stratum_worker | 6144 | 3,316 | 2,828 | **4608** |
+| asic_task_0 | 5120 | 2,964 | 2,156 | **3584** |
+| hashrate_task_0 | 4096 | 2,940 | 1,156 | **2560** |
+
+4,608 bytes given back, each trimmed task left with about 1.4 KB spare. The
+two stratum tasks and `asic_result_0` are already inside 1.5 KB and were left
+alone -- `asic_result_0` is the one that failed to be created on a board that
+ran out, so taking from it would be aiming at the wrong target. `http task`
+was left alone despite its slack: it is the only one of these that does TLS,
+its retry paths are not all exercised by a healthy boot, and it was worth the
+least.
+
+Three boots, against the main-stack-only build:
+
+| | main 5120 only | plus task trims |
+| --- | --- | --- |
+| free at *end of app_main* | 15,784 | **19,168** |
+| largest block at *end of app_main* | 7,680 every boot | 9,216 / 11,264 / 7,680 |
+| steady-state floor | 545 | 365 |
+| boots with a task that failed | 0 of 3 | 0 of 3 |
+
+**This is the trim that moved the largest block**, which the main-task trim did
+not: it was pinned at 7,680 on all six boots before and came out at 9,216 and
+11,264 on two of three after. Not reliably -- the third boot still read 7,680 --
+so the honest statement is that the block is no longer pinned, not that it is
+bigger.
+
+**The steady-state floor did not improve, and that is the interesting part.**
+These stacks persist for the life of the miner, unlike the main task's, so
+4,608 bytes back should have raised the floor and did not: 365 against 545, and
+both inside the spread. That is evidence the floor is not set by how much
+internal RAM is free in total. It is consistent with what the `esp-aes` failure
+says -- the binding constraint is DMA-capable DRAM, and
+`MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL` does not measure that.
 
 **Not trimmed further.** 4,096 would leave 1,160 bytes over the measured use.
 Every boot here takes the same path, and the self-test boot -- which calls
@@ -221,35 +279,79 @@ STACKOVERFLOW_CANARY` is on, so such an overflow panics rather than corrupting
 quietly, but a panic on a self-test boot is still a miner that does not come
 back.
 
-**The last fall is a TLS handshake, and it is still failing.** At 71.5 s the
-certificate validates, and then:
+**The last fall coincides with the first HTTPS request, which is still
+failing.** At 71.5 s the certificate validates, and then:
 
     E esp-aes: Failed to allocate memory
     E esp-tls-mbedtls: read error :-0x0001
     E http_task: HTTP GET request failed: ESP_ERR_HTTP_FETCH_HEADER
 
-The floor reaches 355 bytes at 74.4 s, and the request only succeeds on the
-**third** attempt, at 76 s. That `esp-aes` line is the exact failure the 2.0.30
-price fix was written for. What that fix changed is real -- the first attempt
-now happens after start-up instead of thirty seconds in, and a failed pass
-retries in a minute instead of a quarter of an hour, so `$--` does clear
-quickly. But it did not remove the cause: the handshake still cannot get the
-internal DMA-capable memory the AES accelerator wants, and the retry is what
-saves it. `mbedtls_platform_set_calloc_free(psram_calloc, free_psram)` puts
-mbedtls' own allocations in PSRAM; the AES path still needs internal.
+The floor reaches 355 bytes at 74.4 s, and a request succeeds at 76 s.
 
-So the margin is not theoretical and it is not only a start-up cost. It is
-already producing a visible failure on every boot, caught and retried.
+**The handshake is not what fails.** `read error` comes from
+`esp_mbedtls_read()` wrapping `mbedtls_ssl_read()` -- a record read *after* the
+handshake has completed. `main/tasks/http_task.c` and the 2.0.30 release note
+both already said so, correctly; an earlier version of this entry called it a
+handshake failure and was a regression against the project's own text.
+
+What the AES path actually wants is small and specific: `esp_aes_dma_core.c`
+allocates its DMA descriptor array with `heap_caps_aligned_calloc(...,
+MALLOC_CAP_DMA)` per record -- tens of bytes, not the tens of kilobytes the
+40 KB warning below implies. `mbedtls_platform_set_calloc_free(psram_calloc,
+free_psram)` puts mbedtls' own buffers in PSRAM, and on the S3 PSRAM is
+DMA-capable, so those are fine; the descriptor allocation is `MALLOC_CAP_DMA`,
+which is DRAM only. So the thing that ran out is DMA-capable DRAM, and it ran
+out against an allocation of roughly 64 bytes.
+
+**The 76 s success is not the retry.** `HTTP_RETRY_MS` is 60 s, and 76 s is
+4.5 s after the 71.5 s failure. A pass issues three different requests about
+500 ms apart, so that is a later endpoint in the *same* pass. An earlier
+version of this entry credited the retry; that was wrong.
+
+**And the 2.0.30 delay did not step over the dip -- it stepped into it.**
+`http_task` is created at about 25 s and waits `HTTP_FIRST_DELAY_MS` (45 s),
+putting the first request at about 70 s, which is exactly where the floor falls.
+That is not a criticism of 2.0.30, which never claimed to remove the cause and
+describes the failure more precisely than this entry first did. It does mean
+the delay could be retuned once there is a reading of `MALLOC_CAP_DMA` to tune
+against.
+
+So the margin is not theoretical and not only a start-up cost: it produces a
+visible failure on every boot, recovered within the same pass.
 
 Nothing worse has been traced to it. The miner mined at 4.4-5.6 TH/s with all
 four pools connected on every sample of the survey.
 
-**Worth knowing before trimming anything:** the warning threshold in
-`improved_memory_monitor()` is 40 KB and says a TLS handshake needs more than
-that. The measured steady state is 6-12 KB free with a largest block under
-2 KB, so that warning fires on every boot and has stopped carrying
-information. The number it should compare against is whatever the AES path
-actually needs, which nobody has measured.
+**Two things make every figure here an upper bound on the pressure, not a
+clean reading.**
+
+*The instrument allocates.* `init_logging_system()` installs a vprintf hook
+that `malloc()`s twice per line, and with
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=8192` those go to the internal pool
+first. So `heap_mark()` and `heap_watermark_moved()` each cost the pool they
+measure, and a reported floor may include the instrument's own allocations.
+`heap_watermark_moved()` can even push the floor down and report its own
+effect next pass. Bypassing the hook would fix it and would also take the
+lines off the kernel log the API serves, which is the only way to read them on
+a board with no serial attached.
+
+*"Internal" is not "DMA-capable".* `CONFIG_ESP_SYSTEM_ALLOW_RTC_FAST_MEM_AS_HEAP`
+is on, so `MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL` -- what every figure here and
+`minFreeHeapInternal` in the API both query -- counts the 8 KB RTC fast region
+alongside DRAM, and RTC RAM carries no `MALLOC_CAP_DMA`. On top of that
+`heap_caps_get_largest_free_block()` is the maximum across heaps and
+`heap_caps_get_minimum_free_size()` is the sum of per-heap minima, reached at
+possibly different instants. So "7,443 free, largest block 1,536" at the moment
+AES could not get ~64 DMA bytes is only consistent if most of that free was not
+DMA-capable, and nothing here can currently tell. **A `MALLOC_CAP_DMA` reading
+is the missing column**, and it is the one that would explain the `esp-aes`
+line.
+
+**The 40 KB warning in `improved_memory_monitor()` is wrong in kind, not just
+in level.** It says a TLS handshake needs more than 40 KB. The handshake is not
+what fails, and what does fail wants tens of bytes of `MALLOC_CAP_DMA`. The
+measured steady state is 6-12 KB free with a largest block under 2 KB, so the
+warning fires on every boot and has stopped carrying information.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 

@@ -184,12 +184,15 @@ void health_maintenance_task(void *pvParameters)
          * later says how bad it got without saying when, and a two-minute
          * cadence would miss the move anyway.
          *
-         * This logs only on a fall, so it is silent on a steady run. The
-         * minimum is monotonic, so the most it can ever print is bounded by
-         * how far the pool falls, which is a handful of lines per boot. It
-         * runs here, on a task that already exists, for the same reason the
-         * census does: a monitor task of its own once cost 3 KB of internal
-         * stack and stopped asic_result_0 being created.
+         * This logs only on a fall, so it is silent on a steady run. It runs
+         * here, on a task that already exists, for the same reason the census
+         * does: a monitor task of its own once cost 3 KB of internal stack and
+         * stopped asic_result_0 being created.
+         *
+         * Not free, though: the log hook malloc()s twice per line out of the
+         * pool being measured, so a line can push the floor down and be
+         * reported again next pass. Keep this the only caller -- the floor it
+         * compares against is a function-local static.
          */
         heap_watermark_moved();
 
