@@ -183,10 +183,11 @@ to the failover, and connected there after about 86 seconds.
   change to the scheduler's weighting rather than to the failover path, and
   nothing is lost; the hashrate just lands somewhere other than where the
   weights asked.
-- **Pool A's own connection state is not reported.** Every secondary publishes
-  `pool<X>Connected`; pool A publishes nothing equivalent, so neither the API
-  nor a script can say whether the primary pool is up. Its slices being skipped
-  shows only as `poolAJobsSelected` outrunning `poolAJobsServed`.
+- Nothing outstanding on reporting. `poolAConnected` joins
+  `pool<X>Connected` for the secondaries, so every pool's session state is
+  readable from `/api/system/info`; pool A's comes from its own task rather
+  than from the shared pool table. A pool whose slices are being skipped also
+  shows as `pool<X>JobsSelected` outrunning `pool<X>JobsServed`.
 - **Per-ASIC pool assignment is impossible on this silicon**, not merely
   unimplemented. `BM1370_job` carries no chip address field, so a job cannot be
   directed at one ASIC. Time-slicing is the only mechanism available, which is

@@ -22,6 +22,15 @@ const dll = (code: string): string => t(`dashboard.pool.${code}`);
 
 const POOL_LETTERS = ['B', 'C', 'D'];
 
+/* Pool A's own session, which the API only started reporting alongside this.
+ * Older firmware does not send the field at all, so an absent value has to
+ * read as "unknown" rather than "down" -- showing a connected miner as
+ * disconnected would be worse than showing nothing. */
+const poolAConnected = computed(() => {
+  const v = (appStore.statusRaw as any)?.poolAConnected;
+  return v === undefined ? true : !!v;
+});
+
 /* Every pool, not just B. statusRaw is the unshaped API payload, so it is read
  * through one accessor here rather than casting in half a dozen template
  * expressions.
@@ -976,6 +985,11 @@ const gaugeColor = computed(() => {
           <div class="card">
             <div class="card-header">
               <div class="card-title">{{ dll('title') }} [{{ appStore.statusRaw?.isUsingFallbackStratum ? dll('fallback') : dll('primary') }}]</div>
+              <!-- Pool A had no connection badge while every secondary did, so
+                   this was the one pool whose state the page never showed. -->
+              <span class="dual-badge" :class="{ 'is-live': poolAConnected }">
+                {{ poolAConnected ? dll('poolB_connected') : dll('poolB_waiting') }}
+              </span>
             </div>
             <div class="info-list">
               <div class="info-row">

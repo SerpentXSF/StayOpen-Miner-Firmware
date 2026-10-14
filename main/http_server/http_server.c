@@ -37,6 +37,7 @@
 #include "nvs_config.h"
 #include "dual_clamp.h"
 #include "api_auth.h"
+#include "stratum_task.h"   /* stratum_connected_status() for poolAConnected */
 //#include "vcore.h"
 #include "connect.h"
 #include "asic.h"
@@ -1951,6 +1952,25 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     cJSON_AddStringToObject(root, "bestDiff", GLOBAL_STATE->SYSTEM_MODULE.best_diff_string);
     cJSON_AddStringToObject(root, "bestSessionDiff", GLOBAL_STATE->SYSTEM_MODULE.best_session_diff_string);
     cJSON_AddNumberToObject(root, "stratumDiff", GLOBAL_STATE->stratum_difficulty);
+
+    /*
+     * Pool A's connection state, named to match the pool<X>Connected that
+     * every secondary already publishes.
+     *
+     * It was the one pool whose state could not be read from here at all. An
+     * owner could see that B, C and D were up and had no way to tell whether
+     * their primary was, and when pool A silently stopped producing -- which
+     * it did, until the fix in create_jobs_task -- the only signal was
+     * poolAJobsSelected drifting ahead of poolAJobsServed. Verifying that fix
+     * needed a Stratum relay and the kernel log for want of this one number.
+     *
+     * Pool A's state lives in its own task rather than in SystemModule::pool,
+     * so this comes from the accessor instead of the table the secondaries are
+     * published from. It is set when a line arrives and cleared when that
+     * task's connection loop ends, so it answers "is there a live session",
+     * which is what the secondaries' flag means too.
+     */
+    cJSON_AddNumberToObject(root, "poolAConnected", stratum_connected_status() ? 1 : 0);
 
     cJSON_AddNumberToObject(root, "isUsingFallbackStratum", GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback);
 

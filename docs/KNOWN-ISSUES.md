@@ -108,11 +108,14 @@ The header table's "Dual pool no longer feeds a pool that has disconnected
 (2.0.29)" is true of the **secondaries only**. Pool A is covered from this
 tree, unreleased.
 
-**Still missing: the API does not say whether pool A is connected.** Every
-secondary publishes `pool<X>Connected`; pool A publishes nothing equivalent,
-only `stratumDiff`. So an owner cannot see from the API or a script whether
-their primary pool is up, and this fix had to be verified through a relay and
-the kernel log rather than from a counter. Worth adding.
+**`poolAConnected` was added for this**, because the API published
+`pool<X>Connected` for every secondary and nothing equivalent for pool A --
+so an owner could not see whether their primary pool was up, and this fix had
+to be verified through a relay and the kernel log rather than from a counter.
+Pool A's state lives in its own task rather than in `SystemModule::pool`, so it
+comes from `stratum_connected_status()` instead of the table the secondaries
+are published from. The dashboard shows it as a badge on pool A's card, which
+is the one card that never had one.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 
