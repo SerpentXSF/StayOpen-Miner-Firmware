@@ -157,18 +157,57 @@ below 40 KB, so the log carries
 
 on every run. This was detected and logged all along; nobody acted on it.
 
-**What is not known is where.** `memory_monitor_task` waits 90 s before its
-first reading, deliberately -- "or every line describes the boot rather than
-how the miner actually runs" -- so nothing on the device has ever sampled the
-window where the dip happens, and its two-minute cadence is far too coarse to
-catch the later one. Answering it means readings taken at init boundaries and
-rather more often afterwards, which is a build and a flash, not a measurement.
+**Where it goes, measured 2026-10-14.** `heap_mark()` at the init boundaries
+and `heap_watermark_moved()` on the health-maintenance loop -- neither
+allocating anything, both running on tasks that already exist. One boot:
 
-Nothing has been traced to this. The miner mined at 4.4-5.6 TH/s with all four
-pools connected on every sample of the survey. But a TLS handshake wants tens
-of kilobytes of internal RAM and will not take PSRAM, which is the failure this
-margin would produce first, and the price fetch has already been bitten by
-exactly that once.
+| at | internal free | largest block | floor so far |
+| --- | --- | --- | --- |
+| 130 ms, before display init | 224,599 | 163,840 | 224,471 |
+| 728 ms, before network init | 197,663 | 139,264 | 197,403 |
+| 4,940 ms, after network init | 90,795 | 32,768 | 88,983 |
+| 10,438 ms, before peripherals | 84,599 | 31,744 | 84,599 |
+| 25,003 ms, before task fleet | 71,115 | 31,744 | 60,279 |
+| **25,024 ms, end of app_main** | **14,595** | **7,680** | 14,515 |
+| 36,558 ms | 6,551 | 1,536 | **1,639** |
+| 74,378 ms | 7,443 | 1,536 | **355** |
+
+Three consumers account for nearly all of it. **Network init takes about
+108 KB** and drops the largest block from 139 KB to 32 KB in one step.
+**Creating the task fleet takes about 56 KB**, which is where app_main ends
+with 14.5 KB free and a largest block of 7,680 -- the number that decides
+whether the next task stack can be had at all. **The tasks then run** and take
+the floor to 1,639 bytes by 36 s without any one allocation standing out.
+
+**The last fall is a TLS handshake, and it is still failing.** At 71.5 s the
+certificate validates, and then:
+
+    E esp-aes: Failed to allocate memory
+    E esp-tls-mbedtls: read error :-0x0001
+    E http_task: HTTP GET request failed: ESP_ERR_HTTP_FETCH_HEADER
+
+The floor reaches 355 bytes at 74.4 s, and the request only succeeds on the
+**third** attempt, at 76 s. That `esp-aes` line is the exact failure the 2.0.30
+price fix was written for. What that fix changed is real -- the first attempt
+now happens after start-up instead of thirty seconds in, and a failed pass
+retries in a minute instead of a quarter of an hour, so `$--` does clear
+quickly. But it did not remove the cause: the handshake still cannot get the
+internal DMA-capable memory the AES accelerator wants, and the retry is what
+saves it. `mbedtls_platform_set_calloc_free(psram_calloc, free_psram)` puts
+mbedtls' own allocations in PSRAM; the AES path still needs internal.
+
+So the margin is not theoretical and it is not only a start-up cost. It is
+already producing a visible failure on every boot, caught and retried.
+
+Nothing worse has been traced to it. The miner mined at 4.4-5.6 TH/s with all
+four pools connected on every sample of the survey.
+
+**Worth knowing before trimming anything:** the warning threshold in
+`improved_memory_monitor()` is 40 KB and says a TLS handshake needs more than
+that. The measured steady state is 6-12 KB free with a largest block under
+2 KB, so that warning fires on every boot and has stopped carrying
+information. The number it should compare against is whatever the AES path
+actually needs, which nobody has measured.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 

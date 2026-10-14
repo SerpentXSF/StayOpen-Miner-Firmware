@@ -175,6 +175,24 @@ void health_maintenance_task(void *pvParameters)
             analyze_task_memory();
         }
 
+        /*
+         * Says when the internal floor moves, which the census above cannot.
+         *
+         * The census fires once, two minutes in. A survey of ten reboots found
+         * the floor between 131 and 1,639 bytes on every one of them, and in
+         * two it fell AFTER the 70-second mark -- so a single reading taken
+         * later says how bad it got without saying when, and a two-minute
+         * cadence would miss the move anyway.
+         *
+         * This logs only on a fall, so it is silent on a steady run. The
+         * minimum is monotonic, so the most it can ever print is bounded by
+         * how far the pool falls, which is a handful of lines per boot. It
+         * runs here, on a task that already exists, for the same reason the
+         * census does: a monitor task of its own once cost 3 KB of internal
+         * stack and stopped asic_result_0 being created.
+         */
+        heap_watermark_moved();
+
         if(GLOBAL_STATE->interface_initalized){
             if(5 == ++counter){           
                 read_power_information(GLOBAL_STATE);

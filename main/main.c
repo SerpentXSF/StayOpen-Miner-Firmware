@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_netif_ip_addr.h"
+#include "esp_timer.h"       /* esp_timer_get_time(), for the heap marks */
 #include "esp_wifi.h"
 #include "mbedtls/platform.h"
 #include <stdlib.h>
@@ -220,6 +221,56 @@ void analyze_task_memory(void) {
              unused_total, unused_total / 1024);
 
     heap_caps_free(tasks);
+}
+
+/*
+ * Where the internal pool actually goes, which nothing has ever measured.
+ *
+ * Ten reboots put minFreeHeapInternal between 131 and 1,639 bytes, every time,
+ * and in two of them the floor fell after the 70-second mark -- so it is not
+ * only a start-up cost. The census that exists fires once at two minutes, long
+ * after the dip, and cannot say when or where.
+ *
+ * Both of these allocate nothing and run on the caller's stack. That is not
+ * incidental: the task that used to do this work is deliberately not started
+ * because its 3 KB of internal stack was once enough to stop asic_result_0
+ * being created, and instrumenting a shortage by consuming the thing that is
+ * short would be its own kind of wrong.
+ */
+void heap_mark(const char *stage)
+{
+    ESP_LOGI("MEMORY", "[%8lld ms] %-22s internal free %u, largest block %u, "
+                       "min since boot %u",
+             esp_timer_get_time() / 1000, stage,
+             (unsigned) heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+}
+
+/*
+ * Logs only when the floor drops, so it is silent on a healthy run and says
+ * exactly when it is not. Cheap enough to leave on: the minimum is monotonic,
+ * so the number of lines this can ever produce is bounded by how far the pool
+ * has to fall, and in practice that is a handful per boot.
+ *
+ * Returns true when it logged, so a caller can do something more expensive on
+ * the way down if it wants to.
+ */
+bool heap_watermark_moved(void)
+{
+    static size_t floor_seen = SIZE_MAX;
+
+    size_t now = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (now >= floor_seen) {
+        return false;
+    }
+    floor_seen = now;
+    ESP_LOGW("MEMORY", "[%8lld ms] internal RAM floor fell to %u bytes "
+                       "(free now %u, largest block %u)",
+             esp_timer_get_time() / 1000, (unsigned) now,
+             (unsigned) heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+    return true;
 }
 
 void improved_memory_monitor(void)
@@ -545,9 +596,12 @@ void app_main(void)
     statistic_init_system_by_device(&GLOBAL_STATE);
     #endif
 
+    heap_mark("before display init");
     /*init the lcd display.*/
     dev_display_init(&GLOBAL_STATE);
+    heap_mark("after display init");
 
+    heap_mark("before i2c init");
 	ESP_ERROR_CHECK(bc_i2c_init());
 
     /*
@@ -631,7 +685,9 @@ void app_main(void)
                       "peripherals");
     }
 
+    heap_mark("before network init");
     network_init(&GLOBAL_STATE);
+    heap_mark("after network init");
 
     /*sync the locol time.*/
     vSemaphoreCreateBinary(xSyncTimeSemaphore);
@@ -686,6 +742,7 @@ void app_main(void)
      * the error and left the hashboard unpowered. Aborting here would restore
      * the reboot loop that change exists to remove.
      */
+    heap_mark("before peripherals");
     if (ESP_OK != init_all_peripherals(&GLOBAL_STATE)) {
         ESP_LOGE(TAG, "hashboard peripherals did not initialise; carrying on "
                       "so the miner stays reachable");
@@ -757,6 +814,7 @@ void app_main(void)
     }
     init_jobs(&GLOBAL_STATE);
 
+    heap_mark("before task fleet");
     /*create the stratum task.*/
     create_task_checked(&GLOBAL_STATE, stratum_task, "stratum_manager",
                         8192, (void *)&GLOBAL_STATE, 5, true);
@@ -885,5 +943,13 @@ void app_main(void)
     ESP_LOGI(TAG, "main task stack: %u of %d bytes still unused",
              (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
              CONFIG_ESP_MAIN_TASK_STACK_SIZE);
+
+    /*
+     * The last word app_main has on the internal pool. Everything after this
+     * belongs to the tasks, so a floor lower than this one was reached while
+     * the miner was running rather than while it was starting -- which the
+     * survey says does happen, and which nothing could previously tell apart.
+     */
+    heap_mark("end of app_main");
     /*restart();*/
 }

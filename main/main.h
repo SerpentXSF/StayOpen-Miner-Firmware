@@ -10,4 +10,13 @@ void restart(void);
 void improved_memory_monitor(void);
 void analyze_task_memory(void);
 
+/*
+ * Reports the internal pool when the floor moves, and at named points during
+ * start-up. Both allocate nothing and run on whatever task calls them, which
+ * is the whole design: a 3 KB stack for a monitor task of its own is what
+ * stopped asic_result_0 being created once already.
+ */
+void heap_mark(const char *stage);
+bool heap_watermark_moved(void);
+
 #endif /* MAIN_H_ */
