@@ -107,7 +107,11 @@ const lang = {
             rssi: 'Rssi'
         },
         chart: {
-            temp_title: 'Temperture',
+            /* The card asked for `performance` and there was no such key, so
+               vue-i18n printed the path: the chart was headed
+               DASHBOARD.CHART.PERFORMANCE on every miner. */
+            performance: 'Performance',
+            temp_title: 'Temperature',
             hash_title: 'Hash Rate',
             reset: 'RESET',
         },
@@ -136,7 +140,7 @@ const lang = {
             title: 'Pool/Worker',
             fallback: 'Fallback', // [修改] Backup -> Fallback
             primary: 'Primary',
-            dual: 'Dual Pool',
+            dual: 'Other Pools',
             dual_intro_title: 'Several pools at once',
             dual_intro_body: 'Every pool you configure stays connected and the ASIC is time-sliced between them. This splits your hashrate, it does not add any, and every pool must be SHA-256d.',
             mode: 'Pools',
@@ -148,9 +152,9 @@ const lang = {
             mode_needs_four: 'Three and four pool modes need a board with four ASICs.',
             pool_named: 'Pool %s',
             weight: 'Share',
-            weight_hint: 'Relative, not a percentage. Leave every pool at 0 for an even split.',
-            dual_split: 'Hashrate split',
-            dual_split_hint: 'Share counts will not match this ratio if the two pools run different difficulties.',
+            weight_hint: 'Relative to the other secondary pools, not a percentage. These divide only what the hashrate split leaves over and cannot take anything from pool A. All at 0 shares that remainder evenly.',
+            dual_split: "Hashrate split (pool A's share)",
+            dual_split_hint: "Pool A always takes this percentage, in every mode; the rest is divided between the other pools. Share counts will not match these ratios when pools run different difficulties.",
             dual_slice: 'Slice length (ms)',
             dual_slice_hint: 'How long each pool owns the ASIC before handing over. Shorter is more even, longer is fewer stale shares.',
             dual_fb: 'Pool %s failover',

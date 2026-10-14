@@ -22,9 +22,13 @@ spends more time switching than hashing.
 
 ## Setting it up
 
-**Pool settings.** A **Pools** selector — Single, Dual, Triple, Quad — then one
-identical panel per pool after the first, each with host, user, password, TLS,
-its own failover, and:
+**Pool → Other Pools.** The tab sits beside Primary and Fallback, which are
+pool A's own two endpoints; this one holds every pool after that. It was
+labelled "Dual Pool" until it could configure four.
+
+Inside: a **Pools** selector — Single, Dual, Triple, Quad — then one identical
+panel per pool after the first, each with host, user, password, TLS, its own
+failover, and:
 
 | | |
 |---|---|

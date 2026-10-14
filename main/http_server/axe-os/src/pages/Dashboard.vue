@@ -720,7 +720,7 @@ const gaugeColor = computed(() => {
         <section class="content-row">
           <div class="card card-chart">
             <div class="card-header">
-              <div class="card-title">{{ dtl('Performance') }}</div>
+              <div class="card-title">{{ dtl('performance') }}</div>
               
               <div class="chart-actions">
                 
