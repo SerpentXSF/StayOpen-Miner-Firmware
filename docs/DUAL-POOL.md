@@ -183,13 +183,10 @@ to the failover, and connected there after about 86 seconds.
   change to the scheduler's weighting rather than to the failover path, and
   nothing is lost; the hashrate just lands somewhere other than where the
   weights asked.
-- **If pool A drops after having connected, its slices ARE lost.** Work keeps
-  being built from the dead session and discarded at submit, while the counters
-  show pool A producing. This is the same defect `5325e52` fixed for the
-  secondaries and it is still open for pool A; see `docs/KNOWN-ISSUES.md`. At
-  the default Hashrate split that is half the miner's output. A pool A that was
-  never reachable since boot is handled correctly -- it is specifically the
-  up-then-down case.
+- **Pool A's own connection state is not reported.** Every secondary publishes
+  `pool<X>Connected`; pool A publishes nothing equivalent, so neither the API
+  nor a script can say whether the primary pool is up. Its slices being skipped
+  shows only as `poolAJobsSelected` outrunning `poolAJobsServed`.
 - **Per-ASIC pool assignment is impossible on this silicon**, not merely
   unimplemented. `BM1370_job` carries no chip address field, so a job cannot be
   directed at one ASIC. Time-slicing is the only mechanism available, which is

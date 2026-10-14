@@ -20,23 +20,67 @@ const dsrl = (code: string): string => t(`dashboard.progress.power.${code}`);
 const dstl = (code: string): string => t(`dashboard.progress.heat.${code}`);
 const dll = (code: string): string => t(`dashboard.pool.${code}`);
 
-/* Pool B status. statusRaw is the unshaped API payload, so it is read through
- * one accessor here rather than casting in half a dozen template expressions. */
+const POOL_LETTERS = ['B', 'C', 'D'];
+
+/* Every pool, not just B. statusRaw is the unshaped API payload, so it is read
+ * through one accessor here rather than casting in half a dozen template
+ * expressions.
+ *
+ * This card used to be pool B alone, with a two-leg A/B bar drawn as ratioA and
+ * 100 - ratioA. On a three- or four-pool miner that showed neither C nor D and
+ * drew a split that was simply wrong, so the only honest way to read the split
+ * was the API.
+ *
+ * The percentages are computed the way the firmware computes them -- pool A
+ * takes dualRatioA and the remainder goes to the configured secondaries, by
+ * their weights where any is set and evenly where none is. Same arithmetic as
+ * splitPreview in Poolsettings.vue, and build_pool_weights() in
+ * create_jobs_task.c is the thing both are mirroring. A Share weight cannot
+ * take anything from pool A, which is the part people get wrong.
+ */
 const dualPool = computed(() => {
   const s: any = appStore.statusRaw ?? {};
+
+  const secondaries = POOL_LETTERS
+    .map((letter) => ({
+      letter,
+      url: String(s[`pool${letter}Url`] ?? ''),
+      port: s[`pool${letter}Port`] ?? 0,
+      user: s[`pool${letter}User`] ?? '',
+      connected: !!s[`pool${letter}Connected`],
+      failover: !!s[`pool${letter}UsingFailover`],
+      weight: Number(s[`pool${letter}Weight`]) || 0,
+      shares: s[`pool${letter}SharesAccepted`] ?? 0,
+      rejected: s[`pool${letter}SharesRejected`] ?? 0,
+      diff: s[`pool${letter}Diff`] ?? 0,
+    }))
+    .filter((p) => p.url.trim() !== '');
+
+  const ratioA = Math.min(100, Math.max(0, Number(s.dualRatioA) || 0));
+  const stated = secondaries.reduce((sum, p) => sum + p.weight, 0);
+  const rest = 100 - ratioA;
+  const weights = [
+    { letter: 'A', weight: ratioA },
+    ...secondaries.map((p) => ({
+      letter: p.letter,
+      weight: stated > 0 ? p.weight : Math.floor(rest / secondaries.length),
+    })),
+  ];
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  const split = total > 0
+    ? weights.map((w) => ({ letter: w.letter, pct: Math.round((w.weight / total) * 1000) / 10 }))
+    : [{ letter: 'A', pct: 100 }];
+
   return {
-    enabled: !!s.dualEnable,
-    connected: !!s.poolBConnected,
-    url: s.poolBUrl ?? '',
-    port: s.poolBPort ?? 0,
-    user: s.poolBUser ?? '',
-    ratioA: s.dualRatioA ?? 50,
+    enabled: !!s.dualEnable && secondaries.length > 0,
+    multi: secondaries.length > 1,
+    connected: secondaries.every((p) => p.connected),
+    secondaries,
+    split,
+    ratioA,
     sharesA: s.sharesAccepted ?? 0,
     rejectedA: s.sharesRejected ?? 0,
-    sharesB: s.poolBSharesAccepted ?? 0,
-    rejectedB: s.poolBSharesRejected ?? 0,
     diffA: s.stratumDiff ?? 0,
-    diffB: s.poolBDiff ?? 0,
   };
 });
 const del = (code: string): string => t(`dashboard.uptime.${code}`);
@@ -955,28 +999,46 @@ const gaugeColor = computed(() => {
 
           <div class="card" v-if="dualPool.enabled">
             <div class="card-header">
-              <div class="card-title">{{ dll('poolB_title') }}</div>
+              <div class="card-title">
+                {{ dualPool.multi ? dll('pools_title') : dll('poolB_title') }}
+              </div>
               <span class="dual-badge" :class="{ 'is-live': dualPool.connected }">
                 {{ dualPool.connected ? dll('poolB_connected') : dll('poolB_waiting') }}
               </span>
             </div>
-            <div class="info-list">
+
+            <!-- One block per configured secondary. Pool A's own endpoint is
+                 already shown in the card above this one. -->
+            <div class="info-list" v-for="p in dualPool.secondaries" :key="p.letter">
               <div class="info-row">
-                <div class="info-key">{{ dll('url') }}</div>
-                <div class="info-value">{{ dualPool.url }}:{{ dualPool.port }}</div>
+                <div class="info-key">{{ dll('url') }} ({{ p.letter }})</div>
+                <div class="info-value">
+                  {{ p.url }}:{{ p.port }}
+                  <span class="dual-badge" :class="{ 'is-live': p.connected }"
+                        style="margin-left:.5rem">
+                    {{ p.connected ? dll('poolB_connected') : dll('poolB_waiting') }}
+                  </span>
+                  <span v-if="p.failover" class="dual-diff" style="margin-left:.4rem">
+                    {{ dll('pool_failover') }}
+                  </span>
+                </div>
               </div>
               <div class="info-row">
-                <div class="info-key">{{ dll('user') }}</div>
-                <div class="info-value dual-user">{{ dualPool.user }}</div>
+                <div class="info-key">{{ dll('user') }} ({{ p.letter }})</div>
+                <div class="info-value dual-user">{{ p.user }}</div>
               </div>
             </div>
 
             <div class="dual-split-row">
-              <span class="dual-leg pool-a">A {{ dualPool.ratioA }}%</span>
-              <span class="dual-leg pool-b">B {{ 100 - dualPool.ratioA }}%</span>
+              <span v-for="leg in dualPool.split" :key="leg.letter"
+                    class="dual-leg" :class="'leg-text-' + leg.letter.toLowerCase()">
+                {{ leg.letter }} {{ leg.pct }}%
+              </span>
             </div>
-            <div class="meter dual-meter">
-              <div class="meter-fill" :style="{ width: dualPool.ratioA + '%' }"></div>
+            <div class="meter dual-meter-split">
+              <div v-for="leg in dualPool.split" :key="leg.letter"
+                   class="meter-fill" :style="{ width: leg.pct + '%' }"
+                   :class="'leg-' + leg.letter.toLowerCase()"></div>
             </div>
 
             <div class="info-list">
@@ -986,10 +1048,10 @@ const gaugeColor = computed(() => {
                   <span class="dual-diff">@ {{ dualPool.diffA }}</span>
                 </div>
               </div>
-              <div class="info-row">
-                <div class="info-key">{{ dll('poolB_shares') }}</div>
-                <div class="info-value">{{ dualPool.sharesB }} / {{ dualPool.rejectedB }}
-                  <span class="dual-diff">@ {{ dualPool.diffB }}</span>
+              <div class="info-row" v-for="p in dualPool.secondaries" :key="p.letter">
+                <div class="info-key">{{ dll('pool_shares').replace('%s', p.letter) }}</div>
+                <div class="info-value">{{ p.shares }} / {{ p.rejected }}
+                  <span class="dual-diff">@ {{ p.diff }}</span>
                 </div>
               </div>
             </div>
@@ -1329,6 +1391,39 @@ const gaugeColor = computed(() => {
 .dual-meter {
   background: #ffb81c;
 }
+
+/*
+ * The split bar with more than two pools.
+ *
+ * The two-pool version above draws one fill over a coloured background: pool A
+ * is the fill, pool B is whatever shows through. That cannot represent three or
+ * four, so this is a flex row of one segment per pool instead. Each pool has
+ * its own colour in both the bar and the figure above it, so the two read
+ * together.
+ */
+.dual-meter-split {
+  display: flex;
+  background: var(--surface-ground);
+  overflow: hidden !important;
+}
+
+.dual-meter-split .meter-fill {
+  border-radius: 0;
+  min-width: 0;
+}
+
+.dual-meter-split .meter-fill:first-child { border-radius: 999px 0 0 999px; }
+.dual-meter-split .meter-fill:last-child  { border-radius: 0 999px 999px 0; }
+
+.dual-meter-split .leg-a { background: var(--primary-color); }
+.dual-meter-split .leg-b { background: #ffb81c; }
+.dual-meter-split .leg-c { background: #4ade80; }
+.dual-meter-split .leg-d { background: #c084fc; }
+
+.dual-leg.leg-text-a { color: var(--primary-color); }
+.dual-leg.leg-text-b { color: #ffb81c; }
+.dual-leg.leg-text-c { color: #4ade80; }
+.dual-leg.leg-text-d { color: #c084fc; }
 
 .dual-user {
   word-break: break-all;

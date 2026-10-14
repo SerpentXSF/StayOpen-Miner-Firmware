@@ -37,25 +37,66 @@ blanket:
 | The parsed Stratum strings are freed | **Reviewed, not measured.** No pool rejected anything during testing, so the error-reason path never ran. Internal heap was flat (+172 bytes over 8 min), which is consistent but does not exercise it |
 | Up to four pools, gated to four-ASIC boards | On hardware: all four pools mining, the split within 1σ of its configured weights, 2,754 shares and 0 rejects over two hours |
 | A session can be ended on demand over the API | On hardware: every refusal case, and eight drops across three pools |
+| Pool A releases its held work when its session ends, instead of building from a dead one | On hardware, through a relay with pool A unreachable for 75 s: 0 jobs built across the outage, 41 submits and 0 rejects, the secondaries unaffected |
+| The dashboard shows every configured pool, and the split bar reflects the real weights | Built and flashed; the rendered page was not checked by me (it needs a sign-in on a non-local host) |
+| Pool C and D panels are named for their own pool, not "Pool B" | Built and flashed; same caveat on the rendered page |
 
-## Pool A keeps building from a dead session after it drops (open)
+## Pool A kept building from a dead session after it dropped (fixed in the tree, unreleased)
 
-**Status: open**, and it is the same defect that `5325e52` fixed for the
-secondary pools, still present for pool A.
+**Status: fixed**, not yet in a published image. `create_jobs_task` releases
+pool A's held notify as soon as `stratum_connected_status()` goes false, so the
+NULL test below starts skipping its slices instead of building from a session
+that has ended.
 
-`mining_notification` is a local in `create_jobs_task` (`:144`), replaced only
-when a fresh notify is dequeued (`:155`), and never cleared when pool A's
-session ends. The guard that skips pool A's slice (`:305`) tests that pointer
-for NULL, so it only fires before pool A's **first** notify since boot. Once
-pool A has connected even once, the pointer stays set for the life of the task.
+**Verified on hardware** by putting a Stratum relay in front of pool A and
+killing the session with the pool then unreachable for 75 s:
 
-So after pool A connects and then drops, its slices keep being spent building
-work from the dead session's job id and extranonce. `jobs_served[POOL_A]` keeps
-counting, the display and API show pool A producing work, and the shares are
-discarded later at submit --- `asic_result_task.c:166-175` concedes it in a
-comment: the job "is built now", so the check has to be there. With the
-Hashrate split at its default 50, that is half the miner's output going nowhere
-with nothing saying so.
+- `poolAJobsServed` was **106 when the session closed and 106 when the
+  replacement session's first notify arrived** -- nothing built across the
+  whole outage. Those are readings at two events seen on the wire, not a
+  "when did the counter stop" guess, because pool A legitimately builds right
+  up to the moment it dies.
+- The log says so itself: `pool A disconnected; dropped its held work,
+  skipping its slices until it sends again`.
+- **41 submits, 41 accepted, 0 rejected** across the session that died and the
+  two after it. Before the fix, work built from the dead session would have
+  been submitted against a job id the pool had never issued and refused.
+- The secondaries kept serving throughout -- B +139, C +70, D +61 -- so the
+  reason `bbab966` exists did not regress.
+- The run caught a second, unplanned disconnect when the real pool dropped the
+  relay's upstream after 35 s. The fix fired on that one too, which is why the
+  log line appears twice.
+
+Expect `bm1370: Invalid job nonce found` warnings during a pool A outage. They
+are the ASIC returning nonces for work that `cleanQueue` had already
+invalidated, which is what abandoning work means, and they are booked as
+hardware errors rather than rejected shares. Not introduced by this fix, and
+the alternative -- leaving those slots valid -- is worse.
+
+**Reading the flag rather than the transport is what made this small.** Pool A's
+transport has no lock, which is why this looked like it needed one;
+`stratum_connected_status()` is already a public accessor, cleared when that
+task's connection loop ends. A notify is only queued after the flag is set, so
+a freshly dequeued notify can never be discarded by the new check, and
+`stratum_close_connection()` already clears the queue -- so the held pointer
+really was the only stale state left.
+
+The defect, for the record, and it is the same one that `5325e52` fixed for the
+secondary pools:
+
+`mining_notification` is a local in `create_jobs_task`, replaced only when a
+fresh notify is dequeued and -- before the fix -- never cleared when pool A's
+session ended. The guard that skips pool A's slice tests that pointer for NULL,
+so it only fired before pool A's **first** notify since boot. Once pool A had
+connected even once, the pointer stayed set for the life of the task.
+
+So after pool A connected and then dropped, its slices kept being spent
+building work from the dead session's job id and extranonce.
+`jobs_served[POOL_A]` kept counting, the display and API showed pool A
+producing work, and the shares were discarded later at submit ---
+`asic_result_task.c` concedes it in a comment: the job "is built now", so the
+check has to be there. With the Hashrate split at its default 50, that was half
+the miner's output going nowhere with nothing saying so.
 
 **What the existing tests do and do not cover.** `bbab966`'s pool A outage test
 pointed pool A's primary and failover at an unroutable address *from boot*, so
@@ -63,14 +104,15 @@ pointed pool A's primary and failover at an unroutable address *from boot*, so
 why that test passed and this went unnoticed. The case that fails is pool A
 working and then going away, which is the ordinary one.
 
-**The fix has a model to copy.** `5325e52` dropped a secondary's held notify
-when its transport went NULL. Pool A needs the equivalent, which means
-reaching its transport state from `create_jobs_task` --- and pool A's transport
-has no lock (see the note on `PoolSession::drop_requested`), so this is not a
-one-line change. Not attempted here rather than attempted untested.
-
 The header table's "Dual pool no longer feeds a pool that has disconnected
-(2.0.29)" is therefore true of the **secondaries only**.
+(2.0.29)" is true of the **secondaries only**. Pool A is covered from this
+tree, unreleased.
+
+**Still missing: the API does not say whether pool A is connected.** Every
+secondary publishes `pool<X>Connected`; pool A publishes nothing equivalent,
+only `stratumDiff`. So an owner cannot see from the API or a script whether
+their primary pool is up, and this fix had to be verified through a relay and
+the kernel log rather than from a counter. Worth adding.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 

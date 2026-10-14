@@ -15,6 +15,7 @@ _Static_assert(POOL_MAX == 4, "SystemModule::pool[] must match POOL_MAX");
 #include "esp_system.h"
 #include "mining.h"
 #include "string.h"
+#include "stratum_task.h"     /* stratum_connected_status() */
 
 #include "asic.h"
 
@@ -154,6 +155,40 @@ void create_jobs_task(void *pvParameters)
             }
             mining_notification = fresh;
             ESP_LOGD(TAG, "New Work Dequeued %s", mining_notification->job_id);
+        }
+
+        /*
+         * Pool A's session has ended, so what it last sent is not work this
+         * pool will accept any more: the job id and the extranonce belonged to
+         * that session. Let it go, so the NULL test further down starts
+         * skipping pool A's slices.
+         *
+         * Without this the held notify outlived the session. That NULL test
+         * then only ever fired before pool A's *first* notify since boot, so a
+         * pool A that worked and then dropped kept being given its slices and
+         * kept building from a dead job -- counted as served, submitted, and
+         * refused as an unknown job id. At the default 50% split that is half
+         * the miner's output going nowhere, with the counters saying otherwise.
+         * The secondaries got this fix in 5325e52; pool A did not.
+         *
+         * The earlier outage test missed it by pointing pool A at an
+         * unroutable address from boot, which is the one arrangement where the
+         * pointer is never set and the old test did fire.
+         *
+         * stratum_connected_status() rather than the transport: pool A's
+         * transport has no lock, and reading a bool that another task writes is
+         * the pattern already used for write_failed. It is cleared when that
+         * task's connection loop ends and set when a line arrives, and a notify
+         * is only ever queued after it is set -- so a fresh dequeue above can
+         * never be discarded by this. stratum_close_connection() clears the
+         * queue as well, which is why the held pointer is the only stale state
+         * left to deal with here.
+         */
+        if (mining_notification != NULL && !stratum_connected_status()) {
+            STRATUM_V1_free_mining_notify(mining_notification);
+            mining_notification = NULL;
+            ESP_LOGI(TAG, "pool A disconnected; dropped its held work, "
+                          "skipping its slices until it sends again");
         }
 
         /*

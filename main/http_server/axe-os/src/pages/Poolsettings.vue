@@ -644,11 +644,15 @@ onMounted(async () => {
                   </div>
                 </a-form-item>
 
+                <!-- Named for the pool whose panel this is. These strings used
+                     to say "pool B" outright, inside a loop that also renders
+                     C and D, so two of the three panels were labelled for a
+                     different pool than the fields under them wrote to. -->
                 <div class="dual-fb">
                   <div class="dual-fb-head">
-                    <span class="ps-switch-label">{{ dpl('dual_fb') }}</span>
+                    <span class="ps-switch-label">{{ dpl('dual_fb').replace(/%s/g, POOL_LETTERS[i]) }}</span>
                   </div>
-                  <div class="dual-hint" style="margin-bottom: .85rem;">{{ dpl('dual_fb_hint') }}</div>
+                  <div class="dual-hint" style="margin-bottom: .85rem;">{{ dpl('dual_fb_hint').replace(/%s/g, POOL_LETTERS[i]) }}</div>
 
                   <a-form-item :label="pl('stratum_host')">
                     <a-input v-model:value="pool.FbURL" placeholder="host:port"></a-input>
