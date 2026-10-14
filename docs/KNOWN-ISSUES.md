@@ -117,6 +117,59 @@ comes from `stratum_connected_status()` instead of the table the secondaries
 are published from. The dashboard shows it as a badge on pool A's card, which
 is the one card that never had one.
 
+## Internal RAM comes within a few hundred bytes of empty on every boot (open)
+
+**Status: open, measured, cause unknown.** Surveyed 2026-10-14 over ten
+reboots of a BC04 on 2.0.31-dev, reading `minFreeHeapInternal` --
+`heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL)`, the
+all-time low of the internal DRAM pool since boot -- twice per boot:
+
+| | |
+| --- | --- |
+| readings | 21 across 10 reboots |
+| lowest | **131 bytes** |
+| highest | 1,639 bytes |
+| mean | 584 bytes |
+| under 1 KB | 17 of 21 |
+| under 4 KB | 21 of 21 |
+
+Not an outlier and not a bad batch: **every boot** came within about half a
+kilobyte of exhausting internal DRAM. At 131 bytes free, essentially any
+allocation would have failed at that instant. None did, so nothing asked for
+more right then -- that is luck holding, not headroom.
+
+**It is not only a start-up transient.** The first three boots read the same at
+70 s and 105 s, which looked like a clean boot-only dip; the full ten do not.
+In two cycles the minimum **fell after 70 s** -- 1,639 to 355, and 1,415 to
+131 -- so something in ordinary running also drives the pool to the floor. Any
+explanation that only accounts for start-up is incomplete.
+
+**There is fragmentation on top of scarcity.** `largestBlockInternal` sat at
+960-6,144 bytes while `freeHeapInternal` was 6-12 KB, so even the free memory
+is in small pieces. "Exhausted" and "fragmented" need different answers and the
+totals alone do not separate them.
+
+**The firmware already says so, every boot.** `improved_memory_monitor()` warns
+below 40 KB, so the log carries
+
+    W MEMORY: internal RAM reached 571 bytes since boot -- a TLS handshake
+    needs more than that
+
+on every run. This was detected and logged all along; nobody acted on it.
+
+**What is not known is where.** `memory_monitor_task` waits 90 s before its
+first reading, deliberately -- "or every line describes the boot rather than
+how the miner actually runs" -- so nothing on the device has ever sampled the
+window where the dip happens, and its two-minute cadence is far too coarse to
+catch the later one. Answering it means readings taken at init boundaries and
+rather more often afterwards, which is a build and a flash, not a measurement.
+
+Nothing has been traced to this. The miner mined at 4.4-5.6 TH/s with all four
+pools connected on every sample of the survey. But a TLS handshake wants tens
+of kilobytes of internal RAM and will not take PSRAM, which is the failure this
+margin would produce first, and the price fetch has already been bitten by
+exactly that once.
+
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 
 **Status: fixed.** `tools/make_release.py` sets the flag correctly, and the
