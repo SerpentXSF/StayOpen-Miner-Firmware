@@ -322,6 +322,60 @@ visible failure on every boot, recovered within the same pass.
 Nothing worse has been traced to it. The miner mined at 4.4-5.6 TH/s with all
 four pools connected on every sample of the survey.
 
+### What actually fails, measured (2026-10-14)
+
+`freeHeapDma` / `minFreeHeapDma` / `largestBlockDma` now sit beside the
+internal trio in `/api/system/info`, and the heap marks carry both. PSRAM is
+registered on this chip without a DMA capability, so `MALLOC_CAP_DMA` is
+internal DRAM and nothing else -- the query is unambiguous.
+
+One boot, with the task stacks trimmed:
+
+| at | internal free / largest / min | DMA free / largest / min |
+| --- | --- | --- |
+| end of app_main, 25.0 s | 21,423 / 11,776 / 21,315 | 13,635 / 11,776 / 13,527 |
+| 28.6 s | 10,363 / 7,680 / 9,015 | 2,575 / **864** / 1,227 |
+| 32.6 s | 7,987 / 3,072 / **611** | 3,535 / **576** / **607** |
+| at the failure, 72.3 s | ~11,000 / 7,680 / 611 | ~3,300 / **1,216** / 607 |
+
+**The internal figure overstates DMA-capable memory by about 7.9 KB,
+constantly** -- that is the RTC fast region, which `MALLOC_CAP_8BIT |
+MALLOC_CAP_INTERNAL` counts and no DMA user can touch.
+
+**The constraint is the largest DMA block, not free DMA bytes.** At the floor
+there were 3,535 free DMA bytes in a biggest piece of 576. The pool is
+fragmented, not exhausted.
+
+**And the allocation that fails wants 1,600 contiguous bytes.** The failing
+call is in `esp_aes_process_dma_ext_ram()` -- the path taken when the buffers
+are in external RAM:
+
+    input_buf = heap_caps_aligned_alloc(alignment, chunk_len, MALLOC_CAP_DMA)
+    chunk_len = MIN(AES_MAX_CHUNK_WRITE_SIZE, len)      /* 1600 on the S3 */
+
+with a second one for output. Against a largest free block of 576 that cannot
+succeed, and it is nothing like the "tens of bytes" a descriptor array would
+need, nor the tens of kilobytes the 40 KB warning assumes.
+
+**The chain closes on one of our own decisions.** `main.c` sets
+`mbedtls_platform_set_calloc_free(psram_calloc, free_psram)`, commented "use
+PSRAM because TLS costs a lot of internal RAM". That is what puts mbedtls'
+record buffers in PSRAM; PSRAM carries no DMA capability here; so every AES
+operation takes the external-RAM path and has to bounce up to 1,600 bytes
+through DMA-capable DRAM. The optimisation traded steady internal usage for a
+transient contiguous DMA demand, and that is the demand the pool cannot meet.
+This is not an argument for reverting it -- internal RAM is clearly too short
+to hold those buffers -- but it is where the failure comes from, and nothing
+recorded that before.
+
+**Note what this says about trimming.** Freeing 4,608 bytes of permanent task
+stacks did not move the floor, and now it is clear why: it returned bytes to a
+pool whose problem is fragmentation, and some of what it returned was not
+DMA-capable at all. More trimming of the same kind should not be expected to
+fix the `esp-aes` failure. `CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL` is 16384 --
+that reserve, and how it fragments between start-up and the first HTTPS
+request, is where to look next.
+
 **Two things make every figure here an upper bound on the pressure, not a
 clean reading.**
 

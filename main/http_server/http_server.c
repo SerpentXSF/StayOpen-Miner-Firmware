@@ -2003,6 +2003,29 @@ static esp_err_t GET_system_info(httpd_req_t * req)
         heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "minFreeHeapInternal",
         heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+
+    /*
+     * The DMA-capable pool, which is the one that actually runs out.
+     *
+     * The three figures above are not it. MALLOC_CAP_8BIT|MALLOC_CAP_INTERNAL
+     * counts the 8 KB RTC fast region, which carries no MALLOC_CAP_DMA, and
+     * its largest-block is a maximum across heaps while its minimum is a sum
+     * of per-heap minima. Trimming 4,608 bytes of permanent task stacks moved
+     * those numbers and did not move the floor at all, which is what sent us
+     * looking for a different pool.
+     *
+     * esp-aes allocates its DMA descriptor array with MALLOC_CAP_DMA per
+     * record -- tens of bytes -- and that allocation fails on every boot,
+     * taking the first HTTPS read down with it. These are the numbers that
+     * can say why. PSRAM is registered without a DMA capability on this chip,
+     * so MALLOC_CAP_DMA is internal DRAM and nothing else.
+     */
+    cJSON_AddNumberToObject(root, "freeHeapDma",
+        heap_caps_get_free_size(MALLOC_CAP_DMA));
+    cJSON_AddNumberToObject(root, "minFreeHeapDma",
+        heap_caps_get_minimum_free_size(MALLOC_CAP_DMA));
+    cJSON_AddNumberToObject(root, "largestBlockDma",
+        heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     cJSON_AddNumberToObject(root, "largestBlockInternal",
         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(root, "coreVoltage", GLOBAL_STATE->HEALTH_MODULE.voltage);

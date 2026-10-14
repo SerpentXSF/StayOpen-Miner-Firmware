@@ -258,14 +258,35 @@ void analyze_task_memory(void) {
  * take the lines off the kernel log the API serves, which is the only way they
  * can be read on a board with no serial attached.
  */
+/*
+ * DMA figures as well as internal, on the same line.
+ *
+ * MALLOC_CAP_8BIT|MALLOC_CAP_INTERNAL is not the pool that fails. It counts
+ * the 8 KB RTC fast region, which carries no MALLOC_CAP_DMA, and its
+ * largest-block is a maximum across heaps while its minimum is a sum of
+ * per-heap minima. What actually runs out is DMA-capable DRAM: esp-aes
+ * allocates its descriptor array with MALLOC_CAP_DMA per record, tens of
+ * bytes, and that is the allocation that fails on every boot.
+ *
+ * On this chip the query is unambiguous -- esp_psram registers PSRAM with
+ * SPIRAM|DEFAULT and 8BIT|32BIT|SIMD and no DMA capability, so MALLOC_CAP_DMA
+ * is internal DRAM and nothing else.
+ *
+ * Same line, not another one: every log line costs two mallocs from the pool
+ * being measured, so adding figures to a line already being printed is free
+ * where a second line is not.
+ */
 void heap_mark(const char *stage)
 {
     ESP_LOGI("MEMORY", "[%8lld ms] %-22s internal free %u, largest block %u, "
-                       "min since boot %u",
+                       "min since boot %u | DMA free %u, largest %u, min %u",
              esp_timer_get_time() / 1000, stage,
              (unsigned) heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
              (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-             (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+             (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned) heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+             (unsigned) heap_caps_get_minimum_free_size(MALLOC_CAP_DMA));
 }
 
 /*
@@ -279,18 +300,34 @@ void heap_mark(const char *stage)
  */
 bool heap_watermark_moved(void)
 {
-    static size_t floor_seen = SIZE_MAX;
+    /*
+     * Two floors, because they are not the same pool and only one of them has
+     * ever been seen to break anything. Either falling is worth a line; both
+     * are reported on it, so a reader can see which moved.
+     */
+    static size_t floor_internal = SIZE_MAX;
+    static size_t floor_dma = SIZE_MAX;
 
-    size_t now = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    if (now >= floor_seen) {
+    size_t now_int = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    size_t now_dma = heap_caps_get_minimum_free_size(MALLOC_CAP_DMA);
+
+    if (now_int >= floor_internal && now_dma >= floor_dma) {
         return false;
     }
-    floor_seen = now;
-    ESP_LOGW("MEMORY", "[%8lld ms] internal RAM floor fell to %u bytes "
-                       "(free now %u, largest block %u)",
-             esp_timer_get_time() / 1000, (unsigned) now,
+    const char *which = (now_int < floor_internal && now_dma < floor_dma) ? "both"
+                      : (now_dma < floor_dma) ? "DMA" : "internal";
+    floor_internal = now_int < floor_internal ? now_int : floor_internal;
+    floor_dma = now_dma < floor_dma ? now_dma : floor_dma;
+
+    ESP_LOGW("MEMORY", "[%8lld ms] %s floor fell -- internal min %u (free %u, "
+                       "largest %u) | DMA min %u (free %u, largest %u)",
+             esp_timer_get_time() / 1000, which,
+             (unsigned) floor_internal,
              (unsigned) heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned) floor_dma,
+             (unsigned) heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned) heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     return true;
 }
 
