@@ -933,12 +933,16 @@ void app_main(void)
     /*
      * How much of the main task's own stack was ever used.
      *
-     * CONFIG_ESP_MAIN_TASK_STACK_SIZE is 16000 on this build against an IDF
-     * default of 3584, and all of it is internal RAM held for the whole of
-     * app_main -- including the moment the ASIC tasks are created, which is
-     * exactly where this board runs out. Whether that figure can come down is
-     * the question the log has never answered, so it answers it here. The
-     * reading is taken last, after the deepest call this function makes.
+     * All of it is internal RAM held for the whole of app_main -- including
+     * the moment the ASIC tasks are created, which is exactly where this board
+     * runs out. Whether that figure can come down is the question the log has
+     * never answered, so it answers it here. The reading is taken last, after
+     * the deepest call this function makes.
+     *
+     * The figure this comment used to quote, 16000, was wrong: sdkconfig has
+     * said 8192 for as long as it has been checked. Printing
+     * CONFIG_ESP_MAIN_TASK_STACK_SIZE rather than a number written in prose is
+     * why that could be noticed at all.
      */
     ESP_LOGI(TAG, "main task stack: %u of %d bytes still unused",
              (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),

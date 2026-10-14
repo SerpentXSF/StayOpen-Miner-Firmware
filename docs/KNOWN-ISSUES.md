@@ -179,6 +179,48 @@ with 14.5 KB free and a largest block of 7,680 -- the number that decides
 whether the next task stack can be had at all. **The tasks then run** and take
 the floor to 1,639 bytes by 36 s without any one allocation standing out.
 
+### The main task stack, trimmed 8192 to 5120 (2026-10-14)
+
+`uxTaskGetStackHighWaterMark()` says the main task uses **2,936 bytes**, and it
+said exactly that on six boots across both sizes -- the path is deterministic.
+8,192 left 64% of it unused, so 5,120 was taken, leaving 2,184 spare.
+
+Three boots each, measured at the marks above:
+
+| | 8192 | 5120 |
+| --- | --- | --- |
+| free at *before task fleet* | 69,848 | 72,387 |
+| free at *end of app_main* | 13,268 | **15,784** |
+| largest block at *end of app_main* | 7,680 | **7,680** |
+| steady-state floor | 380 | 545 |
+| boots with a task that failed | 0 of 3 | 0 of 3 |
+
+**+2,516 bytes free at the moment the task fleet is created**, which is about
+82% of the 3,072 given up; the rest goes to allocator overhead.
+
+**The largest block did not move.** 7,680 bytes, identical on all six boots. A
+task stack has to come from one contiguous block, so if the goal is to make
+room for another task, this trim on its own does not do it -- the main stack is
+not carved from the block that limits that, and giving 3 KB back does not
+coalesce into it. What the trim buys is pool headroom during start-up, not a
+bigger hole.
+
+**The steady-state floor is unchanged.** 380 against 545 sits inside the
+boot-to-boot spread already seen (215 to 927), and it should not change: the
+main task deletes itself when app_main returns, so its stack is handed back
+before the miner settles. Anyone reading a lower floor into this change is
+reading the wrong number.
+
+**Not trimmed further.** 4,096 would leave 1,160 bytes over the measured use.
+Every boot here takes the same path, and the self-test boot -- which calls
+`self_test()` from inside app_main -- is not among them, so the deepest path
+this firmware has is unmeasured. The next kilobyte would buy free-pool headroom
+that does not move the number that actually blocks task creation, at the cost
+of a stack overflow on a path nobody has exercised. `CONFIG_FREERTOS_CHECK_
+STACKOVERFLOW_CANARY` is on, so such an overflow panics rather than corrupting
+quietly, but a panic on a self-test boot is still a miner that does not come
+back.
+
 **The last fall is a TLS handshake, and it is still failing.** At 71.5 s the
 certificate validates, and then:
 
