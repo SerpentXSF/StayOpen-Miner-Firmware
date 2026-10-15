@@ -322,6 +322,44 @@ visible failure on every boot, recovered within the same pass.
 Nothing worse has been traced to it. The miner mined at 4.4-5.6 TH/s with all
 four pools connected on every sample of the survey.
 
+### The stack trims are measured on a BC04 and apply to both boards (open)
+
+**Status: open, and it gates a 2.0.31 release.** Neither trim is board-scoped:
+`CONFIG_ESP_MAIN_TASK_STACK_SIZE` lives in the base `sdkconfig`, and the three
+task sizes are literals in `app_main`. A BC01 build takes both, sized entirely
+from readings taken on a BC04.
+
+Nothing has been flashed to a BC01 and no BC01 was reachable when this was
+written, so the margins there are unknown. They are not obviously the same
+board to board: the BC01 is USB-PD powered with its own bring-up path, has one
+ASIC against four, and so creates a different set of per-chain tasks. The
+`main` task's own high-water came out identical on six BC04 boots, but
+`network_init` has credential-dependent branches that run on that task and
+were not exercised.
+
+`CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY` is on, so a stack that is too
+small panics rather than corrupting quietly. On a BC01 that means a reboot,
+possibly a loop, not silent wrong answers.
+
+**Before cutting 2.0.31:** flash a BC01, read `main task stack:` and the
+`analyze_task_memory()` census on it, and either confirm the margins or move
+the three task sizes behind the board check that already exists in `app_main`.
+It is a twenty-minute measurement and it is the only thing standing between
+this work and a release.
+
+### The floor keeps falling over a long run (open)
+
+A BC04 left up **20.4 hours** on this build reported `minFreeHeapInternal` 191
+and `minFreeHeapDma` **187** -- against 611 and 607 measured in the first half
+hour of the same build. So the floor roughly halves again given a day, which
+no reading taken minutes after boot would show.
+
+Whether that is slow fragmentation of the DMA pool or something that does not
+give memory back is not established; the 262 KB log ring had rotated past every
+`floor fell` line by the time it was noticed, so the moments are gone. Catching
+it means pulling the kernel log periodically through a long run, or raising the
+log level so the buffer holds more hours.
+
 ### What actually fails, measured (2026-10-14)
 
 `freeHeapDma` / `minFreeHeapDma` / `largestBlockDma` now sit beside the
