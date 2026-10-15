@@ -345,6 +345,31 @@ BC01 the floors sit at `minFreeHeapInternal` 17,451 and `minFreeHeapDma`
 four, and the task fleet that goes with it, is the difference. Everything in
 this entry about pressure is a BC04 problem; the BC01 has room.
 
+### Raising the internal reserve does not help, and was tried (2026-10-15)
+
+`CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL` is **16384** here against an IDF
+default of 32768, and the Kconfig help describes exactly this board's two
+problems -- the reserve exists for "the stack for new tasks or memory to
+service DMA", and is not handed out to a normal `malloc()`. So doubling it to
+the default looked like the obvious lever, and it was tried on the BC04.
+
+**It did not work.** Three `esp-aes` failures on that boot rather than the
+usual one or two, and the reason is visible in the reading taken at the moment
+of failure:
+
+    [70,378 ms]  DMA free 6,123, largest block 640
+
+Six kilobytes free, biggest piece 640, and the allocation wants 1,600
+contiguous. More reserve adds total bytes; it does not assemble a contiguous
+block. **This is a fragmentation problem and not a size problem**, which is
+the thing to carry forward -- it also explains why returning 4,608 bytes of
+task stack did nothing for the floor.
+
+What it did buy was the floor moving from 19 bytes to 55. That is not worth
+16 KB of general internal RAM on a board that has already failed to create a
+task, so it was reverted to 16384. Recorded rather than left out, because the
+next person to read the Kconfig help will have the same idea.
+
 ### The BC04's DMA pool reaches 19 bytes during task start-up (open)
 
 Worse and more variable than the first instrumented boot suggested. One boot:
