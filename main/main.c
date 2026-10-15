@@ -902,6 +902,20 @@ void app_main(void)
      * start-up peak. A figure from one boot would not be enough to size any of
      * them: a task that has not yet taken its deepest path reports slack it
      * does not have.
+     *
+     * Measured on BOTH boards, three boots each, and they agree closely --
+     * every task within about a hundred bytes, and the main task identical at
+     * 3,448. So one set of sizes covers both rather than a per-board branch:
+     *
+     *                  BC04 worst used   BC01 worst used   now   spare
+     *   stratum_worker       2,828            2,904       4608   1,704
+     *   asic_task_0          2,156            2,340       3584   1,244
+     *   hashrate_task_0      1,156              752       2560   1,808
+     *
+     * These were briefly scoped to the BC04 alone, when only that board had
+     * been read. That was the right default while the BC01 was unmeasured and
+     * is unnecessary now that it is not -- the figures turned out to be the
+     * same board to board.
      */
     /*create the stratum task.*/
     create_task_checked(&GLOBAL_STATE, stratum_task, "stratum_manager",

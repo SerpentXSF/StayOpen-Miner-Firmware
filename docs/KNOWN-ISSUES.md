@@ -322,9 +322,61 @@ visible failure on every boot, recovered within the same pass.
 Nothing worse has been traced to it. The miner mined at 4.4-5.6 TH/s with all
 four pools connected on every sample of the survey.
 
-### The stack trims are measured on a BC04 and apply to both boards (open)
+### Measured on a BC01 as well (2026-10-15)
 
-**Status: open, and it gates a 2.0.31 release.** Neither trim is board-scoped:
+The trims were briefly scoped to the BC04 while only that board had been read.
+A BC01 has now been instrumented, three boots, and the two agree closely enough
+that one set of sizes covers both:
+
+| | BC04 worst used | BC01 worst used | size | spare |
+| --- | --- | --- | --- | --- |
+| main task | 3,448 | **3,448** | 5120 (+512) | 2,184 |
+| stratum_worker | 2,828 | 2,904 | 4608 | 1,704 |
+| asic_task_0 | 2,156 | 2,340 | 3584 | 1,244 |
+| hashrate_task_0 | 1,156 | 752 | 2560 | 1,808 |
+
+The main task's use is identical to the byte. The per-board branch is gone
+again; it was the right default while the BC01 was unmeasured and unnecessary
+once it was not.
+
+**The two boards are not alike in how much room they have, though.** On the
+BC01 the floors sit at `minFreeHeapInternal` 17,451 and `minFreeHeapDma`
+9,663. On the BC04 the same build reads **23 and 19 bytes**. One ASIC against
+four, and the task fleet that goes with it, is the difference. Everything in
+this entry about pressure is a BC04 problem; the BC01 has room.
+
+### The BC04's DMA pool reaches 19 bytes during task start-up (open)
+
+Worse and more variable than the first instrumented boot suggested. One boot:
+
+    [22,013 ms] end of app_main     DMA free 11,279, largest 10,240, min 11,155
+    [22,618 ms] floor fell          DMA min  4,695 (free 5,083, largest 4,096)
+    [24,608 ms] floor fell          DMA min     43 (free 1,759, largest   208)
+    [26,598 ms] floor fell          DMA min     19 (free 1,855, largest   400)
+
+So between 22 s and 27 s, as the task fleet starts running, DMA-capable memory
+goes from 11 KB to **19 bytes**, and the largest block to 208. It recovers to
+about 1.8 KB and stays there. Earlier boots of the same sizes read 607, and a
+20-hour run read 187 -- so the floor is not a stable number, and quoting any
+single boot's figure overstates how well this is understood.
+
+**Some of that may be self-inflicted and cannot be separated out.** Every line
+the instrument prints costs two mallocs from the pool it measures, and
+`heap_watermark_moved()` runs on the health loop every two seconds -- right
+through the window where this happens. It reports a fall, which may deepen the
+fall, which it then reports.
+
+What is not in doubt: the `esp-aes` allocation still fails at 69 s on this
+boot, the miner still mines at 5,283 GH/s, and there is no headroom left to
+trim for. See the entries below for why trimming stacks does not address it.
+
+### The stack trims were measured on a BC04 and briefly applied to both (resolved)
+
+**Status: resolved 2026-10-15** -- a BC01 was found at 192.168.50.25, it was
+instrumented, and the figures came out the same. The paragraphs below record
+what the risk was.
+
+Neither trim was board-scoped:
 `CONFIG_ESP_MAIN_TASK_STACK_SIZE` lives in the base `sdkconfig`, and the three
 task sizes are literals in `app_main`. A BC01 build takes both, sized entirely
 from readings taken on a BC04.
