@@ -2,11 +2,12 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**"Fixed" here means fixed in this tree, which is ahead of the latest
-release.** The current release is **2.0.30** (tag `v2.0.30`, 10 h BC04 soak).
-If you are running it, these are fixed in your firmware and these are not:
+**"Fixed" here means fixed and published.** The current release is
+**2.0.31** (tag `v2.0.31`, 26 h soak on a BC01 and a BC04 together). The tree
+is level with it, so everything called fixed below is in a released image. If
+you are running 2.0.31, all of this is fixed in your firmware:
 
-| Fixed in 2.0.30 and earlier | Fixed in the tree, not yet released |
+| Fixed in 2.0.30 and earlier | Fixed in 2.0.31 |
 | --- | --- |
 | Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited |
 | The stall watchdog waits past the regulator's retries | A failed share write counts as a disconnect instead of waiting on lwIP |
@@ -26,11 +27,11 @@ If you are running it, these are fixed in your firmware and these are not:
 | The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |
 | A dropped firmware upload is retried rather than handed back (2.0.30) | |
 
-The right-hand column is unreleased and none of it is in a published image. How
-far each row has been checked differs, so it is stated per row rather than
-blanket:
+The right-hand column shipped in 2.0.31. How far each row was checked
+differs, and shipping did not change that, so it is still stated per row rather
+than blanket:
 
-| unreleased fix | how far it is checked |
+| fix shipped in 2.0.31 | how far it is checked |
 | --- | --- |
 | A dead secondary pool's work, extranonce and held notify are released rather than inherited | On hardware, over eight forced reconnects across all three secondaries: nothing built between the pool going down and the new session's extranonce, a distinct extranonce each time, nothing rejected |
 | A failed share write counts as a disconnect instead of waiting on lwIP | **The shared teardown is exercised on hardware; a genuinely failing write is not.** The API drop and a write failure take the same path, and that path was measured at 0.0–0.6 s. Nothing provoked a real write failure |
@@ -41,7 +42,7 @@ blanket:
 | The dashboard shows every configured pool, and the split bar reflects the real weights | Built and flashed; the rendered page was not checked by me (it needs a sign-in on a non-local host) |
 | Pool C and D panels are named for their own pool, not "Pool B" | Built and flashed; same caveat on the rendered page |
 
-## Pool A kept building from a dead session after it dropped (fixed in the tree, unreleased)
+## Pool A kept building from a dead session after it dropped (fixed in 2.0.31)
 
 **Status: fixed**, not yet in a published image. `create_jobs_task` releases
 pool A's held notify as soon as `stratum_connected_status()` goes false, so the
@@ -105,8 +106,8 @@ why that test passed and this went unnoticed. The case that fails is pool A
 working and then going away, which is the ordinary one.
 
 The header table's "Dual pool no longer feeds a pool that has disconnected
-(2.0.29)" is true of the **secondaries only**. Pool A is covered from this
-tree, unreleased.
+(2.0.29)" is true of the **secondaries only**. Pool A is covered from
+**2.0.31**.
 
 **`poolAConnected` was added for this**, because the API published
 `pool<X>Connected` for every secondary and nothing equivalent for pool A --
@@ -735,7 +736,7 @@ on WiFi throughout, the cable added live, and the interface then carrying
 | --- | --- |
 | Before 2.0.28 | The self test could bring Ethernet fully up first, and the stall watchdog could start it mid-way through the regulator's retries. The controller was live, linked and holding a lease. This is the configuration that is believed to have killed a board. |
 | 2.0.28 | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
-| **2.0.29 and later (current release 2.0.30)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
+| **2.0.29 and later (current release 2.0.31)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
 
 **So, plainly: on 2.0.28 a cold boot with the cable attached is not fully
 addressed.** Deferring the driver protects this firmware's view of the
@@ -1051,9 +1052,9 @@ Both pre-date the change that surfaced them and neither was introduced by it.
 Recorded here rather than folded into 2.0.22, because fixing unrelated memory
 bugs inside a release is how the last two regressions in this project got out.
 
-### `error_str` is never freed (fixed in the tree, unreleased)
+### `error_str` is never freed (fixed in 2.0.31)
 
-**Status: fixed**, not yet in a published image.
+**Status: fixed and published in 2.0.31.**
 `STRATUM_V1_free_message()` in `components/stratum/stratum_api.c` releases the
 parsed strings, and both stratum tasks call it -- including on the path that
 breaks out of pool A's loop rather than leaving by its condition.
