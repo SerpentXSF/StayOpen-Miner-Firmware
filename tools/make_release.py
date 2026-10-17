@@ -155,6 +155,39 @@ def build_config(board):
     if "REPLACE-WITH-YOUR-BTC-ADDRESS" not in text:
         sys.exit("%s has been edited to contain a real address; refusing to "
                  "publish it" % os.path.basename(src))
+
+    # The address placeholder was the only thing checked here, so a template
+    # carrying a real WiFi or API password alongside an untouched address went
+    # straight into config-dist.bin, into -full.bin, and out to gh-pages and
+    # the release. .githooks/pre-commit has this test already, but it reads
+    # the STAGED copy; this reads the working tree, which is the case the hook
+    # cannot see.
+    #
+    # Fields are "key,type,encoding,value". "x" is the conventional stratum
+    # password every pool ignores and is what the shipped templates carry, so
+    # flagging it would only teach people to ignore this.
+    SECRET_FIELDS = ("apipassword", "wifipass", "wifissid", "influx_token",
+                     "stratumpass", "fbstratumpass", "poolBPass")
+    STRATUM_PASS = ("stratumpass", "fbstratumpass", "poolBPass")
+    USER_FIELDS = ("stratumuser", "fbstratumuser", "poolBUser")
+
+    for lineno, line in enumerate(text.splitlines(), 1):
+        parts = line.split(",")
+        if len(parts) < 4:
+            continue
+        key = parts[0].strip()
+        value = ",".join(parts[3:]).strip()
+        if key in SECRET_FIELDS and value:
+            if key in STRATUM_PASS and value == "x":
+                continue
+            sys.exit("%s line %d has a filled-in %s. That would be published "
+                     "inside config-dist.bin and -full.bin. Clear it and run "
+                     "this again." % (os.path.basename(src), lineno, key))
+        if key in USER_FIELDS and value and "REPLACE-WITH-YOUR" not in value:
+            sys.exit("%s line %d sets %s to a real worker string. That would "
+                     "be published inside -full.bin. Restore the placeholder "
+                     "and run this again."
+                     % (os.path.basename(src), lineno, key))
     print("provisioning from %s" % os.path.basename(src))
     sh([sys.executable, gen, "generate", src, out, "0x6000"])
 

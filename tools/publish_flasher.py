@@ -136,6 +136,24 @@ def check_manifest(path, board, image):
                  "version in %r -- re-run tools/make_release.py %s"
                  % (board, stated, image, board))
 
+    # Install writes a whole-flash image from offset 0, so it MUST erase, and
+    # in esp-web-tools that is new_install_prompt_erase == False: the flag
+    # means "ask first", not "do it". With no Improv Serial the dashboard
+    # takes the _startInstall(true) branch. Asserted because the inverse
+    # mistake on the update manifest erased owners' settings once already,
+    # and a flipped literal here would publish without a sign on the page.
+    if m.get("new_install_prompt_erase") is not False:
+        sys.exit("dist/manifest-%s.json has new_install_prompt_erase=%r. The "
+                 "install manifest must be False, which is what makes "
+                 "esp-web-tools erase before writing a full image."
+                 % (board, m.get("new_install_prompt_erase")))
+
+    parts = m["builds"][0]["parts"]
+    if len(parts) != 1 or parts[0].get("offset", 0) != 0:
+        sys.exit("dist/manifest-%s.json should be exactly one part at offset "
+                 "0 (the full image); it has %d part(s) at %s"
+                 % (board, len(parts), [p.get("offset") for p in parts]))
+
 
 def main():
     argv = sys.argv[1:]
@@ -208,6 +226,29 @@ def main():
                 sys.exit("manifest-%s-update.json says version %r, which is "
                          "not the version being published (%r)"
                          % (board, um["version"], image))
+
+            # True means "ask before erasing", and the dialog's checkbox
+            # starts unchecked -- so an owner who just presses Install keeps
+            # their settings. False here is what erased them before.
+            if um.get("new_install_prompt_erase") is not True:
+                sys.exit("manifest-%s-update.json has "
+                         "new_install_prompt_erase=%r. It must be True, or "
+                         "esp-web-tools erases the flash on a path whose own "
+                         "label promises to keep settings."
+                         % (board, um.get("new_install_prompt_erase")))
+
+            # The invariant that actually protects settings: nothing written
+            # may reach nvs at 0xE000. Checked by extent, not just by offset,
+            # because a part starting below it can still run into it.
+            NVS_OFFSET = 0xE000
+            for p in um["builds"][0]["parts"]:
+                off = p.get("offset", 0)
+                size = os.path.getsize(os.path.join(DIST, p["path"]))
+                if off <= NVS_OFFSET < off + size:
+                    sys.exit("manifest-%s-update.json writes %s at 0x%X for "
+                             "%d bytes, which covers nvs at 0x%X -- that is "
+                             "the owner's settings."
+                             % (board, p["path"], off, size, NVS_OFFSET))
         else:
             update_manifest = None
 
@@ -236,6 +277,20 @@ def main():
                 seen.add(name)
                 flasher.append(("100644", "blob",
                                 blob(os.path.join(DIST, name)), name))
+    # These binaries are a GPL-3.0 work being conveyed, and this branch hands
+    # them to anyone with the URL -- no GitHub release and no repository
+    # checkout in between. The licence and the source pointer travel with them
+    # here for exactly the reason ship.py attaches them to the release.
+    # SOURCE.txt also names the commit, which the page's links to the
+    # repository root and to releases/latest cannot: both float.
+    for name in ("LICENSE", "SOURCE.txt"):
+        path = os.path.join(DIST, name)
+        if not os.path.isfile(path):
+            sys.exit("dist/%s is missing -- run tools/make_release.py first. "
+                     "This branch serves binaries, so the licence and the "
+                     "source pointer have to go with them." % name)
+        flasher.append(("100644", "blob", blob(path), name))
+
     flasher.sort(key=lambda e: e[3])
 
     root = [
