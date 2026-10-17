@@ -79,6 +79,18 @@ def main():
     push = "--push" in sys.argv
     github = "--github" in sys.argv
 
+    # Flags are matched by substring above, so an unrecognised one used to be
+    # ignored silently. "--githb" pushed the flasher and skipped the release,
+    # leaving gh-pages advertising a version with nothing behind it -- the
+    # exact drift this script exists to prevent.
+    known = {"--push", "--github", "--notes-file"}
+    for i, a in enumerate(sys.argv[1:]):
+        if a.startswith("-") and a not in known:
+            if i > 0 and sys.argv[i] == "--notes-file":
+                continue          # this is the path, not a flag
+            sys.exit("unrecognised option %r. Known: %s"
+                     % (a, ", ".join(sorted(known))))
+
     # Release notes default to a pointer at the repository. That is fine for a
     # release whose changes are all in the log, and wrong for one that has
     # something an owner needs to read before flashing -- a known-broken
@@ -92,6 +104,10 @@ def main():
         notes_file = sys.argv[i + 1]
         if not os.path.isfile(notes_file):
             sys.exit("no such notes file: %s" % notes_file)
+        # run() executes gh with cwd=ROOT, so a path that resolves from the
+        # caller's cwd could pass this check and then fail at the gh call --
+        # which happens AFTER the flasher has been force-pushed.
+        notes_file = os.path.abspath(notes_file)
 
     for board in boards:
         print("\n=== building %s ===" % board)
@@ -127,6 +143,25 @@ def main():
         On a GPL project that is not a tidiness problem. A published binary
         whose source is not in the public repository is a compliance one.
         """
+        # A dirty tree is not shippable. make_release.py notices and writes
+        # "(built from a tree with uncommitted changes)" into SOURCE.txt, but
+        # that is a note on an artifact nobody reads before flashing, not a
+        # refusal. The version bump this script's own docstring tells you to
+        # make by hand lives in sdkconfig, so forgetting to commit it is the
+        # likely case, not an exotic one: the binaries would say 2.0.32 while
+        # the tag names a tree saying 2.0.31.
+        dirty = subprocess.run(["git", "status", "--porcelain"],
+                               cwd=ROOT, capture_output=True, text=True)
+        if dirty.stdout.strip():
+            sys.exit("refusing to cut %s from a dirty tree -- SOURCE.txt would "
+                     "name a commit that does not describe these binaries:\n%s"
+                     % (tag, dirty.stdout.rstrip()))
+
+        # Compare against the real remote, not a remote-tracking ref that may
+        # be hours stale. Without this the check proves only that HEAD is
+        # contained in whatever was last fetched.
+        subprocess.run(["git", "fetch", "--quiet", "origin"], cwd=ROOT)
+
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=ROOT, capture_output=True, text=True).stdout.strip()
@@ -151,6 +186,23 @@ def main():
                      "push the branch first."
                      % (tag, unpushed.stdout.rstrip()))
 
+        # The tag is pinned to this exact commit below. `gh release create`
+        # with no --target tags "the latest state of the default branch",
+        # which is only the built commit by coincidence: not when shipping
+        # from a release branch, and not when someone merges between the
+        # fetch above and the call below. 2.0.21 shipped with its tag two
+        # commits behind its binaries; this is the direction that guard
+        # never covered.
+        head_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
+                                  capture_output=True, text=True).stdout.strip()
+        on_remote = subprocess.run(
+            ["git", "branch", "--remotes", "--contains", head_sha],
+            cwd=ROOT, capture_output=True, text=True)
+        if not on_remote.stdout.strip():
+            sys.exit("refusing to cut %s: %s is on no remote branch. On a GPL "
+                     "project a published binary whose source is not public is "
+                     "a compliance problem, not untidiness." % (tag, head_sha[:12]))
+
         existing = released_tags()
         if existing is None:
             sys.exit("gh is not available or not logged in; cannot cut a release")
@@ -161,9 +213,27 @@ def main():
         # LICENSE and SOURCE.txt are not optional extras: the binaries are a
         # GPL-3.0 work being conveyed, so the licence travels with them and
         # SOURCE.txt names the commit they were built from.
-        assets = sorted(f for f in os.listdir(DIST)
-                        if f.endswith(".bin")
-                        or f in ("SHA256SUMS", "LICENSE", "SOURCE.txt"))
+        # Built from the names make_release.py produces rather than a *.bin
+        # glob, so an unexpected file in dist/ cannot ride along. The glob
+        # twice nearly shipped a stale image, and a -dev container would sort
+        # ahead of the real one in the list the miner's updater searches.
+        expected = ["stay-open-%s-%s-%s.bin" % (b, version, suf)
+                    for b in boards for suf in
+                    ("app", "bootloader", "full", "ota", "otadata",
+                     "partitions", "www", "www-ota")]
+        missing = [f for f in expected
+                   if not os.path.isfile(os.path.join(DIST, f))]
+        if missing:
+            sys.exit("dist/ is missing %d expected artifact(s): %s"
+                     % (len(missing), ", ".join(missing)))
+        extra = sorted(f for f in os.listdir(DIST)
+                       if f.endswith(".bin") and f not in expected
+                       and f != "config-dist.bin")
+        if extra:
+            sys.exit("dist/ holds %d .bin file(s) this release does not "
+                     "produce: %s -- remove them and run this again."
+                     % (len(extra), ", ".join(extra)))
+        assets = sorted(expected + ["SHA256SUMS", "LICENSE", "SOURCE.txt"])
         for board in boards:
             if not any(("-%s-" % board) in a for a in assets):
                 sys.exit("no %s artifacts in dist/ -- refusing to cut a release "
@@ -191,7 +261,8 @@ def main():
         else:
             notes_arg = ["--notes",
                          "See the repository README and docs/ for what changed."]
-        run(["gh", "release", "create", tag, "--title", title] + notes_arg
+        run(["gh", "release", "create", tag, "--target", head_sha,
+             "--title", title] + notes_arg
             + [os.path.join("dist", a) for a in assets])
     elif push:
         print("\nFlasher pushed at %s. The GitHub release was NOT cut -- re-run "

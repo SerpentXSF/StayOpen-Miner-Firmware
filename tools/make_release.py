@@ -42,6 +42,13 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(ROOT, "dist")
 
+# Every suffix this script writes for a board, and the only ones a release may
+# carry. Kept as one list because three things have to agree about it: what is
+# produced below, what the stale-artifact guard accepts, and what ship.py
+# uploads. When they disagreed, a -dev container nearly went out to owners.
+ARTIFACT_SUFFIXES = ("app", "bootloader", "full", "ota", "otadata",
+                     "partitions", "www", "www-ota")
+
 
 def layout(build):
     """offset, file -- must match partitions.csv"""
@@ -204,8 +211,14 @@ chip and never returns a share.
 
 Licence
 -------
-GNU General Public License, version 3 or later. The full text is in the
-LICENSE file published alongside these binaries.
+GNU General Public License, version 3. The full text is in the LICENSE file
+published alongside these binaries.
+
+Not "version 3 or later". This file said that until 2026-10-17 and it was
+wrong for the same reason the README was: it claimed a grant the upstream
+never made. ESP-Miner / AxeOS is GPL-3.0, NOTICE.md records every upstream as
+GPL-3.0, and LICENSE here is the plain GPL-3.0 text. A fork cannot widen the
+licence of the code it inherited.
 
 This firmware is a fork of ESP-Miner / AxeOS, which is GPL-3.0, by way of the
 Baichuan/Hammer BC-series vendor firmware. Attribution and the history of what
@@ -243,13 +256,22 @@ def main():
     # reached a release, and both times the only thing that caught it was
     # someone reading the file list. Checked here, before any work is done,
     # because this is where it is still cheap to fix.
+    # Matched against the exact names this script produces, not against a
+    # substring of the version. "-%s-" % ver is satisfied by
+    # stay-open-bc04-2.0.31-dev-ota.bin, which is precisely the -dev build the
+    # comment above says very nearly shipped: it sorts BEFORE the real
+    # -ota.bin, ship.py uploads every *.bin, and pickUpdateAsset() in
+    # Settings.vue takes the FIRST asset matching /-ota\.bin$/. Every owner
+    # pressing Check for Updates would have been offered the dev container.
+    good = re.compile(r"^stay-open-[a-z0-9]+-%s-(?:%s)\.bin$"
+                      % (re.escape(ver), "|".join(ARTIFACT_SUFFIXES)))
     stale = sorted(f for f in os.listdir(DIST)
                    if f.endswith(".bin") and f != "config-dist.bin"
-                   and ("-%s-" % ver) not in f)
+                   and not good.match(f))
     if stale:
-        sys.exit("dist/ holds %d file(s) from another version: %s -- ship.py "
-                 "collects assets with a plain *.bin glob and would upload "
-                 "them alongside %s. Remove them and run this again."
+        sys.exit("dist/ holds %d file(s) this release does not produce: %s -- "
+                 "ship.py collects assets with a plain *.bin glob and would "
+                 "upload them alongside %s. Remove them and run this again."
                  % (len(stale), ", ".join(stale), ver))
 
     build_config(board)
@@ -394,12 +416,16 @@ def main():
 
     source_offer(ver)
 
+    # Exactly the files ship.py uploads, and nothing else. The manifests are
+    # published to gh-pages by publish_flasher.py, not attached to the
+    # release, so hashing them here made `sha256sum -c SHA256SUMS` on a
+    # downloaded release report four missing files -- which to anyone checking
+    # a binary before flashing it reads as tampering.
     lines = []
     for name in sorted(os.listdir(DIST)):
         if name in ("SHA256SUMS", "config-dist.bin"):
             continue
-        if name not in ("LICENSE", "SOURCE.txt") and not name.endswith(
-                (".bin", ".json")):
+        if name not in ("LICENSE", "SOURCE.txt") and not name.endswith(".bin"):
             continue
         with open(os.path.join(DIST, name), "rb") as fh:
             lines.append("%s  %s\n" % (hashlib.sha256(fh.read()).hexdigest(),
