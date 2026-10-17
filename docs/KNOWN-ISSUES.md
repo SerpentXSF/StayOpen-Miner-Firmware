@@ -39,8 +39,8 @@ than blanket:
 | Up to four pools, gated to four-ASIC boards | On hardware: all four pools mining, the split within 1σ of its configured weights, 2,754 shares and 0 rejects over two hours |
 | A session can be ended on demand over the API | On hardware: every refusal case, and eight drops across three pools |
 | Pool A releases its held work when its session ends, instead of building from a dead one | On hardware, through a relay with pool A unreachable for 75 s: 0 jobs built across the outage, 41 submits and 0 rejects, the secondaries unaffected |
-| The dashboard shows every configured pool, and the split bar reflects the real weights | Built and flashed; the rendered page was not checked by me (it needs a sign-in on a non-local host) |
-| Pool C and D panels are named for their own pool, not "Pool B" | Built and flashed; same caveat on the rendered page |
+| The dashboard shows every configured pool, and the split bar reflects the real weights | **Confirmed on the rendered page, 2026-10-17**, on a BC04 running the release: four pool blocks each with their own CONNECTED badge, a four-segment split bar reading A 25% / B 25% / C 25% / D 25%, and per-pool share counts (A 27420/22, B 4234/0, C 4195/0, D 3583/0). Checked by the owner from their own browser; the page needs a sign-in on a non-local host, so it is not something I can reach |
+| Pool C and D panels are named for their own pool, not "Pool B" | **Still unconfirmed on the rendered page.** The dashboard screenshots that settled the row above show the *dashboard* pools card labelling B, C and D correctly; the Pool **settings** page, which is where the "Pool B failover" mislabelling was, is a different screen and has not been looked at |
 
 ## Pool A kept building from a dead session after it dropped (fixed in 2.0.31)
 
