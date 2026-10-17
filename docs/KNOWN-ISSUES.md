@@ -424,18 +424,40 @@ the three task sizes behind the board check that already exists in `app_main`.
 It is a twenty-minute measurement and it is the only thing standing between
 this work and a release.
 
-### The floor keeps falling over a long run (open)
+### The floor over a long run, measured on both boards (was open)
 
-A BC04 left up **20.4 hours** on this build reported `minFreeHeapInternal` 191
-and `minFreeHeapDma` **187** -- against 611 and 607 measured in the first half
-hour of the same build. So the floor roughly halves again given a day, which
-no reading taken minutes after boot would show.
+**Status: measured 2026-10-16**, over the 26-hour 2.0.31 release soak, by
+polling the API every minute and harvesting the kernel log every ten so the
+`floor fell` lines survived the 262 KB ring that had destroyed them before.
 
-Whether that is slow fragmentation of the DMA pool or something that does not
-give memory back is not established; the 262 KB log ring had rotated past every
-`floor fell` line by the time it was noticed, so the moments are gone. Catching
-it means pulling the kernel log periodically through a long run, or raising the
-log level so the buffer holds more hours.
+The earlier entry here said a BC04 read `minFreeHeapDma` **187** after 20.4
+hours against 607 in its first half hour, and concluded the floor "roughly
+halves again given a day". **That does not reproduce.** Over 26 hours a BC04's `minFreeHeapDma` fell from 359 to 311 -- 48 bytes in
+a day, in 1 discrete step -- and finished at 30.3 hours of uptime still
+above 300. It did not halve. The 187 recorded earlier was a different boot,
+and a floor is a low-water mark whose value depends on which transients that
+particular boot happened to hit, so single-boot figures are not comparable.
+
+**A BC01 fell further in absolute terms and it does not matter.** Its DMA
+floor went from 7,099 to 2,283, 4,816 bytes, in 5 steps -- far more movement
+than the BC04's 48, from a board that holds a largest DMA block 12 times the
+size and never came within an order of magnitude of the 1,600-byte threshold
+that actually breaks anything.
+
+**Free heap is flat while the floor falls, which settles what the falls are.**
+Comparing the mean of the first hour against the mean of the last, which no
+single transient sample can skew, free DMA bytes moved -198 on the BC01 and
+-434 on the BC04 across 26 hours, while the floors fell 4,816 and 48. So the floor is moved by occasional deep allocations that are
+handed back, not by memory that is never returned. A floor is a low-water mark
+and never recovers, so it will keep drifting down for as long as a miner is up;
+that is the statistic behaving as defined, and not evidence of a leak.
+
+**Two independent sources agree on the falls.** The `floor fell` lines
+harvested from the kernel log and the floor steps computed from the API samples
+name the same events at the same times. That matters because the instrument
+allocates from the pool it measures, so a fall it reports could in principle be
+its own doing; the API path does not print anything, and it sees the same
+steps.
 
 ### What actually fails, measured (2026-10-14)
 
@@ -510,17 +532,79 @@ is on, so `MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL` -- what every figure here and
 alongside DRAM, and RTC RAM carries no `MALLOC_CAP_DMA`. On top of that
 `heap_caps_get_largest_free_block()` is the maximum across heaps and
 `heap_caps_get_minimum_free_size()` is the sum of per-heap minima, reached at
-possibly different instants. So "7,443 free, largest block 1,536" at the moment
-AES could not get ~64 DMA bytes is only consistent if most of that free was not
-DMA-capable, and nothing here can currently tell. **A `MALLOC_CAP_DMA` reading
-is the missing column**, and it is the one that would explain the `esp-aes`
-line.
+possibly different instants. This is why the internal trio alone could not settle anything, and why the
+DMA trio was added. **That reading now exists and the question is answered** --
+see the soak entry above and the largest-block figures below.
 
 **The 40 KB warning in `improved_memory_monitor()` is wrong in kind, not just
 in level.** It says a TLS handshake needs more than 40 KB. The handshake is not
-what fails, and what does fail wants tens of bytes of `MALLOC_CAP_DMA`. The
-measured steady state is 6-12 KB free with a largest block under 2 KB, so the
-warning fires on every boot and has stopped carrying information.
+what fails, and what does fail wants 1,600 contiguous DMA-capable bytes -- not tens of
+bytes, which an earlier version of this entry claimed by reading the descriptor
+array as the failing allocation, and not the tens of kilobytes the warning
+assumes. The measured steady state on a BC04 is 5,496 free DMA bytes in a largest
+block of 1,364. So the warning fires on every boot and has stopped
+carrying information.
+
+### The failure recurs for the life of the run, and the block is permanently too small (open)
+
+**Status: open, and worse in scope than every earlier entry here said.** All of
+them -- and the 2.0.29 and 2.0.30 release notes -- describe the `esp-aes`
+failure as something that happens while the miner starts up and then clears.
+The 26-hour soak shows it never clears.
+
+**64 `esp-aes` failures on a BC04 over 26 hours**, the first at 4.6 hours of
+uptime and the last at 29.8, a median of 30 minutes apart, with 48 of the 63
+intervals longer than 1,500 s. Zero on a BC01 over the same run. The count
+is a floor and not a total: the log was harvested every ten minutes from a
+ring that holds a few minutes at debug level, so a failure whose line
+rotated out before a harvest reached it is not counted here.
+
+The caller is `http_task`, the only periodic HTTPS client in the firmware. It
+polls blockchair and coingecko for the price and block figures the display
+shows, waiting `HTTP_REFRESH_MS` plus `HTTP_STATS_EXTRA_MS` between passes when
+the stats endpoint answers. So the cadence is that loop's, and the failure is
+one request inside a pass rather than the pass as a whole: 48 of the 63 intervals are a full poll cycle, meaning the pass still
+completed and came back on schedule, and only 2 are the 60-second
+`HTTP_RETRY_MS` path that fires when a pass got nothing at all. So the
+failing read is absorbed by a later endpoint in the same pass in all but a
+couple of cases per day.
+
+**What an owner sees** is therefore close to nothing -- an occasional stale
+price on the display -- and that is why this went unnoticed for three releases
+while being logged as an error every half hour.
+
+**The largest contiguous DMA block is the whole explanation, and it is flat.**
+Across 1,543 samples a minute apart, a BC04's `largestBlockDma` averaged
+1,364 bytes, peaked at 1,728, and was **below the 1,600 the AES bounce
+buffer needs in 1,536 of them, 99.5%**. It is also flat: the means of the
+four six-hour quarters of the run are 1,392, 1,356, 1,358, 1,357. So the
+board is not fragmenting its way toward failure over time -- it is already
+there, continuously, and the 0.5% of samples that do clear 1,600 are why an
+HTTPS request on a BC04 ever succeeds at all.
+
+That reframes the diagnosis in the entries above. They are right that the
+binding constraint is a contiguous 1,600-byte `MALLOC_CAP_DMA` allocation, and
+right that trimming total free bytes cannot fix it. But they describe a pool
+that fragments *during start-up* under the load of the task fleet coming up,
+implying it recovers afterwards. It does not recover. A BC04 sits just below
+the requirement permanently, succeeds only in the rare moments the block
+happens to exceed it, and the start-up window is merely when the figures are
+most alarming, not when the problem exists.
+
+**A BC01 is the control and it is unambiguous.** Its `largestBlockDma` sat at a flat 16,384 bytes, mean 16,335, and across
+1,542 samples it never once dropped below 1,600 -- against a BC04 mean of
+1,364. Not one `esp-aes` line appeared on it. One ASIC against four, and
+that difference is the whole failure.
+
+**What is still not collected.** The kernel log context around a live failure
+-- the `esp-tls-mbedtls` and `http_task` lines either side of one of these,
+taken from a running miner rather than from a boot. The 262 KB ring holds a few
+minutes at debug level and rotates past each failure long before a ten-minute
+harvest reaches it; catching one means polling the log every minute, which
+allocates from the pool under study on the board that has least of it. Not done
+during the release soak for that reason. The boot-time context is recorded
+above and is assumed to be the same, which is an assumption and not a
+measurement.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 
