@@ -2,10 +2,13 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**"Fixed" here means fixed and published.** The current release is
-**2.0.31** (tag `v2.0.31`, 26 h soak on a BC01 and a BC04 together). The tree
-is level with it, so everything called fixed below is in a released image. If
-you are running 2.0.31, all of this is fixed in your firmware:
+**The current release is 2.0.31** (tag `v2.0.31`, 26 h soak on a BC01 and a
+BC04 together). **The tree is ahead of it again**: a review on 2026-10-17 found
+four defects in the Stratum receive and parse paths, all pre-existing, all
+fixed in the tree and none of them in a published image yet. They are in
+"A pool can still crash the miner" below, and one of them makes a row in the
+table below untrue. If you are running 2.0.31, everything in the left and
+middle columns is fixed in your firmware:
 
 | Fixed in 2.0.30 and earlier | Fixed in 2.0.31 |
 | --- | --- |
@@ -14,7 +17,7 @@ you are running 2.0.31, all of this is fixed in your firmware:
 | A masked password is never stored as the password | The parsed Stratum strings are freed |
 | Both interfaces cannot share one static IP | Up to four pools, gated to four-ASIC boards |
 | The I2C timeout is bounded; no model rewrite on an empty bus | A session can be ended on demand over the API |
-| A pool cannot crash or reboot the miner; crash dumps kept | |
+| ~~A pool cannot crash or reboot the miner~~ **(not true -- see below)**; crash dumps kept | |
 | Both fan tachometers reported; fan protection can fire | |
 | Kernel log download works while signed in | |
 | Releases carry LICENSE and a source pointer | |
@@ -35,7 +38,7 @@ than blanket:
 | --- | --- |
 | A dead secondary pool's work, extranonce and held notify are released rather than inherited | On hardware, over eight forced reconnects across all three secondaries: nothing built between the pool going down and the new session's extranonce, a distinct extranonce each time, nothing rejected |
 | A failed share write counts as a disconnect instead of waiting on lwIP | **The shared teardown is exercised on hardware; a genuinely failing write is not.** The API drop and a write failure take the same path, and that path was measured at 0.0–0.6 s. Nothing provoked a real write failure |
-| The parsed Stratum strings are freed | **Reviewed, not measured.** No pool rejected anything during testing, so the error-reason path never ran. Internal heap was flat (+172 bytes over 8 min), which is consistent but does not exercise it |
+| The parsed Stratum strings are freed | **Reviewed, not measured -- and the review was not enough.** A 2026-10-17 read found `error_str` strdup'd twice on the reject path and the first allocation leaked. Exactly the path this row said had never been exercised. Fixed in the tree, unreleased |
 | Up to four pools, gated to four-ASIC boards | On hardware: all four pools mining, the split within 1σ of its configured weights, 2,754 shares and 0 rejects over two hours |
 | A session can be ended on demand over the API | On hardware: every refusal case, and eight drops across three pools |
 | Pool A releases its held work when its session ends, instead of building from a dead one | On hardware, through a relay with pool A unreachable for 75 s: 0 jobs built across the outage, 41 submits and 0 rejects, the secondaries unaffected |
@@ -606,6 +609,131 @@ allocates from the pool under study on the board that has least of it. Not done
 during the release soak for that reason. The boot-time context is recorded
 above and is assumed to be the same, which is an assumption and not a
 measurement.
+
+## A pool can still crash the miner (fixed in the tree, unreleased)
+
+**Status: four defects, found by review 2026-10-17, all fixed in the tree and
+none released.** They are pre-existing — none arrived with 2.0.31 — and the
+first two make the header row "A pool cannot crash or reboot the miner" false
+for every release up to and including 2.0.31.
+
+That row was earned honestly. 2.0.30 fixed a real remote `abort()`: a
+`mining.notify` with more than `MAX_MERKLE_BRANCHES` entries used to kill the
+miner, and the hardening that fixed it validates params 0–3 and every merkle
+branch through `str_at()`, which checks the array, the type and the string
+pointer. The comment above it says "a pool that sends nonsense gets its job
+ignored". **The hardening simply stopped at param 3.**
+
+### 1. NULL dereference on a short or mistyped params array
+
+`components/stratum/stratum_api.c`. `mining.notify` params 5, 6 and 7 were read
+as `cJSON_GetArrayItem(params, 5)->valuestring` with no check at all;
+`mining.set_difficulty` params[0] as `->valueint`; `mining.set_version_mask`
+params[0] as `->valuestring`. `cJSON_GetArrayItem` returns NULL past the end of
+an array, and a non-string item has a NULL `valuestring`, so `strtoul(NULL)`
+follows.
+
+    {"id":null,"method":"mining.notify","params":["1","00","00","00",[]]}
+    {"id":null,"method":"mining.set_difficulty","params":[]}
+
+Either line panics the miner. Any pool can send them, and so can anyone on the
+path of a `stratum+tcp` session, which is most of them.
+
+**Fixed** by validating 5, 6 and 7 with the same `str_at()` the rest of the
+handler uses, in the guard that already exists — before `new_work` is
+allocated, so the early return does not leak the four strings — and by
+checking the two `set_*` params.
+
+### 2. Unbounded JSON nesting recurses into the stack canary
+
+`cJSON_Parse` takes a stack frame per nesting level, up to
+`CJSON_NESTING_LIMIT` (1000 in IDF). The two tasks that call it have 8 KB
+stacks and the secondary one was measured with about 1.2 KB spare. Real
+Stratum is about four levels deep, so the high-water marks those stack sizes
+were set from contain no deep nesting at all. A few hundred open brackets
+reaches the canary, and `CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y` turns
+that into a panic rather than quiet corruption.
+
+**Fixed** with a depth check before `cJSON_Parse`, limit 16. It tracks string
+state and escapes, so a job id or coinbase full of bracket characters — legal,
+and plausible — cannot trip it.
+
+### 3. Pool A treated sixty seconds of quiet as a disconnect
+
+This one costs shares rather than crashing, and it had been hiding behind the
+local pool.
+
+`esp_transport_read()` returns `ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT` when its
+poll expires and `ERR_TCP_TRANSPORT_CONNECTION_CLOSED_BY_FIN` on a real close.
+In IDF 5.5.1 those are **0 and -1** (`esp_transport.h:46-47`), and
+`transport_ssl.c` returns the timeout for `poll == 0` on both the TCP and the
+TLS path. Pool A's receive read `nbytes == 0` as "Connection closed by peer".
+
+So after 60 s without a notify, pool A tore its session down: `retry_attempts`
+incremented, the transport destroyed, `cleanQueue()` abandoning every in-flight
+pool A job and invalidating its `valid_jobs` slots, then a full
+subscribe/authorize. The `SO_RCVTIMEO` of ten minutes set in
+`stratum_task.c:69` — and described in `global_state.h:176` as "receive timeout
+is ten minutes" — never applied, because the transport's own poll fired first.
+
+**The secondary poller never had this.**
+`components/dual_pool/stratum_recv_ctx.c:116` says *"Nothing within the
+timeout. A quiet pool is not a dead one"* and returns IDLE. Only pool A was
+wrong.
+
+**This is now the leading candidate for the pool A rejects**, which have never
+been explained and have never once appeared on a secondary — on any board, in
+any soak. A teardown discards in-flight work, and shares built just before one
+land against a session the pool has forgotten. The signature matches: pool A
+only, small counts, never a secondary. **It is a hypothesis, not a conclusion.**
+A pool that notifies more often than once a minute never triggers it, and the
+pool A under test is a node on the local network that does exactly that, so
+what the 26-hour soak shows is consistent with this and does not establish it.
+Testing it means pointing pool A at something that goes quiet for over a
+minute and watching for a reconnect.
+
+**Fixed** by counting the timeouts and giving up at the ten minutes the code
+already said it wanted, so a quiet pool stays connected and a real FIN still
+takes the error path it always did.
+
+### 4. A leak on the reject path, and a blocking dequeue on pool A
+
+`error_str` was `strdup("unknown")` and then overwritten with
+`strdup(reject_reason)` without freeing — 8 bytes per rejected share against
+any pool that sends a reason. Small, but it is internal DRAM on a board whose
+floor is a few hundred bytes, and it is in the one path the 2.0.31 notes
+admitted had never been exercised.
+
+Separately, `main/tasks/stratum_task.c` still tested `count == QUEUE_SIZE` and
+then called the **blocking** `queue_dequeue()`. `cleanQueue()` can empty that
+queue in the window between the two, and the blocking call then waits forever
+on a queue only this task fills: pool A dead, `isconnected` stuck true,
+`poolAConnected` reporting 1, no reconnect ever. This is the same defect that
+was fixed on the secondary side in 2.0.31 — `stratum_poolb_task.c:339` uses
+`queue_dequeue_timeout(&q, 0)` with a NULL check — and pool A was missed.
+**Fixed** the same way.
+
+### Not fixed, from the same review
+
+- **Pool A's transport can be destroyed by another task while its owner is
+  reading it.** `asic_result_task.c:190` frees `GLOBAL_STATE->transport` while
+  `stratum_task` may be blocked in `esp_transport_read()` on that handle. It is
+  why the drop endpoint refuses pool A. Fixing it means a lock on pool A's
+  transport, which stays out of scope.
+- **A dead pool A can idle the chain when the slice is long.** `dualSliceMs`
+  is clamped to 100–60000 ms. Pool A's slices are skipped with a 10 ms yield,
+  and about 3 s of work sits buffered, so at the 2000 ms default nothing
+  stalls. Above roughly 3 s the ASIC runs dry for the remainder of every pool A
+  slice — at 60 s and a 50% split, most of the hashrate while A is down. A
+  consequence of the design rather than a bug, and it belongs next to the
+  "slices are not redistributed" entry.
+- **The main task stack has one unmeasured path.** The 3,448-byte figure was
+  read at the end of a normal `app_main`. A self-test boot runs `self_test()`
+  on the main task instead and never reaches that print, and `self_test()`
+  alone puts `char test_str[1000]` and `char test_item_str[64]` on the stack
+  before its callees and their log calls. Not known to overflow; it is the one
+  main-task path the 8192→5120 trim was never sized against. One self-test boot
+  with the high-water mark printed at the end of `self_test()` settles it.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 

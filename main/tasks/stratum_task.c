@@ -543,9 +543,20 @@ void stratum_task(void * pvParameters)
                         || GLOBAL_STATE->ASIC_jobs_queue[1].count > 0)) {
                     cleanQueue(GLOBAL_STATE);
                 }
+                /* Non-blocking, for the reason stratum_poolb_task.c gives at
+                 * the same spot: cleanQueue() can empty this queue between the
+                 * test and the dequeue, and queue_dequeue() then waits forever
+                 * on a queue only this task fills -- pool A dead with
+                 * isconnected still true, so poolAConnected reports 1 and no
+                 * reconnect is ever attempted. The secondary side was fixed;
+                 * this one was missed. A NULL just means someone else already
+                 * made room. */
                 if (GLOBAL_STATE->stratum_queue.count == QUEUE_SIZE) {
-                    mining_notify * next_notify_json_str = (mining_notify *) queue_dequeue(&GLOBAL_STATE->stratum_queue);
-                    STRATUM_V1_free_mining_notify(next_notify_json_str);
+                    mining_notify * next_notify_json_str =
+                        (mining_notify *) queue_dequeue_timeout(&GLOBAL_STATE->stratum_queue, 0);
+                    if (next_notify_json_str != NULL) {
+                        STRATUM_V1_free_mining_notify(next_notify_json_str);
+                    }
                 }
                 stratum_api_v1_message.mining_notification->difficulty = STATUM_MODULE.stratum_difficulty;
                 SYSTEM_notify_get_work(GLOBAL_STATE);

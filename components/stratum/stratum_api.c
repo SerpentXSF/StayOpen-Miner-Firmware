@@ -18,6 +18,20 @@
 
 #define BUFFER_SIZE (2300)
 #define TRANSPORT_RECV_TIMEOUT_MS 60000
+
+/* How long pool A may be silent before the session is given up on.
+ *
+ * This is the ten minutes that stratum_task.c already asks for with
+ * SO_RCVTIMEO and that global_state.h already describes. It had no effect:
+ * esp_transport_read's own poll expires after TRANSPORT_RECV_TIMEOUT_MS and
+ * returns 0, which this file read as a close. Counting those timeouts here is
+ * what makes the documented limit the one that actually applies. */
+#define STRATUM_IDLE_LIMIT_MS (10 * 60 * 1000)
+
+/* Stratum itself nests about four deep: the notify params array holding the
+ * merkle branch array. Sixteen leaves room for anything a real pool sends and
+ * stops a line that would recurse cJSON into the task's stack canary. */
+#define STRATUM_MAX_JSON_DEPTH 16
 static const char * TAG = "stratum_api";
 
 static char * json_rpc_buffer = NULL;
@@ -128,6 +142,7 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
     char recv_buffer[BUFFER_SIZE];
     int nbytes;
     size_t buflen = 0;
+    int idle_ms = 0;
 
     if (!strstr(json_rpc_buffer, "\n")) {
         do {
@@ -143,14 +158,30 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
             }
             else if (nbytes == 0)
             {
-                ESP_LOGW(TAG, "Connection closed by peer (transport read returned 0)");
-                if (json_rpc_buffer) {
-                    free(json_rpc_buffer);
-                    json_rpc_buffer = NULL;
+                /* A timeout, not a close. esp_transport_read returns
+                 * ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT (0) when its poll
+                 * expires and ERR_TCP_TRANSPORT_CONNECTION_CLOSED_BY_FIN (-1)
+                 * when the peer really goes away, so a FIN is handled by the
+                 * branch above. Treating 0 as a close tore the session down
+                 * after 60 s of quiet, discarding every in-flight job, against
+                 * any pool that does not notify at least once a minute. */
+                idle_ms += TRANSPORT_RECV_TIMEOUT_MS;
+                if (idle_ms >= STRATUM_IDLE_LIMIT_MS) {
+                    ESP_LOGW(TAG, "no data from the pool in %d minutes; "
+                                  "giving up on this session",
+                             STRATUM_IDLE_LIMIT_MS / 60000);
+                    if (json_rpc_buffer) {
+                        free(json_rpc_buffer);
+                        json_rpc_buffer = NULL;
+                    }
+                    return NULL;
                 }
-                return NULL;
+                ESP_LOGD(TAG, "pool quiet for %d s, still connected",
+                         idle_ms / 1000);
+                continue;
             }
 
+            idle_ms = 0;
             realloc_json_buffer(nbytes);
             strncat(json_rpc_buffer, recv_buffer, nbytes);
         } while (!strstr(json_rpc_buffer, "\n"));
@@ -193,6 +224,38 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
  * answers NULL for an index that does not exist. Reaching straight through it
  * for ->valuestring is how a short params array became a crash.
  */
+/* Deepest [ or { nesting in a line, ignoring brackets inside string
+ * literals so a job id full of them cannot trip the limit. Returns early once
+ * the limit is passed; there is no reason to measure how much worse it gets. */
+static int json_nesting_exceeds(const char * text, int limit)
+{
+    int depth = 0;
+    int in_string = 0;
+
+    for (const char * p = text; *p != '\0'; p++) {
+        if (in_string) {
+            if (*p == '\\' && p[1] != '\0') {
+                p++;                      /* skip the escaped character */
+            } else if (*p == '"') {
+                in_string = 0;
+            }
+            continue;
+        }
+        if (*p == '"') {
+            in_string = 1;
+        } else if (*p == '[' || *p == '{') {
+            if (++depth > limit) {
+                return depth;
+            }
+        } else if (*p == ']' || *p == '}') {
+            if (depth > 0) {
+                depth--;
+            }
+        }
+    }
+    return 0;
+}
+
 static const char * str_at(cJSON * array, int index)
 {
     cJSON * item = cJSON_IsArray(array) ? cJSON_GetArrayItem(array, index) : NULL;
@@ -201,6 +264,16 @@ static const char * str_at(cJSON * array, int index)
 
 void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
 {
+    /* Before cJSON recurses. See json_nesting_exceeds(): the parser takes a
+     * stack frame per level and these tasks have 8 KB, so a deeply nested
+     * line from the pool reaches the stack canary and panics the miner. */
+    if (json_nesting_exceeds(stratum_json, STRATUM_MAX_JSON_DEPTH)) {
+        ESP_LOGW(TAG, "ignoring a stratum line nested deeper than %d levels",
+                 STRATUM_MAX_JSON_DEPTH);
+        message->method = STRATUM_UNKNOWN;
+        return;
+    }
+
     cJSON * json = cJSON_Parse(stratum_json);
 
     cJSON * id_json = cJSON_GetObjectItem(json, "id");
@@ -290,10 +363,14 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
                 message->response_success = true;
             } else {
                 message->response_success = false;
-                message->error_str = strdup("unknown");
-                if (cJSON_IsString(reject_reason_json)) {
-                    message->error_str = strdup(cJSON_GetStringValue(reject_reason_json));
-                }
+                /* One allocation, not two. This used to strdup("unknown") and
+                 * then overwrite the pointer with the pool's reason without
+                 * freeing it, leaking 8 bytes of internal DRAM per rejected
+                 * share against any pool that sends reject-reason. */
+                message->error_str =
+                    cJSON_IsString(reject_reason_json)
+                        ? strdup(cJSON_GetStringValue(reject_reason_json))
+                        : strdup("unknown");
                 ESP_LOGW(TAG, "recv %s", stratum_json);          
             }
         
@@ -362,7 +439,20 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         const char * p_cb2   = str_at(params, 3);
         cJSON * merkle_branch = cJSON_IsArray(params) ? cJSON_GetArrayItem(params, 4) : NULL;
 
+        /* 5, 6 and 7 are checked here, with the rest, and not where they are
+         * used further down. They used to be read as
+         * cJSON_GetArrayItem(params, 5)->valuestring with no check at all: a
+         * notify carrying five params returns NULL from GetArrayItem, and a
+         * non-string item has a NULL valuestring, so either one panics in
+         * strtoul. Validating them after new_work is malloc'd and the four
+         * strings are strdup'd would mean leaking all five on the way out, so
+         * they belong in this guard. */
+        const char * p_ver   = str_at(params, 5);
+        const char * p_tgt   = str_at(params, 6);
+        const char * p_time  = str_at(params, 7);
+
         if (NULL == p_job || NULL == p_prev || NULL == p_cb1 || NULL == p_cb2 ||
+            NULL == p_ver || NULL == p_tgt || NULL == p_time ||
             !cJSON_IsArray(merkle_branch)) {
             ESP_LOGW(TAG, "ignoring a malformed mining.notify: params missing "
                           "or not strings");
@@ -407,9 +497,9 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
                     new_work->merkle_branches + HASH_SIZE * i, HASH_SIZE);
         }
 
-        new_work->version = strtoul(cJSON_GetArrayItem(params, 5)->valuestring, NULL, 16);
-        new_work->target = strtoul(cJSON_GetArrayItem(params, 6)->valuestring, NULL, 16);
-        new_work->ntime = strtoul(cJSON_GetArrayItem(params, 7)->valuestring, NULL, 16);
+        new_work->version = strtoul(p_ver, NULL, 16);
+        new_work->target = strtoul(p_tgt, NULL, 16);
+        new_work->ntime = strtoul(p_time, NULL, 16);
 
         message->mining_notification = new_work;
 
@@ -419,13 +509,31 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         message->should_abandon_work = value;
     } else if (message->method == MINING_SET_DIFFICULTY) {
         cJSON * params = cJSON_GetObjectItem(json, "params");
-        uint32_t difficulty = cJSON_GetArrayItem(params, 0)->valueint;
+        /* An empty params array, or a non-number in it, used to be a NULL
+         * dereference here -- the same defect the notify path was hardened
+         * against, in a method that is just as easy to send. */
+        cJSON * diff_json = cJSON_IsArray(params)
+                          ? cJSON_GetArrayItem(params, 0) : NULL;
+        if (!cJSON_IsNumber(diff_json)) {
+            ESP_LOGW(TAG, "ignoring a malformed mining.set_difficulty: "
+                          "params[0] missing or not a number");
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
+        }
 
-        message->new_difficulty = difficulty;
+        message->new_difficulty = diff_json->valueint;
     } else if (message->method == MINING_SET_VERSION_MASK) {
         cJSON * params = cJSON_GetObjectItem(json, "params");
-        uint32_t version_mask = strtoul(cJSON_GetArrayItem(params, 0)->valuestring, NULL, 16);
-        message->version_mask = version_mask;
+        const char * p_mask = str_at(params, 0);
+        if (NULL == p_mask) {
+            ESP_LOGW(TAG, "ignoring a malformed mining.set_version_mask: "
+                          "params[0] missing or not a string");
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
+        }
+        message->version_mask = strtoul(p_mask, NULL, 16);
 
     } else if (message->method == MINING_SET_EXTRANONCE) {
         cJSON * params = cJSON_GetObjectItem(json, "params");
