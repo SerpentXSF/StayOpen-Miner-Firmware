@@ -713,6 +713,49 @@ was fixed on the secondary side in 2.0.31 — `stratum_poolb_task.c:339` uses
 `queue_dequeue_timeout(&q, 0)` with a NULL check — and pool A was missed.
 **Fixed** the same way.
 
+### Proven on hardware, 2026-10-17
+
+**The two crash fixes were demonstrated, not reasoned about.** A soak cannot do
+it: a pool that behaves sends none of this input, so the paths these fixes
+changed are never entered however long the miner runs. The lines have to be
+sent.
+
+A BC04 on `2.0.32-dev 20261017` had pool C repointed at a transparent Stratum
+relay -- every line passed through unmodified, so the jobs, the difficulty and
+the accept/reject verdicts stayed genuine and the shares still counted -- and
+the relay injected one crafted line at a time. The miner was judged on its
+uptime counter, because a panic reboots it and that needs no log access.
+
+| line sent | what the firmware did |
+| --- | --- |
+| `mining.notify` with 5 params instead of 9 | `ignoring a malformed mining.notify: params missing or not strings` |
+| `mining.set_difficulty` with `params: []` | `ignoring a malformed mining.set_difficulty: params[0] missing or not a number` |
+| `mining.set_version_mask` with a **number** | `ignoring a malformed mining.set_version_mask: params[0] missing or not a string` |
+| 400 levels of nesting | `ignoring a stratum line nested deeper than 16 levels` |
+| a **legal** job id of 30 `[` characters | accepted and mined |
+
+Uptime rose monotonically across all five -- 219 s to 320 s -- the hashrate
+stayed near 5,000 GH/s throughout, and the log contains no panic, abort, guru
+meditation or backtrace. Before these fixes the first four were a NULL
+dereference or a stack-canary overflow.
+
+**The last row is the one that mattered most.** A guard that rejects deep
+nesting is worthless if it also rejects a job id that merely contains bracket
+characters, which is legal and which a pool may well send; that would break
+real mining to close a theoretical hole. It did not merely avoid rejecting it
+-- `asic_result` shows the chip returning nonces against
+`ID: [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[`, so the job was parsed, dispatched and
+worked on.
+
+The `set_version_mask` case is worth noting separately: its param *exists*, so
+an index check alone would have passed it. It is a number where a hex string
+belongs, which leaves `valuestring` NULL. That is the shape a bounds check
+misses and a type check catches.
+
+**Still not exercised by any of this:** the receive-timeout fix. It needs pool
+A pointed at something that goes quiet for over a minute, and pool A is the
+primary. Not done.
+
 ### Not fixed, from the same review
 
 - **Pool A's transport can be destroyed by another task while its owner is
