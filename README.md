@@ -170,7 +170,7 @@ returned. It reads as dead hardware and it is not. The same applies in reverse.
 | Model | Source | Published build |
 |---|---|---|
 | BC01 | Yes | **Yes**, verified on hardware |
-| BC04 | Yes | **Yes**, verified on hardware -- both recent soaks were on a BC04 |
+| BC04 | Yes | **Yes**, verified on hardware -- the 26 h soak behind 2.0.31 ran on a BC01 and a BC04 together |
 | BC02, BC06, BC08 | Yes | No -- build from source, and see `sdkconfig.bc04-reference` |
 
 Every release is named for its board, and so is every image inside it

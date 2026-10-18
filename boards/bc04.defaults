@@ -3,11 +3,16 @@
 # Applied as a fragment on top of the base sdkconfig, which is a BC01. Build
 # with tools/build_board.py bc04.
 #
-# UNVERIFIED. No BC04 has been run with this firmware. Every value below is
-# taken from the vendor's own sdkconfig.bc04-reference in this tree, not from
-# measurement. Read docs/BC01-BRINGUP.md before trusting any of it: the BC01
-# needed four missing dispatch cases in components/asic/asic.c before it would
-# hash at all, and the BC04 cases deserve the same check.
+# VERIFIED ON HARDWARE. This header said "UNVERIFIED. No BC04 has been run
+# with this firmware" until 2026-10-18, long after that stopped being true: a
+# BC04 has been mining on this firmware since September, and the 26-hour soak
+# behind 2.0.31 ran on a BC01 and a BC04 together with no reboot on either.
+#
+# The values below started as the vendor's own sdkconfig.bc04-reference in this
+# tree and have since been exercised. The dispatch cases in
+# components/asic/asic.c that the BC01 needed were checked for the BC04 too --
+# see docs/BC01-BRINGUP.md for what that bring-up involved, because it is still
+# the best account of what goes wrong and how it presents.
 #
 # This started as three settings -- the UART pins and the model -- and that was
 # not enough. Diffing the two reference configs turned up eight more, two of
@@ -52,5 +57,6 @@ CONFIG_GPIO_PULSE_COUNTER_0=1255
 # ── Not carried over from the BC01 ───────────────────────────────────────────
 # CONFIG_GPIO_PLUG_SENSE has no BC04 equivalent in the vendor reference. The
 # BC01 uses it for the USB-PD stage, which this board does not have: a BC04
-# takes barrel-jack power with no HUSB238A and no VBUS gate, so the PD bring-up
+# takes XT-30 power (12 V, 115 W rated -- see docs/BOARDS.md) with no HUSB238A
+# and no VBUS gate, so the PD bring-up
 # in device.c is skipped for it by device_is_bc01_family().

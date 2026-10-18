@@ -565,9 +565,24 @@ rotated out before a harvest reached it is not counted here.
 
 The caller is `http_task`, the only periodic HTTPS client in the firmware. It
 polls blockchair and coingecko for the price and block figures the display
-shows, waiting `HTTP_REFRESH_MS` plus `HTTP_STATS_EXTRA_MS` between passes when
-the stats endpoint answers. So the cadence is that loop's, and the failure is
-one request inside a pass rather than the pass as a whole: 48 of the 63 intervals are a full poll cycle, meaning the pass still
+shows.
+
+**The poll interval is `HTTP_REFRESH_MS`, 900 s, and not the 25 minutes an
+earlier version of this entry claimed.** `HTTP_STATS_EXTRA_MS` is only added
+when `ltc_sta_ok` is set, and that is set only when `http_rest_btc_stats()`
+succeeds -- which on a BC04 is the call that dies. So the 25-minute path
+essentially never runs there.
+
+**The ~30-minute spacing is two intervals, not one.** A pass that succeeds logs
+nothing, so a gap measured between failures spans however many passes went
+quiet in between. Bucketing all 63 gaps from the 2.0.31 soak leaves no
+remainder: 10 are under 10 s (several requests failing inside one pass, one per
+request), 2 are the 60-second `HTTP_RETRY_MS` path, 3 are one 900 s cycle, 47
+are two, and 1 is three. Nothing falls outside. So the failure lands on roughly
+every other poll pass, and when it lands it usually takes more than one request
+with it.
+
+That also means the 64 counted lines are not 64 separate incidents: 48 of the 63 intervals are a full poll cycle, meaning the pass still
 completed and came back on schedule, and only 2 are the 60-second
 `HTTP_RETRY_MS` path that fires when a pass got nothing at all. So the
 failing read is absorbed by a later endpoint in the same pass in all but a
@@ -687,22 +702,33 @@ subscribe/authorize. The `SO_RCVTIMEO` of ten minutes set in
 is ten minutes" — never applied, because the transport's own poll fired first.
 
 **The secondary poller never had this.**
-`components/dual_pool/stratum_recv_ctx.c:116` says *"Nothing within the
+`components/dual_pool/stratum_recv_ctx.c:117` says *"Nothing within the
 timeout. A quiet pool is not a dead one"* and returns IDLE. Only pool A was
 wrong.
 
-**This is now the leading candidate for the pool A rejects**, which have never
-been explained and have never once appeared on a secondary — on any board, in
-any soak. Note carefully what the 2026-10-17 test did and did not settle: it
-proved the bug is real and that the fix stops it. It did **not** prove this bug
-produced those rejects. That remains an inference from a matching signature. A teardown discards in-flight work, and shares built just before one
-land against a session the pool has forgotten. The signature matches: pool A
-only, small counts, never a secondary. **It is a hypothesis, not a conclusion.**
-A pool that notifies more often than once a minute never triggers it, and the
-pool A under test is a node on the local network that does exactly that, so
-what the 26-hour soak shows is consistent with this and does not establish it.
-Testing it means pointing pool A at something that goes quiet for over a
-minute and watching for a reconnect.
+**This was offered as the leading candidate for the pool A rejects, and the
+evidence since has demoted it.** The reasoning was that a teardown discards
+in-flight work, so shares built just before one land against a session the pool
+has forgotten, and the signature matched: pool A only, small counts, never a
+secondary on any board in any soak.
+
+Two things have happened since. The 2026-10-17 quiet test proved the bug is
+real and that the fix stops it — but proving a fix works was never the same
+as proving the old bug caused those rejects. Then the rejection reasons were
+read off both boards on the fixed build (see "The rejected shares were the
+pool's" below): a BC04 showed 14 rejects, all `Stale`, which is exactly what a
+teardown would produce **and** exactly what a local solo node produces anyway
+whenever its template moves. Since that board is running the build where the
+teardown no longer happens, and its pool A notifies far more often than once a
+minute so the 60-second path would never have fired, those rejects cannot be
+attributed to this bug.
+
+**So it remains possible and is no longer the best explanation.** Volume and
+job churn fit the "pool A only" pattern better: pool A carries roughly thirteen
+times the share traffic of pool B and is a solo node whose work goes stale
+whenever the local chain moves. Settling the original question still means
+pointing pool A at something that genuinely goes quiet for over a minute and
+watching whether rejects follow the reconnect.
 
 **Fixed** by counting the timeouts and giving up at the ten minutes the code
 already said it wanted, so a quiet pool stays connected and a real FIN still
@@ -721,7 +747,7 @@ then called the **blocking** `queue_dequeue()`. `cleanQueue()` can empty that
 queue in the window between the two, and the blocking call then waits forever
 on a queue only this task fills: pool A dead, `isconnected` stuck true,
 `poolAConnected` reporting 1, no reconnect ever. This is the same defect that
-was fixed on the secondary side in 2.0.31 — `stratum_poolb_task.c:339` uses
+was fixed on the secondary side in 2.0.31 — `stratum_poolb_task.c:340` uses
 `queue_dequeue_timeout(&q, 0)` with a NULL check — and pool A was missed.
 **Fixed** the same way.
 
@@ -1133,8 +1159,11 @@ rather than only if it arrives inside some fixed window.
 It is a task rather than a loop inside `network_eth_start()` so that main() is
 not held for five minutes on a board with no cable in it.
 
-**Not verified on hardware.** The only board here with a W5500 is the BC04,
-and it is out for warranty repair with a shorted I2C bus. A BC01 cannot
+**Not verified on hardware.** When this was written the only board here with a
+W5500 was out for warranty repair with a shorted I2C bus. That is no longer the
+reason: a working BC04 has been on the bench since September and has run
+Ethernet-only. The specific case below -- a deferred start with an unreachable
+SSID -- is simply still untested. A BC01 cannot
 exercise any of this: `network_init()` forces `eth_on` to 0 on that family, so
 `eth_deferred` stays false and every line above is skipped. What a BC01 does
 confirm is the part that protects it -- with `eth_deferred` false the timeout
@@ -1266,7 +1295,11 @@ bugs inside a release is how the last two regressions in this project got out.
 
 ### `error_str` is never freed (fixed in 2.0.31)
 
-**Status: fixed and published in 2.0.31.**
+**Status: fixed and published in 2.0.31 -- but not completely.** A review on
+2026-10-17 found the reject path still `strdup`'d `error_str` twice and leaked
+the first allocation, 8 bytes per rejected share against any pool that sends a
+reason. That is fixed in the tree and unreleased; see the Stratum crash entry
+above. What 2.0.31 did fix is below and is unaffected.
 `STRATUM_V1_free_message()` in `components/stratum/stratum_api.c` releases the
 parsed strings, and both stratum tasks call it -- including on the path that
 breaks out of pool A's loop rather than leaving by its condition.
@@ -1415,7 +1448,9 @@ returns an error, and the health loop takes the overheat exit -- power off, fan
 100%, restart -- after three consecutive failures, about six seconds. Three
 rather than one, because a single dropped transaction is not a dead sensor.
 
-**Not verified on hardware.** The only BC04 here has a shorted I2C bus, and the
+**Not verified on hardware.** Written when the only BC04 here had a shorted
+I2C bus; a working one has been on the bench since September, so that is no
+longer the obstacle, only the reason it was never done. The
 whole health loop is gated behind `interface_initalized`, which that board
 never sets. It needs a working board with an induced sensor failure.
 
@@ -1458,7 +1493,9 @@ with every API call printing `i2c handle not initialized`. Everything after
 that call is unreachable, including the Ethernet start, so a miner in that
 state with no WiFi credentials has no management interface at all.
 
-A watchdog now starts Ethernet if init has not finished in 90 seconds. It
+A watchdog now starts Ethernet if init has not finished in 90 seconds. **That
+limit is now 240 s** (`ETH_STALL_TIMEOUT_MS` in `main/main.c`); the 90 here is
+what it was when this entry was written. It
 waits on `interface_initalized` rather than running on a bare timer, because
 the reason Ethernet is deferred at all is that a W5500 already running when the
 core rail steps up stops answering for good. Ethernet therefore starts either
@@ -1954,8 +1991,41 @@ is also what the difficulty-zero defect produced, in bulk, before it was fixed
 and the pool refuses nearly all of it. A handful of them is vardiff. A flood of
 them is that bug. The distinguishing figure is the proportion, not the message.
 
-`tools/soak_monitor.py` now records this column, so a future soak answers the
-question without anyone polling a log for it.
+`tools/soak_monitor.py` records this column, but the 2.0.31 release soak was
+run with `soak_2031.py`, whose CSV has no reasons field -- so that future soak
+did not in fact answer anything, and this entry claimed otherwise for two
+weeks.
+
+**Read directly off both boards on 2026-10-18**, on the 2.0.32-dev build, which
+is the first reading taken since the receive-timeout fix:
+
+| board | pool A | reasons |
+| --- | --- | --- |
+| BC01, 24.0 h up | 23,202 accepted / 38 rejected | 21 `Above target`, 17 `Stale` |
+| BC04, 18.0 h up | 19,396 accepted / 14 rejected | 14 `Stale`, none `Above target` |
+
+Pools B, C and D: **zero rejects between them**, across 8,509 accepted.
+
+**This argues against the receive-timeout bug being the cause**, which is worth
+saying plainly because the entry above offers it as the leading candidate. A
+teardown would produce exactly `Stale`, and `Stale` is what a BC04 shows. But
+these boards are running the build where that teardown provably no longer
+happens, and pool A here is a node on the local network that notifies far more
+often than once a minute, so the 60-second path would never have fired on it in
+the first place. These rejects were not caused by that bug, and the hypothesis
+is neither confirmed nor refuted by them -- it needs a pool that actually goes
+quiet.
+
+**The likelier explanation for "pool A only" is volume and job churn.** Pool A
+took 23,202 shares on the BC01 against pool B's 1,790 -- thirteen times the
+traffic -- and it is a solo node whose template changes whenever the local
+chain moves, so in-flight work goes stale more often than on a commercial pool
+handing out longer-lived jobs. At the BC01's pool A rate of 0.164%, pool B's
+1,790 shares would be expected to yield about three rejects; seeing none is
+suggestive but not decisive on that sample.
+
+`Above target` and `Stale` are both ordinary stratum outcomes and neither is a
+fault in this firmware.
 
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 

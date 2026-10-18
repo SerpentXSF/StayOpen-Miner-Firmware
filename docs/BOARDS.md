@@ -35,7 +35,10 @@ files do.
 | ASIC UART RX | 17 | 18 |
 | `CONFIG_DEVICE_MODULE` | `BC01` | `BC04` |
 
-That is the whole of `boards/bc01.defaults` and `boards/bc04.defaults`. Each is
+That is the whole of `boards/bc01.defaults`. `boards/bc04.defaults` carries
+eleven settings, not three -- the reset pin, the regulator ceilings, the I2C
+bus, the overheat alert, the PWM and pulse-counter channels -- and they are
+listed further down this page. Each is
 applied as a fragment on top of the base `sdkconfig`, which carries the tuning
 that is not board specific — PSRAM, partition layout, log levels — so a board
 file only ever states what that board changes.

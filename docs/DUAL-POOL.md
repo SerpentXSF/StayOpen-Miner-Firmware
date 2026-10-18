@@ -234,7 +234,9 @@ to 0.6 s -- so poll `pool<X>Connected` to watch it:
 ```
 
 `B`, `C` or `D`, upper or lower case. Pool A is refused: its transport has no
-lock and its receive timeout is ten minutes, so there is no prompt and safe way
+lock and its receive timeout is nominally ten minutes (in every release up to
+2.0.31 it was effectively 60 s, because a poll timeout was read as a close --
+see `docs/KNOWN-ISSUES.md`), so there is no prompt and safe way
 to end its session from the HTTP task. An unconfigured pool gives 404.
 
 **Why this exists.** The defects fixed on this path were all about what a new
