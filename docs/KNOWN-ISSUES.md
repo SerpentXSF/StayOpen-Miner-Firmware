@@ -47,7 +47,7 @@ than blanket:
 
 ## Pool A kept building from a dead session after it dropped (fixed in 2.0.31)
 
-**Status: fixed**, not yet in a published image. `create_jobs_task` releases
+**Status: fixed and published in 2.0.31.** `create_jobs_task` releases
 pool A's held notify as soon as `stratum_connected_status()` goes false, so the
 NULL test below starts skipping its slices instead of building from a session
 that has ended.
@@ -603,12 +603,18 @@ that difference is the whole failure.
 **What is still not collected.** The kernel log context around a live failure
 -- the `esp-tls-mbedtls` and `http_task` lines either side of one of these,
 taken from a running miner rather than from a boot. The 262 KB ring holds a few
-minutes at debug level and rotates past each failure long before a ten-minute
-harvest reaches it; catching one means polling the log every minute, which
-allocates from the pool under study on the board that has least of it. Not done
-during the release soak for that reason. The boot-time context is recorded
-above and is assumed to be the same, which is an assumption and not a
-measurement.
+**and the reason this entry gave for that was wrong.** It said the 262 KB ring
+rotated past each failure before a ten-minute harvest could reach it, and that
+collecting the context would mean polling the log every minute and allocating
+from the pool under study. Neither holds. The harvest **captured all 64
+`esp-aes` lines**, 48 of them at clean 30.2-minute spacing, so nothing rotated
+away. The `esp-tls-mbedtls` and `http_task` lines print within milliseconds of
+each one and were in the same fetched logs; they are absent because
+`soak_2031.py`'s filter kept only `MEMORY`, `esp-aes`, `Failed to allocate` and
+`not reporting SYSTEM_HARDWARE_OK`. The collector discarded the evidence it had
+already pulled. No extra polling was ever needed, and the 2.0.32-dev soak
+filter has been widened to keep it. Until that run reports, the boot-time
+context recorded above is still an assumption and not a measurement.
 
 ## A pool can still crash the miner (fixed in the tree, unreleased)
 
@@ -636,7 +642,11 @@ follows.
     {"id":null,"method":"mining.notify","params":["1","00","00","00",[]]}
     {"id":null,"method":"mining.set_difficulty","params":[]}
 
-Either line panics the miner. Any pool can send them, and so can anyone on the
+Either line panics the miner **by reading the code** -- no A/B against 2.0.31
+was run, and the probe below only ever hit the fixed build. The NULL
+dereference is certain from the source; how many levels of nesting it actually
+takes to reach the canary is an estimate of cJSON's frame size and was not
+measured. Any pool can send them, and so can anyone on the
 path of a `stratum+tcp` session, which is most of them.
 
 **Fixed** by validating 5, 6 and 7 with the same `str_at()` the rest of the
@@ -683,7 +693,9 @@ wrong.
 
 **This is now the leading candidate for the pool A rejects**, which have never
 been explained and have never once appeared on a secondary — on any board, in
-any soak. A teardown discards in-flight work, and shares built just before one
+any soak. Note carefully what the 2026-10-17 test did and did not settle: it
+proved the bug is real and that the fix stops it. It did **not** prove this bug
+produced those rejects. That remains an inference from a matching signature. A teardown discards in-flight work, and shares built just before one
 land against a session the pool has forgotten. The signature matches: pool A
 only, small counts, never a secondary. **It is a hypothesis, not a conclusion.**
 A pool that notifies more often than once a minute never triggers it, and the
@@ -752,9 +764,38 @@ an index check alone would have passed it. It is a number where a hex string
 belongs, which leaves `valuestring` NULL. That is the shape a bounds check
 misses and a type check catches.
 
-**Still not exercised by any of this:** the receive-timeout fix. It needs pool
-A pointed at something that goes quiet for over a minute, and pool A is the
-primary. Not done.
+**The receive-timeout fix was proven the same day, separately.** A BC04 had
+pool A -- the primary -- repointed at a relay that withheld the pool's side
+while holding the socket open. Holding it open is the whole point: closing it
+sends a FIN, which arrives as -1 and *should* still tear the session down, so
+that would have tested something else. Miner to pool kept flowing, so shares
+found during the window were still submitted and still counted.
+
+**Pool A survived 180 seconds of silence**, three times the old teardown
+threshold:
+
+| at | `poolAConnected` | jobs served | hashrate |
+| --- | --- | --- | --- |
+| before | 1 | 193 | 5,002 GH/s |
+| 62 s of quiet | 1 | 260 | 5,112 GH/s |
+| 124 s of quiet | 1 | 311 | 5,097 GH/s |
+| after resume | 1 | 423 | 5,035 GH/s |
+
+Shares accepted rose from 60 to 80 across the window, so the session was not
+merely open but working. The log contains no `Connection closed by peer`, no
+`pool A disconnected` and no `giving up on this session`, and uptime never went
+backwards.
+
+**What makes this proof rather than absence of failure** is the debug line the
+fix emits once per expired poll:
+
+    D (286623) stratum_api: pool quiet for 60 s, still connected
+    D (346633) stratum_api: pool quiet for 120 s, still connected
+    D (406643) stratum_api: pool quiet for 180 s, still connected
+
+Exactly one per `TRANSPORT_RECV_TIMEOUT_MS`, at 60, 120 and 180 seconds. The
+timeout fired three times and the new branch counted it and carried on each
+time. The old code returned NULL on the first.
 
 ### Not fixed, from the same review
 

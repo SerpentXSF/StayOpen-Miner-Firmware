@@ -381,11 +381,13 @@ a build whose own sdkconfig names a different model than the filename claims.
 The filename is the only thing telling someone which board an image is for, and
 the cost of getting it wrong is a miner that looks broken.
 
-Only the BC01 is published. A BC04 has now been run on real hardware and
-mines, but its Ethernet does not survive the hashboard powering up, so a
-published image would hand BC04 owners a miner that needs WiFi without saying
-so. That gets published once the Ethernet question is closed. Either model can
-be built from source with the command at the top of this page.
+**Both boards are published.** `tools/ship.py bc01 bc04` builds and releases
+the pair, and it refuses to cut a release that omits a board it claims to
+cover. The Ethernet question that held the BC04 back was closed earlier in this
+file: `eth_phy_hold_in_reset()` holds the PHY down across the rail step, it was
+verified both ways on hardware, and the published image ships with Ethernet on.
+Either model can also be built from source with the command at the top of this
+page.
 
 ### Why the flasher image lives on gh-pages
 

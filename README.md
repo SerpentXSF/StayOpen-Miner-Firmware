@@ -147,10 +147,10 @@ four-way split, set the slider to 25 too.
 
 Share counts will not match the ratio you set: each pool runs its own vardiff,
 so the same work produces different share counts. The dashboard prints pool
-B's difficulty beside its counts for that reason — **it has no cards for pools
-C and D yet, and its A/B split bar ignores them**, so on a three- or four-pool
-miner read `pool<X>JobsSelected` and `pool<X>JobsServed` from
-`/api/system/info` instead.
+B's difficulty beside its counts for that reason. **Every configured pool has
+its own card and its own segment of the split bar** as of 2.0.31, pool A
+included; `pool<X>JobsSelected` and `pool<X>JobsServed` in `/api/system/info`
+are still the exact numbers if you want them.
 [docs/DUAL-POOL.md](docs/DUAL-POOL.md) covers the setup, how the split is
 measured honestly, and the clean_jobs bug that used to discard the other pool's
 shares.
