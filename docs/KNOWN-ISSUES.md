@@ -594,19 +594,60 @@ while being logged as an error every half hour.
 
 **The largest contiguous DMA block is the whole explanation, and it is flat.**
 Across 1,543 samples a minute apart, a BC04's `largestBlockDma` averaged
-1,364 bytes, peaked at 1,728, and was **below the 1,600 the AES bounce
-buffer needs in 1,536 of them, 99.5%**. It is also flat: the means of the
-four six-hour quarters of the run are 1,392, 1,356, 1,358, 1,357. So the
-board is not fragmenting its way toward failure over time -- it is already
-there, continuously, and the 0.5% of samples that do clear 1,600 are why an
-HTTPS request on a BC04 ever succeeds at all.
+1,364 bytes, peaked at 1,728, and was **below the 1,600 the AES bounce buffer
+needs in 1,536 of them, 99.5%**. It is also flat: the means of the four
+six-hour quarters are 1,392, 1,356, 1,358, 1,357. The board is not fragmenting
+its way toward failure over time; it is already there, continuously.
+
+**That much is measured. The explanation built on it was wrong, and the next
+soak refuted it (2026-10-19).**
+
+This entry used to end by saying the 0.5% of samples clearing 1,600 are why an
+HTTPS request on a BC04 ever succeeds. The 2.0.32-dev soak ran 26 hours on the
+same board with a far roomier pool, and the failure rate barely moved:
+
+| | samples with block >= 1,600 | failure rate |
+| --- | --- | --- |
+| 2.0.31 | 7 of 1,543 (**0.5%**) | 2.06 clusters/hour |
+| 2.0.32-dev | 1,501 of 1,536 (**97.7%**) | 1.85 clusters/hour |
+
+The share of time the block cleared the threshold rose by a factor of about
+195. The failure rate fell by 10%, which is inside run-to-run variation. Had
+the steady-state block been what governed success, failures should have very
+nearly disappeared.
+
+The arithmetic is worse still. At a 900 s poll interval, 25.9 h is roughly 104
+passes, and 48 of them failed -- about 46% -- while only 2.3% of samples showed
+a block under 1,600. The two numbers are not close enough to be the same
+phenomenon.
+
+**What survives.** The 1,600-byte requirement is read from the IDF source and
+is not in question; `esp_aes_process_dma_ext_ram()` really does bounce up to
+`AES_MAX_CHUNK_WRITE_SIZE` through `MALLOC_CAP_DMA`, and a BC01 -- which never
+goes near the limit on any metric -- still never fails. What is refuted is the
+idea that the *sampled, steady-state* largest block predicts whether a given
+request succeeds.
+
+**Two candidates, neither tested.** The call allocates an input buffer **and**
+an output buffer, each up to 1,600 and each aligned, so the real demand is two
+such blocks rather than one, and a 3 KB largest block can still fail to yield
+the second. And the API samples once a minute while the allocation happens
+inside a TLS read, with the record buffer and the connection's own state
+already in flight -- so a quiescent sample is not the pool's state at the
+moment AES asks for memory. Distinguishing them needs an instrumented
+allocation, not more polling.
+
+**The lesson worth keeping:** 2.0.31's block sat below the threshold 99.5% of
+the time and the requests failed, which looked like cause and was correlation.
+A second board or a second build is what broke it, and nothing in the first
+soak could have.
 
 That reframes the diagnosis in the entries above. They are right that the
 binding constraint is a contiguous 1,600-byte `MALLOC_CAP_DMA` allocation, and
 right that trimming total free bytes cannot fix it. But they describe a pool
 that fragments *during start-up* under the load of the task fleet coming up,
 implying it recovers afterwards. It does not recover. A BC04 sits just below
-the requirement permanently, succeeds only in the rare moments the block
+the requirement permanently on that build, succeeds only in the rare moments the block
 happens to exceed it, and the start-up window is merely when the figures are
 most alarming, not when the problem exists.
 
@@ -822,6 +863,38 @@ fix emits once per expired poll:
 Exactly one per `TRANSPORT_RECV_TIMEOUT_MS`, at 60, 120 and 180 seconds. The
 timeout fired three times and the new branch counted it and carried on each
 time. The old code returned NULL on the first.
+
+### Soaked 26 hours on both boards, 2026-10-19
+
+The probe and the quiet test proved the fixes do what they claim on the paths
+they changed. This says the firmware carrying them runs for a day without
+regressing anything else. Commit `46d8bbe`, both boards on `2.0.32-dev
+20261017`, app hashes recorded before the run.
+
+**No reboot on either board.** BC01 took 26,975 accepted shares and a BC04
+36,135 -- 63,110 between them -- with 40 and 23 rejected, all on pool A, and
+pools B, C and D at zero across both boards for the whole run. Frequency and
+core voltage never moved. Four samples failed to reach the BC01 and the next
+one succeeded each time; the BC04 was reachable for all 1,536.
+
+**Free heap is flat, and flatter than the release it replaces.** Quarter means
+of a BC04's internal free, over matched 25.9-hour windows:
+
+| | Q1 | Q2 | Q3 | Q4 |
+| --- | --- | --- | --- | --- |
+| 2.0.31 | 13,252 | 13,037 | 12,927 | 12,791 |
+| 2.0.32-dev | 14,147 | 13,257 | 13,279 | 13,223 |
+
+2.0.31 declines monotonically, 461 bytes across the run. 2.0.32-dev settles
+once in the first quarter from an unusually high boot and is then flat: 34
+bytes across the last three quarters, and fractionally up at the end. A
+least-squares slope over the whole window reads -43 b/h for 2.0.32-dev against
+-23 for 2.0.31, which looks worse and is not -- the fit is dragged by the Q1
+settle. **This is why the quarter means are given.** A BC01 ran +1 b/h against
+2.0.31's -7.
+
+DMA free went the other way outright: +28 b/h against -23, ending 7,496 against
+5,318, and the DMA floor finished at **607 against 311**.
 
 ### Not fixed, from the same review
 
