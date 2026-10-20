@@ -25,6 +25,91 @@ collected later at any price.
 
 ---
 
+## Session 1 results, 2026-10-20 (USB power only)
+
+**A different board from the one this page baselines, and newer firmware.**
+Read off the boot log itself:
+
+| | this board | this page's baseline |
+| --- | --- | --- |
+| SN | `ALBC04ACA7041FD1F8` | `ALBC04ACA704F6DEE8` |
+| MAC | `ac:a7:04:1f:d1:f8` | `ac:a7:04:f6:de:e8` |
+| stock firmware | **3.0.5 20260909** | 3.0.2 20260802 |
+
+An ESP32 derives every MAC from one base and they differ only in the last
+octet, so these are different chips rather than different interfaces. The
+checklist in section 0 should be read as "record which board", not "confirm it
+is that one".
+
+**The console is reachable over USB-C and no UART tap is needed.** COM port
+enumerated as `VID_303A&PID_1001` -- the S3's native USB Serial/JTAG. So
+`DIS_USB_SERIAL_JTAG` is **not** burned on this module, whatever else is. One
+caveat inherent to that interface: the chip's USB peripheral resets with the
+chip, so the earliest ROM output is emitted before enumeration completes and
+cannot be recovered this way. Everything from `ESP-ROM:esp32s3-20210327`
+onward was captured.
+
+### Stock THOR reboot-loops on an absent ASIC board. It does not stay up.
+
+This contradicts what this project has been recording, so the evidence first.
+Twelve consecutive cycles over eight minutes, period **39.4 to 39.7 s**, every
+one ending:
+
+    I main_system: Restarting with reason: power error
+    I main_system: Custom restart reason: power error
+    I main_system: Restarting in 3 seconds...  2...  1...  0...
+    I main_system: Restarting now.
+    rst:0xc (RTC_SW_CPU_RST),boot:0x2a (SPI_FAST_FLASH_BOOT)
+
+`RTC_SW_CPU_RST` is a software reset: the firmware decided this, it did not
+crash. **But it does not survive, and the belief that it does is load-bearing
+for us.** `docs/KNOWN-ISSUES.md` and the VCORE work argue our firmware's
+reboot loop on a missing regulator is a regression against stock, on the
+grounds that stock reports the fault and keeps serving its interface. On this
+board, in this configuration, stock does not.
+
+**What is genuinely different, and still worth having.** Stock names the reason
+and counts down; ours aborts through `ESP_ERROR_CHECK` with a panic and a
+backtrace. A reported restart is a better failure than a panic even when both
+end in a loop. So the fix direction is unchanged -- what is weakened is the
+claim that stock tolerates this state.
+
+**What this does NOT settle.** The conditions are not the same as the earlier
+observation. Here the entire ASIC board is absent and there is no 12 V at all
+(`TPS546 not found on I2C bus (ASIC board not connected?)`), where the earlier
+note describes a hashboard merely unpowered, and that was 3.0.2 against 3.0.5
+here. Either difference could account for it. Re-running this with main power
+present and the ASIC board attached is what would settle it.
+
+### Everything on the 12 V rail reads 0x00, as expected on USB alone
+
+    E w5500.mac: W5500 version mismatched, expected 0x04, got 0x00
+    E w5500.mac: emac_w5500_init(883): verify chip ID failed
+    E esp_eth:   esp_eth_driver_install(250): init mac failed
+    E net_w5500: Ethernet driver install failed: 0x10a
+    E emc:       emc model invalid, uh-oh (productid=0x00)
+    W TPS546:    TPS546 not found on I2C bus (ASIC board not connected?)
+
+**This is the signature of the dead boards, and here it is benign.** The W5500,
+the EMC2302 and the TPS546 all read as absent -- exactly the end state of both
+failed BC04s. On USB power alone that is what an I2C or SPI read of an
+unpowered part returns, and it is not evidence of damage. It is worth writing
+down precisely because it means **this signature cannot distinguish "dead" from
+"unpowered"**: any future diagnosis that leans on it has to establish the rail
+was up first.
+
+### Still outstanding, and it is the whole point of the session
+
+**Section 1 below is not done.** It needs main power (XT-30, 12 V) and an
+Ethernet cable **plugged and linked**, with the capture already running before
+power is applied. An unlinked W5500 on an unpowered rail cannot reproduce the
+core-rail transient the measurement exists to catch. What was captured here is
+a stock boot and the reboot-loop behaviour, not the W5500 measurement.
+
+**Handling note.** The boot log carries the owner's WiFi SSID, pool address and
+payout worker string, printed by `thor_cfg` at start-up. Raw captures are kept
+outside the repository and nothing is quoted from those lines here.
+
 ## 1. THE measurement — a linked W5500 through the core rail transient
 
 This is the whole reason the board is on the bench. Everything else on this
