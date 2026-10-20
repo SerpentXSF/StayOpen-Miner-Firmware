@@ -98,12 +98,22 @@
 
     <div class="card">
       <h2 style="margin-top:0">Ethernet and WiFi both work</h2>
-      <p>Ethernet on a BC04 had to be started <em>after</em> the hashboard is
-      powered rather than before it &mdash; a controller already running when
-      the core rail steps up stops answering about 70&nbsp;ms later and never
-      recovers. The firmware now starts it at the right point, and a BC04
-      hashing at 750&nbsp;MHz serves its own interface over Ethernet with no
-      errors.</p>
+      <p>Ethernet on a BC04 is started <em>after</em> the hashboard is powered
+      rather than before it. On the one BC04 whose Ethernet controller failed
+      here, it was linked when the core rail stepped up, stopped answering about
+      70&nbsp;ms later and never recovered. The firmware starts it at the safer
+      point, and a BC04 hashing at 750&nbsp;MHz serves its own interface over
+      Ethernet with no errors.</p>
+      
+      <p><strong>That ordering is a precaution, not a known defect in your
+      board.</strong> Measured on a healthy BC04 running the vendor&rsquo;s own
+      firmware on 2026-10-20: the controller linked 4.7&nbsp;s into the boot and
+      the core rail was not enabled until 22.8&nbsp;s &mdash; linked and holding
+      an address for eighteen seconds before the step &mdash; and it came through
+      it and ran for the next hour without a dropped link. So the vendor&rsquo;s
+      ordering is not by itself fatal, and one failure should not be read as a
+      property of the hardware. We start Ethernet later anyway, because it costs
+      nothing and the one board that did fail was in exactly that state.</p>
       <p>Confirmed both ways: with WiFi alongside, and with WiFi switched off
       entirely &mdash; which is what this image is until you set it up. On
       Ethernet alone it mined at 6.2&nbsp;TH/s with no rejected shares and no
@@ -142,6 +152,23 @@
     <p>The other models are supported in the source and can be built from it;
     only the BC01 and BC04 are published here, because only those two have been
     run on real hardware.</p>
+  </div>
+
+  <div class="card stop">
+    <h2>Flash the module before you fit it</h2>
+    <p><strong>On a BC04, or any Hammer powered through an XT-30, flash
+    the controller module over USB with the module out of the miner,
+    then fit it.</strong> Do not plug USB into a module already seated
+    in a board running on main power.</p>
+    <p>The BC04 takes 12&nbsp;V through the XT-30 and has no VBUS gate,
+    so nothing on the board is documented to isolate USB&nbsp;5&nbsp;V
+    from the rails that main power also drives. We have not measured
+    what happens when both are connected, and we are not asking you to
+    find out on your miner. Flashing the module on its own avoids the
+    question completely: USB powers it perfectly well by itself, which
+    is all the flasher needs.</p>
+    <p>A BC01 is different &mdash; it is USB-PD powered and has a VBUS
+    gate, so flashing it in place is the normal way to do it.</p>
   </div>
 
   <div class="card stop">
