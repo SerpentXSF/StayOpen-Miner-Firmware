@@ -96,10 +96,52 @@ shows an already-dead board being correctly reported. It was taken after the
 failure. A reproduction would be a healthy board failing under stock firmware,
 and nothing in the record is that.
 
-**The ordering was never observed killing a linked controller.** Both
-stock-THOR boots were on WiFi with no cable, so that W5500 was initialised but
-never linked — idle, not the state the failed board's was in. The one
-measurement that would close this has never been taken.
+**The ordering was never observed killing a linked controller, and on
+2026-10-20 it was observed NOT killing one.** Both earlier stock-THOR boots
+were on WiFi with no cable, so that W5500 was initialised but never linked —
+idle, not the state the failed board's was in. That measurement has now been
+taken, and it goes against the case this document is making.
+
+A healthy BC04 — SN `ALBC04ACA7041FD1F8`, stock THOR **3.0.5 20260909**, not
+the failed unit — was powered from the XT-30 with an Ethernet cable **plugged
+and linked**, and came through the core-rail transient intact. Read from the
+vendor's own `/v2` API three minutes after power-on:
+
+| | |
+| --- | --- |
+| `eth.is_present` / `phy_link_up` / `is_connected` | all true |
+| `ethStatus` | `Link Up` |
+| hashboard | 4 × BM1370 detected, 6.1 TH/s |
+| input / core | 12.05 V in, 4.59 V core at 21.0 A, 96.5 W |
+| shares | 97 accepted, 0 rejected |
+
+So the hashboard powered up with the controller linked, and the W5500 was still
+answering afterwards. **The vendor's boot order is not, by itself, fatal to a
+linked W5500.**
+
+**What that does and does not mean.** It is a negative control, not a proof of
+safety: one board, one power-on, and latch-up is a probabilistic event that a
+single survival cannot rule out. It does not reproduce the failure and it does
+not explain it. What it does do is remove the simplest version of the argument
+above — that standing Ethernet in front of the core rail is enough on its own
+to kill the part — because here it was not.
+
+**And it leaves this firmware as the remaining differentiator.** The two
+entries below still stand: the fork commanded 4.80 V where stock sets 4.65 V,
+and it added real extra rail cycles through panics after the hashboard was
+powered. With the vendor's ordering now shown survivable on a linked
+controller, those differences carry more of the weight than they did, not less.
+A reader weighing the refusal is entitled to that, and it is why the
+measurement is recorded here rather than somewhere quieter.
+
+**Caveats, stated rather than buried.** Different board and newer firmware than
+the failed unit (3.0.5 against 3.0.2). No serial log exists for this boot: this
+hardware uses GPIO43/44 for I²C and has no UART console, the console is only on
+USB-Serial/JTAG, and the BC04 has no VBUS gate — so USB could not safely be
+connected alongside the XT-30, and the owner declined to risk the only stock
+reference board left. The end state is therefore known and the first
+milliseconds are not: a W5500 that glitched and recovered would look identical
+to one that never faltered.
 
 **This firmware put the part through a larger transient than the vendor's
 does.** The fork commanded **4.80 V** at every power-on while configured at
