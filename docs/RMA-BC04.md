@@ -119,6 +119,14 @@ So the hashboard powered up with the controller linked, and the W5500 was still
 answering afterwards. **The vendor's boot order is not, by itself, fatal to a
 linked W5500.**
 
+**It then held for 49 minutes of continuous mining**, which matters because the
+failed board did not die instantly either: it stopped answering about 70 ms
+after the rail step and only later failed short. Polled every 30 s for 45
+minutes -- 90 samples, **every one `Link Up`**, no link drop, no reboot, no
+unreachable sample, uptime rising 238 s to 2,919 s, shares 112 to 881 with none
+rejected, hashrate steady near 6.0 TH/s and input voltage unmoved at 12.05 V.
+So this is not a controller that survived the transient and then degraded.
+
 **What that does and does not mean.** It is a negative control, not a proof of
 safety: one board, one power-on, and latch-up is a probabilistic event that a
 single survival cannot rule out. It does not reproduce the failure and it does
