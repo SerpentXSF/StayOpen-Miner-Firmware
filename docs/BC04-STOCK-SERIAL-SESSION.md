@@ -100,7 +100,14 @@ was up first.
 
 ### Still outstanding, and it is the whole point of the session
 
-**Section 1 below is not done.** It needs main power (XT-30, 12 V) and an
+**Section 1 below was completed on 2026-10-20** — see the RMA write-up for
+the timeline and what it means. It was done over the network rather than over
+serial: stock THOR serves its own boot log at `/v2/logs/history`, so the
+console cable turned out not to be required at all. What follows describes the
+serial route, which remains the only way to see a boot that does not survive
+long enough to serve anything.
+
+The original wording of this line said section 1 needs main power and an
 Ethernet cable **plugged and linked**, with the capture already running before
 power is applied. An unlinked W5500 on an unpowered rail cannot reproduce the
 core-rail transient the measurement exists to catch. What was captured here is

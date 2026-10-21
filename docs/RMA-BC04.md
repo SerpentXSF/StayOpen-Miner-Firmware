@@ -81,10 +81,12 @@ addressed, then the first SPI timeout 70 to 130 ms after the core rail stepped.
 Reproducible across at least five cold boots, never recovering within a
 session, recovering on a full power cycle.
 
-**The boot order is the vendor's, on the evidence of a measurement.** Stock
+**The boot order is the vendor's, on the evidence of two measurements.** Stock
 THOR 3.0.2, measured on a different BC04, initialises `net_w5500` at t ≈ 2.7 s
-and enables VCORE at t ≈ 10.9 s — the Ethernet controller is up before the core
-rail steps. The vendor's published source shows the same order at `main.c:293`
+and enables VCORE at t ≈ 10.9 s. Stock THOR 3.0.5 on a third board, 2026-10-20,
+with the cable linked: `net_w5500` at 2.7 s, physical link at 4.7 s, VCORE at
+22.8 s. Both put the Ethernet controller up before the core rail steps, and the
+second did it with the controller linked rather than idle. The vendor's published source shows the same order at `main.c:293`
 and `main.c:320`, but that is their pre-production build, which their own
 README calls separate from and unrelated to THOR; the measurement is the
 citation that carries, not the line numbers.
@@ -143,13 +145,31 @@ A reader weighing the refusal is entitled to that, and it is why the
 measurement is recorded here rather than somewhere quieter.
 
 **Caveats, stated rather than buried.** Different board and newer firmware than
-the failed unit (3.0.5 against 3.0.2). No serial log exists for this boot: this
-hardware uses GPIO43/44 for I²C and has no UART console, the console is only on
-USB-Serial/JTAG, and the BC04 has no VBUS gate — so USB could not safely be
-connected alongside the XT-30, and the owner declined to risk the only stock
-reference board left. The end state is therefore known and the first
-milliseconds are not: a W5500 that glitched and recovered would look identical
-to one that never faltered.
+the failed unit (3.0.5 against 3.0.2).
+
+**No serial console was attached, and it turned out not to matter.** This
+hardware uses GPIO43/44 for I²C and has no UART console; the console is only on
+USB-Serial/JTAG, and the BC04 has no VBUS gate, so USB could not safely be
+connected alongside the XT-30 and the owner declined to risk the only stock
+reference board left. That was the right call. An earlier version of this
+paragraph concluded the first milliseconds were therefore unknowable — **that
+was wrong, and written before looking.** Stock THOR serves its own boot log
+over HTTP at `/v2/logs/history`, with millisecond timestamps, and the boot was
+recovered in full from a genuine `Reset reason: Power on reset`:
+
+| t | event |
+| --- | --- |
+| 2,697 ms | `net_w5500: Initializing W5500 SPI Ethernet` |
+| 2,727 ms | `W5500 initialized successfully` |
+| **4,727 ms** | **`Ethernet Physical Link Connected`** |
+| 12,957 ms | `eth ip: 192.168.50.x` — DHCP lease held |
+| **22,837 ms** | **`Set VCORE to 4.60 V` / `Enabling VCORE`** |
+| 28,237 ms | `ASIC scan 4 chips` |
+
+So the controller was linked, addressed and carrying traffic for **18.1
+seconds** before the core rail stepped, and went on working for the next hour.
+This is not an inference from an end state: the ordering and the survival are
+both timestamped from the vendor's own firmware.
 
 **This firmware put the part through a larger transient than the vendor's
 does.** The fork commanded **4.80 V** at every power-on while configured at
