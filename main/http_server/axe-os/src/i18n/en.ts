@@ -152,7 +152,7 @@ const lang = {
             mode_needs_four: 'Three and four pool modes need a board with four ASICs.',
             pool_named: 'Pool %s',
             weight: 'Share',
-            weight_hint: 'Relative to the other secondary pools, not a percentage. These divide only what the hashrate split leaves over and cannot take anything from pool A. All at 0 shares that remainder evenly.',
+            weight_hint: 'Relative to the other secondary pools, not a percentage. These divide only what the hashrate split leaves over and cannot take anything from pool A. If every secondary is 0, they divide that remainder evenly.',
             dual_split: "Hashrate split (pool A's share)",
             dual_split_hint: "Pool A always takes this percentage, in every mode; the rest is divided between the other pools. Share counts will not match these ratios when pools run different difficulties.",
             dual_slice: 'Slice length (ms)',
