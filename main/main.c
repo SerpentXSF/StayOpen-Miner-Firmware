@@ -373,10 +373,30 @@ void memory_monitor_task(void *pvParameters) {
     }
 }
 
+/*
+ * Held at file scope so the API can report them. They used to be local to the
+ * two functions below, which logged them and let them go -- and a log is not
+ * evidence once the 262 KB ring has turned over. Both boards restarted inside
+ * the same minute on 2026-10-21 and by the time anyone looked, three days
+ * later, the only record of why had scrolled away.
+ */
+static const char *s_last_reset_reason = "Unknown";
+static char s_last_restart_reason[48] = "None";
+
+const char *system_last_reset_reason(void)
+{
+    return s_last_reset_reason;
+}
+
+const char *system_last_restart_reason(void)
+{
+    return s_last_restart_reason;
+}
+
 void showLastResetReason(void)
 {
     esp_reset_reason_t reason = esp_reset_reason();
-    static const char* m_lastResetReason;
+    const char *m_lastResetReason;
     switch (reason) {
         case ESP_RST_UNKNOWN: m_lastResetReason = "Unknown"; break;
         case ESP_RST_POWERON: m_lastResetReason = "Power on reset"; break;
@@ -419,6 +439,7 @@ void showLastResetReason(void)
             break;
         }
     }
+    s_last_reset_reason = m_lastResetReason;
     ESP_LOGI(TAG, "Reset reason: %s", m_lastResetReason);
 }
 
@@ -426,8 +447,16 @@ void showLastResetReasonCustom(void)
 {
     char *custom_reason = nvs_config_get_string(NVS_CONFIG_RESTART_REASON, "None");
     if (custom_reason != NULL) {
+        /* Copied before the key is cleared below -- otherwise the reason is
+         * gone from NVS and from memory in the same breath, and the API has
+         * nothing to report for the rest of the run. */
+        snprintf(s_last_restart_reason, sizeof(s_last_restart_reason), "%s",
+                 custom_reason);
         ESP_LOGI(TAG, "Custom restart reason: %s", custom_reason);
         nvs_config_set_string(NVS_CONFIG_RESTART_REASON, "None");
+        /* nvs_config_get_string() hands back malloc'd memory on every path,
+         * including its strdup'd defaults. This one was never freed. */
+        free(custom_reason);
     }
 }
 

@@ -918,6 +918,53 @@ DMA free went the other way outright: +28 b/h against -23, ending 7,496 against
   main-task path the 8192→5120 trim was never sized against. One self-test boot
   with the high-water mark printed at the end of `self_test()` settles it.
 
+## Both boards restarted and the reason was already gone (fixed in the tree, unreleased)
+
+**2026-10-21, about 19:10.** A health check three days later found both miners
+at 74.1 and 74.0 hours of uptime — restarted within the same minute. Two
+independent boards failing simultaneously is far less likely than one shared
+cause, so mains or a breaker is the obvious candidate, but **that is an
+inference and the evidence to confirm it no longer existed.**
+
+The firmware had the answer and discarded it. `showLastResetReason()` in
+`main/main.c` works out why the chip came up — and the list it chooses from
+includes **`Brownout reset`** and **`Power glitch reset`**, which is precisely
+what would have settled the question. It logged the string and dropped it. By
+the time anyone looked, 74 hours of debug-level logging had turned the 262 KB
+ring over many times and the boot lines were gone.
+
+`/api/system/info` had no field for it either, so there was nothing to read
+back.
+
+**This is the second time a measurement expired before it was collected.** The
+first was the `esp-aes` context, which turned out to have been pulled and then
+discarded by a log filter. The pattern is the same: the information existed at
+the moment it mattered and nothing durable was written down.
+
+**Fixed in the tree.** Two new fields in `/api/system/info`, next to
+`uptimeSeconds` because they answer the question a short uptime raises:
+
+| field | what it is |
+| --- | --- |
+| `lastResetReason` | from `esp_reset_reason()` — the silicon's account. `Power on reset`, `Brownout reset`, `Software panic reset`, `Task watchdog reset`, `Power glitch reset`, `CPU lockup reset`, and the rest |
+| `lastRestartReason` | the string `restart_with_reason()` stores in NVS before a deliberate restart, or `None` when the firmware did not choose to go down — which is itself the useful answer |
+
+Both are captured once at start-up and held at file scope, so they read the
+same for the life of the run no matter when they are polled.
+
+`lastRestartReason` needed one care: `showLastResetReasonCustom()` clears the
+NVS key immediately after reading it, so the value is copied before the clear.
+Otherwise it would be gone from NVS and from memory in the same breath.
+
+**A leak was fixed on the way past.** `nvs_config_get_string()` returns
+`malloc`'d memory on every path, including its `strdup`'d defaults, and that
+one was never freed — a small one-time cost at every boot.
+
+**What this does not do.** It records the *last* reset only. A board that
+restarts repeatedly overwrites the field each time, so a loop still has to be
+caught while it is happening. Watching for that is what the soak harness
+already does by comparing uptime between samples.
+
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 
 **Status: fixed.** `tools/make_release.py` sets the flag correctly, and the

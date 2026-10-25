@@ -2079,6 +2079,14 @@ static esp_err_t GET_system_info(httpd_req_t * req)
     }
 
     cJSON_AddNumberToObject(root, "uptimeSeconds", (esp_timer_get_time() - GLOBAL_STATE->SYSTEM_MODULE.start_time) / 1000000);
+    /*
+     * Next to the uptime, because they answer the question the uptime raises.
+     * A short uptime says the board restarted; these say why, and they are the
+     * only record that survives -- the boot log is gone from the ring within
+     * minutes at debug level.
+     */
+    cJSON_AddStringToObject(root, "lastResetReason", system_last_reset_reason());
+    cJSON_AddStringToObject(root, "lastRestartReason", system_last_restart_reason());
     cJSON_AddNumberToObject(root, "asicCount", ASIC_get_asic_count(GLOBAL_STATE));
     cJSON_AddNumberToObject(root, "smallCoreCount", ASIC_get_small_core_count(GLOBAL_STATE));
     /*

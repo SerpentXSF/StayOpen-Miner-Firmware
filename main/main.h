@@ -4,6 +4,16 @@
 void restart_with_reason(const char *reason);
 void restart(void);
 
+/*
+ * Why the board came up, for /api/system/info. The first is what the silicon
+ * reported (brownout, panic, watchdog, power glitch); the second is the string
+ * restart_with_reason() stored before a deliberate restart, or "None" when the
+ * firmware did not choose to go down. Both are valid from early in app_main
+ * and never change afterwards.
+ */
+const char *system_last_reset_reason(void);
+const char *system_last_restart_reason(void);
+
 /* Both defined in main.c. Declared here because the memory census is called
  * from health_maintenance_task rather than from a task of its own -- see the
  * call site for why there is no longer a memory_monitor_task. */
