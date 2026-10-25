@@ -2,33 +2,40 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**The current release is 2.0.31** (tag `v2.0.31`, 26 h soak on a BC01 and a
-BC04 together). **The tree is ahead of it again**: a review on 2026-10-17 found
-four defects in the Stratum receive and parse paths, all pre-existing, all
-fixed in the tree and none of them in a published image yet. They are in
-"A pool can still crash the miner" below, and one of them makes a row in the
-table below untrue. If you are running 2.0.31, everything in the left and
-middle columns is fixed in your firmware:
+**The current release is 2.0.32** (tag `v2.0.32`). It carries the four Stratum
+defects a review found on 2026-10-17 -- all pre-existing, all present in every
+release up to and including 2.0.31 -- and the reset reason in
+`/api/system/info`. Two of those defects made the row "A pool cannot crash or
+reboot the miner" false for three releases; it is struck through below rather
+than quietly amended.
 
-| Fixed in 2.0.30 and earlier | Fixed in 2.0.31 |
-| --- | --- |
-| Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited |
-| The stall watchdog waits past the regulator's retries | A failed share write counts as a disconnect instead of waiting on lwIP |
-| A masked password is never stored as the password | The parsed Stratum strings are freed |
-| Both interfaces cannot share one static IP | Up to four pools, gated to four-ASIC boards |
-| The I2C timeout is bounded; no model rewrite on an empty bus | A session can be ended on demand over the API |
-| ~~A pool cannot crash or reboot the miner~~ **(not true -- see below)**; crash dumps kept | |
-| Both fan tachometers reported; fan protection can fire | |
-| Kernel log download works while signed in | |
-| Releases carry LICENSE and a source pointer | |
-| The W5500 is held in hardware reset across the rail step (2.0.29) | |
-| Dual pool no longer feeds a pool that has disconnected (2.0.29) | |
-| A share can no longer be scored from a freed job (2.0.29, reasoned, not proven) | |
-| The bridge test no longer calls stuck-low pins shorts (2.0.29) | |
-| Five reset reasons have names instead of "Not specified" (2.0.29) | |
-| A pool offering difficulty 8192 no longer leaves jobs at zero (2.0.30) | |
-| The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |
-| A dropped firmware upload is retried rather than handed back (2.0.30) | |
+**How far 2.0.32 was checked, stated here rather than left to be assumed.** The
+26 h soak behind it ran on a BC01 and a BC04 together and covered the Stratum
+fixes, which were also each provoked deliberately on hardware. The reset-reason
+change landed *after* that soak, so the binaries this release ships are not the
+ones that were soaked -- it was verified on both boards and has a couple of
+hours on them, and that is all. If you are running 2.0.32, every column below
+is fixed in your firmware:
+
+| Fixed in 2.0.30 and earlier | Fixed in 2.0.31 | Fixed in 2.0.32 |
+| --- | --- | --- |
+| Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited | A pool cannot crash or reboot the miner -- **this time** including params 5/6/7, `set_difficulty`, `set_version_mask` and deeply nested JSON, each provoked on hardware rather than reasoned about |
+| The stall watchdog waits past the regulator's retries | A failed share write counts as a disconnect instead of waiting on lwIP | Sixty seconds of pool silence no longer tears the session down |
+| A masked password is never stored as the password | The parsed Stratum strings are freed | `error_str` is freed once instead of being `strdup`'d twice |
+| Both interfaces cannot share one static IP | Up to four pools, gated to four-ASIC boards | The board reports why it last restarted, in `/api/system/info` |
+| The I2C timeout is bounded; no model rewrite on an empty bus | A session can be ended on demand over the API |  |
+| ~~A pool cannot crash or reboot the miner~~ **(not true -- see below)**; crash dumps kept | |  |
+| Both fan tachometers reported; fan protection can fire | |  |
+| Kernel log download works while signed in | |  |
+| Releases carry LICENSE and a source pointer | |  |
+| The W5500 is held in hardware reset across the rail step (2.0.29) | |  |
+| Dual pool no longer feeds a pool that has disconnected (2.0.29) | |  |
+| A share can no longer be scored from a freed job (2.0.29, reasoned, not proven) | |  |
+| The bridge test no longer calls stuck-low pins shorts (2.0.29) | |  |
+| Five reset reasons have names instead of "Not specified" (2.0.29) | |  |
+| A pool offering difficulty 8192 no longer leaves jobs at zero (2.0.30) | |  |
+| The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |  |
+| A dropped firmware upload is retried rather than handed back (2.0.30) | |  |
 
 The right-hand column shipped in 2.0.31. How far each row was checked
 differs, and shipping did not change that, so it is still stated per row rather
@@ -38,7 +45,7 @@ than blanket:
 | --- | --- |
 | A dead secondary pool's work, extranonce and held notify are released rather than inherited | On hardware, over eight forced reconnects across all three secondaries: nothing built between the pool going down and the new session's extranonce, a distinct extranonce each time, nothing rejected |
 | A failed share write counts as a disconnect instead of waiting on lwIP | **The shared teardown is exercised on hardware; a genuinely failing write is not.** The API drop and a write failure take the same path, and that path was measured at 0.0–0.6 s. Nothing provoked a real write failure |
-| The parsed Stratum strings are freed | **Reviewed, not measured -- and the review was not enough.** A 2026-10-17 read found `error_str` strdup'd twice on the reject path and the first allocation leaked. Exactly the path this row said had never been exercised. Fixed in the tree, unreleased |
+| The parsed Stratum strings are freed | **Reviewed, not measured -- and the review was not enough.** A 2026-10-17 read found `error_str` strdup'd twice on the reject path and the first allocation leaked. Exactly the path this row said had never been exercised. Fixed in 2.0.32, and that path has now run: pool A has rejected 17 shares across the two boards since, every one carrying a reason string |
 | Up to four pools, gated to four-ASIC boards | On hardware: all four pools mining, the split within 1σ of its configured weights, 2,754 shares and 0 rejects over two hours |
 | A session can be ended on demand over the API | On hardware: every refusal case, and eight drops across three pools |
 | Pool A releases its held work when its session ends, instead of building from a dead one | On hardware, through a relay with pool A unreachable for 75 s: 0 jobs built across the outage, 41 submits and 0 rejects, the secondaries unaffected |
@@ -672,10 +679,10 @@ already pulled. No extra polling was ever needed, and the 2.0.32-dev soak
 filter has been widened to keep it. Until that run reports, the boot-time
 context recorded above is still an assumption and not a measurement.
 
-## A pool can still crash the miner (fixed in the tree, unreleased)
+## A pool can still crash the miner (fixed in 2.0.32)
 
-**Status: four defects, found by review 2026-10-17, all fixed in the tree and
-none released.** They are pre-existing — none arrived with 2.0.31 — and the
+**Status: four defects, found by review 2026-10-17, all fixed and released in
+2.0.32.** They are pre-existing — none arrived with 2.0.31 — and the
 first two make the header row "A pool cannot crash or reboot the miner" false
 for every release up to and including 2.0.31.
 
@@ -918,7 +925,7 @@ DMA free went the other way outright: +28 b/h against -23, ending 7,496 against
   main-task path the 8192→5120 trim was never sized against. One self-test boot
   with the high-water mark printed at the end of `self_test()` settles it.
 
-## Both boards restarted and the reason was already gone (fixed in the tree, unreleased)
+## Both boards restarted and the reason was already gone (fixed in 2.0.32)
 
 **2026-10-21, about 19:10.** A health check three days later found both miners
 at 74.1 and 74.0 hours of uptime — restarted within the same minute. Two
@@ -941,7 +948,7 @@ first was the `esp-aes` context, which turned out to have been pulled and then
 discarded by a log filter. The pattern is the same: the information existed at
 the moment it mattered and nothing durable was written down.
 
-**Fixed in the tree.** Two new fields in `/api/system/info`, next to
+**Fixed in 2.0.32.** Two new fields in `/api/system/info`, next to
 `uptimeSeconds` because they answer the question a short uptime raises:
 
 | field | what it is |
@@ -964,6 +971,14 @@ one was never freed — a small one-time cost at every boot.
 restarts repeatedly overwrites the field each time, so a loop still has to be
 caught while it is happening. Watching for that is what the soak harness
 already does by comparing uptime between samples.
+
+**It answered its first real question on 2026-10-24, and the answer was
+boring.** A health check found the BC01 at 2.04 h and the BC04 at 2.10 h --
+two boards up within six minutes of each other, which is the exact shape of
+the 2026-10-21 event above. Both reported `lastResetReason: Software reset`
+and `lastRestartReason: Firmware update complete`: the restarts were the OTA
+flashes of this very build, done minutes apart. Before these fields that
+reading would have cost an evening and ended in a guess.
 
 ## The web flasher's "Update" mode erased the settings it promised to keep (fixed and republished)
 
@@ -1094,7 +1109,7 @@ on WiFi throughout, the cable added live, and the interface then carrying
 | --- | --- |
 | Before 2.0.28 | The self test could bring Ethernet fully up first, and the stall watchdog could start it mid-way through the regulator's retries. The controller was live, linked and holding a lease. This is the configuration that is believed to have killed a board. |
 | 2.0.28 | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
-| **2.0.29 and later (current release 2.0.31)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
+| **2.0.29 and later (current release 2.0.32)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
 
 **So, plainly: on 2.0.28 a cold boot with the cable attached is not fully
 addressed.** Deferring the driver protects this firmware's view of the
@@ -1418,7 +1433,7 @@ bugs inside a release is how the last two regressions in this project got out.
 **Status: fixed and published in 2.0.31 -- but not completely.** A review on
 2026-10-17 found the reject path still `strdup`'d `error_str` twice and leaked
 the first allocation, 8 bytes per rejected share against any pool that sends a
-reason. That is fixed in the tree and unreleased; see the Stratum crash entry
+reason. That is fixed in 2.0.32; see the Stratum crash entry
 above. What 2.0.31 did fix is below and is unaffected.
 `STRATUM_V1_free_message()` in `components/stratum/stratum_api.c` releases the
 parsed strings, and both stratum tasks call it -- including on the path that
