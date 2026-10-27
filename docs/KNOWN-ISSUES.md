@@ -2,20 +2,25 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**The current release is 2.0.32** (tag `v2.0.32`). It carries the four Stratum
-defects a review found on 2026-10-17 -- all pre-existing, all present in every
-release up to and including 2.0.31 -- and the reset reason in
-`/api/system/info`. Two of those defects made the row "A pool cannot crash or
-reboot the miner" false for three releases; it is struck through below rather
-than quietly amended.
+**The current release is 2.0.33** (tag `v2.0.33`), and it is a one-string
+release: it reworded the Share hint on the Pool settings page and changed no
+firmware behaviour whatsoever. Everything below that concerns the firmware
+describes **2.0.32**, which 2.0.33 carries unaltered.
+
+**2.0.32** carried the four Stratum defects a review found on 2026-10-17 -- all
+pre-existing, all present in every release up to and including 2.0.31 -- and
+the reset reason in `/api/system/info`. Two of those defects made the row "A
+pool cannot crash or reboot the miner" false for three releases; it is struck
+through below rather than quietly amended.
 
 **How far 2.0.32 was checked, stated here rather than left to be assumed.** The
 26 h soak behind it ran on a BC01 and a BC04 together and covered the Stratum
 fixes, which were also each provoked deliberately on hardware. The reset-reason
-change landed *after* that soak, so the binaries this release ships are not the
-ones that were soaked -- it was verified on both boards and has a couple of
-hours on them, and that is all. If you are running 2.0.32, every column below
-is fixed in your firmware:
+change landed *after* that soak, so the binaries it shipped are not the ones
+that were soaked -- it was verified on both boards, and by the time 2.0.33 was
+cut it had days on them rather than hours. **2.0.33 was not soaked at all**, and
+there is nothing in it a soak could have exercised. If you are running 2.0.32
+or 2.0.33, every column below is fixed in your firmware:
 
 | Fixed in 2.0.30 and earlier | Fixed in 2.0.31 | Fixed in 2.0.32 |
 | --- | --- | --- |
@@ -1109,7 +1114,7 @@ on WiFi throughout, the cable added live, and the interface then carrying
 | --- | --- |
 | Before 2.0.28 | The self test could bring Ethernet fully up first, and the stall watchdog could start it mid-way through the regulator's retries. The controller was live, linked and holding a lease. This is the configuration that is believed to have killed a board. |
 | 2.0.28 | Both of those paths are closed, so no driver touches the controller before the rail. **But the chip is still powered and, with a cable in, still linked through the step.** Reduced, not eliminated. |
-| **2.0.29 and later (current release 2.0.32)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
+| **2.0.29 and later (current release 2.0.33)** | `eth_phy_hold_in_reset()` drives GPIO13 low before either path that powers the rail, so the PHY and the internal regulator are off through the step. An attached cable then makes no difference: the part is dark either way. |
 
 **So, plainly: on 2.0.28 a cold boot with the cable attached is not fully
 addressed.** Deferring the driver protects this firmware's view of the
