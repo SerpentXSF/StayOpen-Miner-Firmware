@@ -428,7 +428,12 @@ onMounted(async () => {
                 <a-form-item name="fanspeed" style="margin-bottom: 0;">
                   <a-slider v-model:value="formState.fanspeed"/>
                   <span v-show="formState.fanspeed < 33" class="set-edit-slider-hint" style="color: red; font-size: 0.85rem;"><WarningOutlined/> &nbsp;{{ sel('danger_oh') }}</span>
-                  <span v-show="formState.fanspeed == 100" class="set-edit-slider-hint" style="color:#F2A900; font-size: 0.85rem;"><WarningOutlined/>{{ sel('simulator') }} </span>
+                  <!-- "Simulator" was the vendor's label here and it
+                       describes nothing: a fan at 100% is not a simulated
+                       anything, and the firmware has no mode of that name.
+                       What is worth warning about is that there is no duty
+                       left above this one. -->
+                  <span v-show="formState.fanspeed == 100" class="set-edit-slider-hint" style="color:#F2A900; font-size: 0.85rem;"><WarningOutlined/>&nbsp;{{ sel('fan_full') }}</span>
                 </a-form-item>
               </a-descriptions-item>
 

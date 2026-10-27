@@ -248,7 +248,7 @@ const lang = {
         voltage: 'Core Voltage',
         fan_speed: 'Fan Speed',
         danger_oh: 'Danger: Could Cause Overheating',
-        simulator: 'Simulator',
+        fan_full: 'Fan at maximum: it cannot go higher if the temperature climbs, and this is as loud as the miner gets.',
         auto_fan_ctrl: 'Automatic Fan Control',
         flip_screen: 'Flip Screen',
         flip_screen_tip: 'Rotates the LCD screen by 180 degrees',
@@ -305,6 +305,8 @@ const lang = {
         remote_ota_current: "Current Version",
         remote_ota_model: "Model name",
         remote_ota_latest: "Your firmware is up to date.",
+        remote_ota_unreachable: "Could not reach GitHub, so whether an update exists is unknown. This is not a confirmation that your firmware is current -- check the network and try again.",
+        remote_ota_partial: "Part of this check could not reach GitHub, so nothing found here covers only the half that answered. Try again.",
         remote_ota_new_web: "New Web Version Available",
         remote_ota_new_fw: "New Firmware Version Available",
         remote_ota_download_web: "Install Web Update",
@@ -339,6 +341,22 @@ const lang = {
         ws_scroll_start: "Start Scrolling",
         ws_clear_filter: "Clear Filter",
         ws_filter_placeholder: "Filter logs..."
+    },
+    security: {
+        title: 'Security Settings',
+        logout: 'Logout',
+        no_pass_title: 'This miner has no password',
+        no_pass_body: 'Every endpoint, including pool settings and firmware update, is reachable by any host on your network without credentials. Set a password below.',
+        api_password: 'API password',
+        api_password_ph: 'At least 8 characters; empty disables authentication',
+        confirm: 'Confirm password',
+        confirm_ph: 'Repeat the password',
+        save: 'Save Security Settings',
+        note: 'Saving signs you out on every device, since existing sessions were issued against the old password.',
+        err_mismatch: 'The two passwords do not match.',
+        err_short: 'Use at least 8 characters.',
+        clear_warn: 'Clearing the password disables authentication. Every endpoint on this miner, including pool settings and firmware update, becomes reachable by any host on your network without credentials.',
+        clear_confirm: 'Continue?'
     }
 }
 

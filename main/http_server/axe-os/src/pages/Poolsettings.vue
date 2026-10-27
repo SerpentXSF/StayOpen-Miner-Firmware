@@ -103,6 +103,52 @@ const canQuad = computed(() => asicCount.value >= 4);
 const shownPools = computed(() => Math.max(0, formState.poolCount - 1));
 
 /*
+ * The mode that shows every configured pool.
+ *
+ * This was `1 + secondary.filter(p => p.URL !== '').length` -- a count of
+ * filled hosts, which is not the same question. The miner connects every pool
+ * that has a host and does not care about the gaps, so a configuration with C
+ * filled and B empty is one it runs happily. Counting gave 2, which is Dual,
+ * which shows one secondary panel: an empty B on screen, C hidden, and C
+ * still mining. The page was describing a configuration the miner was not in,
+ * and pressing Save wrote what the page showed.
+ *
+ * Three secondaries have no mode of their own -- the radio offers 1, 2 and 4
+ * -- so anything past B selects Quad and the unused letters show up empty
+ * rather than hidden. Empty and visible is the honest state; configured and
+ * hidden is not.
+ */
+const modeForSecondaries = (pools: SecondaryPool[]): number => {
+  let highest = -1;
+  pools.forEach((p, i) => {
+    if ((p.URL || '').trim() !== '') highest = i;
+  });
+  if (highest < 0) return 1;
+  return highest === 0 ? 2 : 4;
+};
+
+/*
+ * A Share weight the page will not show must not still be dividing the work.
+ *
+ * The Weight field is hidden below two secondaries, because with one the A/B
+ * slider says the same thing. But the value survived the switch: set B to 25
+ * in Quad, drop to Dual, and build_pool_weights() in create_jobs_task.c still
+ * normalises pool A's percentage against that 25. A slider reading "A 50%"
+ * then ran A at 67% and B at 33%, from a number the owner could no longer see
+ * or reach.
+ *
+ * Zeroing it is also what makes the slider exact in Dual mode: with no stated
+ * weight the firmware gives the secondary the whole remainder, so A gets
+ * precisely the percentage shown. (The normalisation itself is a firmware
+ * defect and is recorded in docs/KNOWN-ISSUES.md; this does not fix it, it
+ * stops the page feeding it a hidden input.)
+ */
+const clearHiddenWeights = () => {
+  if (shownPools.value > 1) return;
+  formState.secondary.forEach((p) => { p.Weight = 0; });
+};
+
+/*
  * The split the miner will actually run, mirroring build_pool_weights() in
  * create_jobs_task.c: pool A takes its percentage, and whatever is left is
  * divided among the configured pools -- by their own weights where any have
@@ -151,6 +197,7 @@ const onPoolCountChange = (next: number) => {
   }
   formState.poolCount = next;
   formState.dualEnable = next > 1 ? 1 : 0;
+  clearHiddenWeights();
 };
 const actionStatus = reactive<ActionStatus>({saving: false, restarting: false});
 const activeTab = ref<string>('primary'); // 控制 Tab 切换
@@ -379,7 +426,8 @@ const applyPendingOverFormState = () => {
           }
         });
   });
-  formState.poolCount = 1 + formState.secondary.filter((p) => p.URL !== '').length;
+  formState.poolCount = modeForSecondaries(formState.secondary);
+  clearHiddenWeights();
 
   if (pending.stratumURL) {
     formState.stratumURL = `${pending.stratumURL}:${pending.stratumPort ?? 3333}`;
@@ -441,12 +489,13 @@ onMounted(async () => {
     });
 
     /* The mode is read from the configuration rather than stored: a pool is
-     * in play when it has a host, so counting them is what the miner itself
-     * does. One configured secondary shows as Dual, three as Quad. */
-    formState.poolCount = 1 + formState.secondary.filter((p) => p.URL !== '').length;
+     * in play when it has a host, so the highest-lettered one with a host is
+     * what the mode has to reach. See modeForSecondaries(). */
+    formState.poolCount = modeForSecondaries(formState.secondary);
     formState.dualEnable = st.dualEnable ?? 0;
     formState.dualRatioA = st.dualRatioA ?? 50;
     formState.dualSliceMs = st.dualSliceMs ?? 2000;
+    clearHiddenWeights();
 
     applyPendingOverFormState();
   }

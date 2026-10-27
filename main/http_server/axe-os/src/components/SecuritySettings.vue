@@ -26,24 +26,36 @@ const handleLogout = () => {
     router.push('/login');
 };
 
+/*
+ * Every string in this component was written in English in the source.
+ *
+ * Which left the whole of it untranslated on a Chinese interface -- and this
+ * is the page that tells an owner their miner has no password, and asks them
+ * to confirm turning authentication off. Those are the worst two strings in
+ * the interface to leave in a language the reader may not have, because
+ * misreading either one leaves a miner open on their network. The rest of
+ * the interface has gone through i18n from the start; this was never wired
+ * up.
+ */
+const sec = (code: string): string => t(`security.${code}`);
+
 const updateSecurity = async () => {
     error.value = '';
 
     if (formState.apiPassword !== formState.confirmPassword) {
-        error.value = 'The two passwords do not match.';
+        error.value = sec('err_mismatch');
         return;
     }
 
     if (formState.apiPassword !== '' && formState.apiPassword.length < 8) {
-        error.value = 'Use at least 8 characters.';
+        error.value = sec('err_short');
         return;
     }
 
+    /* Two keys joined here rather than one carrying a blank line, so no
+     * translation has to reproduce the paragraph break. */
     if (formState.apiPassword === '' &&
-        !window.confirm('Clearing the password disables authentication. ' +
-                        'Every endpoint on this miner, including pool settings ' +
-                        'and firmware update, becomes reachable by any host on ' +
-                        'your network without credentials.\n\nContinue?')) {
+        !window.confirm(`${sec('clear_warn')}\n\n${sec('clear_confirm')}`)) {
         return;
     }
 
@@ -81,10 +93,10 @@ onMounted(() => {
 <template>
   <div class="card security-card">
     <div class="security-header">
-        <div class="security-title">Security Settings</div>
+        <div class="security-title">{{ sec('title') }}</div>
         <a-button type="primary" danger @click="handleLogout" class="logout-btn">
             <template #icon><LogoutOutlined /></template>
-            Logout
+            {{ sec('logout') }}
         </a-button>
     </div>
     
@@ -93,31 +105,28 @@ onMounted(() => {
       type="warning"
       show-icon
       class="auth-warning"
-      message="This miner has no password"
-      description="Every endpoint, including pool settings and firmware update, is reachable by any host on your network without credentials. Set a password below."
+      :message="sec('no_pass_title')"
+      :description="sec('no_pass_body')"
     />
 
     <a-form :model="formState" layout="vertical" @finish="updateSecurity">
-      <a-form-item label="API password">
+      <a-form-item :label="sec('api_password')">
          <a-input-password v-model:value="formState.apiPassword"
-                           placeholder="At least 8 characters; empty disables authentication" />
+                           :placeholder="sec('api_password_ph')" />
       </a-form-item>
 
-      <a-form-item label="Confirm password">
+      <a-form-item :label="sec('confirm')">
          <a-input-password v-model:value="formState.confirmPassword"
-                           placeholder="Repeat the password" />
+                           :placeholder="sec('confirm_ph')" />
       </a-form-item>
 
       <div v-if="error" class="error-message">{{ error }}</div>
 
       <a-button type="primary" html-type="submit" :loading="loading">
-        Save Security Settings
+        {{ sec('save') }}
       </a-button>
 
-      <p class="auth-note">
-        Saving signs you out on every device, since existing sessions were
-        issued against the old password.
-      </p>
+      <p class="auth-note">{{ sec('note') }}</p>
     </a-form>
 
   </div>

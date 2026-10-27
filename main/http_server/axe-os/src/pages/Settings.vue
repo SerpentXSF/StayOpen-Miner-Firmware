@@ -293,6 +293,31 @@ const checkGithubUpdates = async () => {
       axios.get(`https://api.github.com/repos/${UPDATE_REPO_APP}/releases/latest?t=${ts}`)
     ]);
 
+    /*
+     * "Could not ask" is not "up to date", and this used to report it as one.
+     *
+     * Promise.allSettled never rejects, so the catch at the bottom never saw
+     * a network failure. Both requests came back 'rejected', nothing read
+     * their status, foundUpdate stayed false, and the page printed "Your
+     * firmware is up to date." -- the single most misleading answer this
+     * check can give. A miner on an isolated network, a DNS failure, GitHub
+     * rate-limiting the address: every one of them reassured the owner.
+     *
+     * It matters beyond tidiness. 2.0.34 fixes five defects a pool can reach
+     * without credentials, and the owners who most need to find that out are
+     * the ones whose miner cannot reach GitHub reliably.
+     *
+     * Not knowing is its own answer and now says so.
+     */
+    const reached = [webRes, fwRes].filter((r) => r.status === 'fulfilled').length;
+    if (reached === 0) {
+      console.error('Github check could not reach the API:',
+        (webRes as PromiseRejectedResult).reason,
+        (fwRes as PromiseRejectedResult).reason);
+      checkOtaStatus.value = sel('remote_ota_unreachable');
+      return;
+    }
+
     let foundUpdate = false;
 
     if (webRes.status === 'fulfilled' && webRes.value.data) {
@@ -383,12 +408,21 @@ const checkGithubUpdates = async () => {
 
     if (foundUpdate) {
       checkOtaStatus.value = ''; // Clear to show buttons
+    } else if (reached < 2) {
+      /* One half answered and the other did not, so "nothing found" covers
+       * only what was asked. Both halves read the same repository today, so
+       * this is unlikely rather than impossible -- and reporting it as a
+       * clean bill of health would be the same mistake as above, smaller. */
+      checkOtaStatus.value = sel('remote_ota_partial');
     } else {
       checkOtaStatus.value = sel('remote_ota_latest');
     }
   } catch (error) {
+    /* Translated, like every other string on this page. This one was written
+     * in English in the source, so a Chinese interface printed an English
+     * sentence at the one moment the owner needs to understand it. */
     console.error("Github Check Error:", error);
-    checkOtaStatus.value = "Network error checking Github repository.";
+    checkOtaStatus.value = sel('remote_ota_unreachable');
   } finally {
     otaChecking.value = false;
   }

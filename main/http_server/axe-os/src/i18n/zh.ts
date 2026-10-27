@@ -91,6 +91,9 @@ const lang = {
             since_system_root: '自系统启动以来',
             power_fault: '不可用 - 电源故障',
             wifi_status: '无线状态',
+            ethernet_status: '以太网状态',
+            eth_on: '开启',
+            eth_off: '关闭',
             w_excellent: '极好',
             w_normal: '正常',
             w_bad: '稍差',
@@ -244,7 +247,7 @@ const lang = {
         voltage: '核心电压',
         fan_speed: '风扇转速',
         danger_oh: '警告：可能导致过热',
-        simulator: '模拟模式',
+        fan_full: '风扇已达最高转速：温度上升时无法再提高，噪音也是最大的。',
         auto_fan_ctrl: '自动风扇控制',
         flip_screen: '屏幕翻转',
         flip_screen_tip: '将LCD屏幕旋转180度',
@@ -286,6 +289,7 @@ const lang = {
         led_off: '灭',
         led_on: '亮',
         led_switch_hint: '切换Minner上LED灯的开关',
+        msg_switch_led_success: 'LED 状态已更改。',
         msg_switch_led_faied: 'LED 操作失败',
         ntp_server: "NTP 服务器",
         ntp_server_backup: "备用 NTP 服务器",
@@ -300,6 +304,8 @@ const lang = {
         remote_ota_current: "当前版本",
         remote_ota_model: "设备机型",
         remote_ota_latest: "当前已是最新版本。",
+        remote_ota_unreachable: "无法连接 GitHub，因此无法确定是否存在更新。这并不表示当前固件已是最新版本——请检查网络后重试。",
+        remote_ota_partial: "本次检查有一部分未能连接 GitHub，因此“未发现更新”只覆盖了成功响应的那一半。请重试。",
         remote_ota_new_web: "发现 Web 新版本",
         remote_ota_new_fw: "发现 Firmware 新版本",
         remote_ota_download_web: "一键升级 Web",
@@ -334,6 +340,22 @@ const lang = {
         ws_scroll_start: "开始滚动",
         ws_clear_filter: "清除过滤器",
         ws_filter_placeholder: "筛选日志..."
+    },
+    security: {
+        title: '安全设置',
+        logout: '退出登录',
+        no_pass_title: '此矿机未设置密码',
+        no_pass_body: '网络中的任何主机都可以在无需凭据的情况下访问全部接口，包括矿池设置和固件升级。请在下方设置密码。',
+        api_password: 'API 密码',
+        api_password_ph: '至少 8 个字符；留空将禁用身份验证',
+        confirm: '确认密码',
+        confirm_ph: '再次输入密码',
+        save: '保存安全设置',
+        note: '保存后将在所有设备上退出登录，因为现有会话是基于旧密码签发的。',
+        err_mismatch: '两次输入的密码不一致。',
+        err_short: '请至少输入 8 个字符。',
+        clear_warn: '清除密码将禁用身份验证。此矿机上的全部接口，包括矿池设置和固件升级，都将可被网络中的任何主机在无需凭据的情况下访问。',
+        clear_confirm: '是否继续？'
     }
 };
 
