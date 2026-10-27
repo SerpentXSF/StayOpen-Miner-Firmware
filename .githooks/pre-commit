@@ -63,18 +63,35 @@ for path in $staged; do
     # conventional placeholder every pool ignores. Flagging it was a false
     # positive on the shipped templates, and a hook that cries wolf just
     # teaches people to reach for --no-verify.
+    #
+    # Two things this list used to get wrong, both of which made it look
+    # wider than it was:
+    #
+    #   wifissid was absent. The SSID names the owner's network and is the
+    #   half of the WiFi pair that identifies them; make_release.py has
+    #   always refused it, and this hook let it through.
+    #
+    #   poolBPass is the API spelling. A pool's settings key is "pool" plus
+    #   its letter plus a suffix, lowercase in NVS -- "poolbpass" -- and a
+    #   .cvs is an NVS image, so it only ever holds the lowercase form (see
+    #   main/pool_fields.h). The one entry that appeared to cover a secondary
+    #   pool's password therefore matched nothing, for every pool, since quad
+    #   pool landed; and it named B only, so C and D were never in it even by
+    #   intention. Matched by pattern now, so another pool letter is covered
+    #   the day it exists.
     hits=$(git show ":$path" 2>/dev/null |
-           grep -nE '^(apipassword|wifipass|influx_token|stratumpass|fbstratumpass|poolBPass),[^,]*,[^,]*,.+' |
-           grep -vE '^[0-9]+:(stratumpass|fbstratumpass|poolBPass),[^,]*,[^,]*,x$' ||
+           grep -nE '^(apipassword|wifipass|wifissid|influx_token|(fb)?stratumpass|pool[b-d](fb)?pass),[^,]*,[^,]*,.+' |
+           grep -vE '^[0-9]+:((fb)?stratumpass|pool[b-d](fb)?pass),[^,]*,[^,]*,x$' ||
            true)
     if [ -n "$hits" ]; then
         note "$path -- has a filled-in credential:"
         echo "$hits" | sed 's/^/      /' | cut -c1-60 >&2
     fi
 
-    # A payout address that is not the placeholder.
+    # A payout address that is not the placeholder. Every pool's worker
+    # string, primary and failover, for the same reason as above.
     addr=$(git show ":$path" 2>/dev/null |
-           grep -nE '^(stratumuser|fbstratumuser|poolBUser),' |
+           grep -nE '^((fb)?stratumuser|pool[b-d](fb)?user),' |
            grep -vi 'REPLACE-WITH-YOUR' || true)
     if [ -n "$addr" ]; then
         note "$path -- has a real payout address"

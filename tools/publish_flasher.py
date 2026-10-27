@@ -30,6 +30,7 @@ The branch is built with git plumbing rather than by checking anything out, so
 this never touches the working tree, the index, or the current branch.
 """
 import os
+import re
 import subprocess
 import json
 import sys
@@ -105,7 +106,73 @@ def project_version():
     sys.exit("no CONFIG_APP_PROJECT_VER in sdkconfig")
 
 
-def check_manifest(path, board, image):
+def nvs_extent():
+    """(offset, size) of the nvs partition, from partitions.csv.
+
+    Read rather than hardcoded. The settings-preserving check below used two
+    literals, so moving nvs in the partition table would have left the guard
+    watching an address nothing writes any more -- passing, and silently
+    protecting nothing.
+    """
+    path = os.path.join(ROOT, "partitions.csv")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                parts = [p.strip() for p in line.split(",")]
+                if len(parts) >= 5 and parts[0] == "nvs":
+                    return int(parts[3], 0), int(parts[4], 0)
+    except (OSError, ValueError) as exc:
+        sys.exit("cannot read nvs's offset from partitions.csv (%s). That is "
+                 "what the settings-preserving check compares against, so "
+                 "this will not publish without it." % exc)
+    sys.exit("no nvs row in partitions.csv -- refusing to publish an update "
+             "manifest whose one safety check cannot be made")
+
+
+def check_page_boards(boards):
+    """The page must offer exactly the boards this publish carries.
+
+    index.html hardcodes a button per board and fetches
+    manifest-<board>.json for whichever is selected. Those two lists had
+    nothing comparing them, so `ship.py bc01 --push` published a branch whose
+    page still showed a BC04 button -- and pressing it fetched a manifest
+    that was not in the tree. esp-web-tools reports that as a failed install
+    rather than a missing file, so a BC04 owner would read it as the firmware
+    refusing their board.
+
+    The other direction matters too: a board published with no button on the
+    page is simply unreachable, and the release notes would say otherwise.
+    """
+    index = os.path.join(SRC, "index.html")
+    try:
+        with open(index, encoding="utf-8") as fh:
+            html = fh.read()
+    except OSError as exc:
+        sys.exit("cannot read %s: %s" % (index, exc))
+
+    offered = set(re.findall(r'data-board="([^"]+)"', html))
+    if not offered:
+        sys.exit("%s has no data-board buttons -- this check cannot tell what "
+                 "the page offers, so it will not publish" % index)
+
+    carried = set(boards)
+    page_only = sorted(offered - carried)
+    publish_only = sorted(carried - offered)
+    if page_only:
+        sys.exit("the flasher page offers %s, which this publish does not "
+                 "carry. Pressing that button fetches a manifest the branch "
+                 "has no copy of, and esp-web-tools shows it as a failed "
+                 "install rather than a missing file. Publish %s too, or take "
+                 "the button out of docs/flasher/index.html."
+                 % (", ".join(page_only), " and ".join(page_only)))
+    if publish_only:
+        sys.exit("this publish carries %s but the flasher page has no button "
+                 "for it, so nothing on the page can reach it. Add a "
+                 "data-board button to docs/flasher/index.html."
+                 % ", ".join(publish_only))
+
+
+def check_manifest(path, board, image, version):
     """A manifest that disagrees with its image is worse than no manifest.
 
     esp-web-tools fetches whatever parts[].path names. If that is a file this
@@ -130,11 +197,19 @@ def check_manifest(path, board, image):
                  "%r -- re-run tools/make_release.py %s"
                  % (board, named, image, board))
 
+    # Compared for equality, not as a substring of the filename.
+    #
+    # `stated not in image` passed for any version string that happened to be
+    # a substring of the name. "2.0.3" is inside
+    # stay-open-bc01-2.0.33-full.bin, and so is "2.0.33" inside a 2.0.331
+    # image -- so a manifest left behind from an earlier release could sail
+    # through while telling the owner the wrong version. Exact match against
+    # the version actually being published has no such gap.
     stated = m.get("version")
-    if stated and stated not in image:
-        sys.exit("dist/manifest-%s.json says version %r, which is not the "
-                 "version in %r -- re-run tools/make_release.py %s"
-                 % (board, stated, image, board))
+    if stated and stated != version:
+        sys.exit("dist/manifest-%s.json says version %r but this publish is "
+                 "%r (%s) -- re-run tools/make_release.py %s"
+                 % (board, stated, version, image, board))
 
     # Install writes a whole-flash image from offset 0, so it MUST erase, and
     # in esp-web-tools that is new_install_prompt_erase == False: the flag
@@ -175,6 +250,8 @@ def main():
     if not os.path.isdir(SRC):
         sys.exit("no %s to publish" % SRC)
 
+    check_page_boards(boards)
+
     # Images are taken from dist/, which make_release.py fills, so the branch
     # always carries artifacts that were actually built for a release rather
     # than whatever happens to be lying in docs/.
@@ -199,7 +276,7 @@ def main():
         if not os.path.exists(manifest):
             sys.exit("dist/manifest-%s.json is missing -- run "
                      "tools/make_release.py %s first" % (board, board))
-        check_manifest(manifest, board, image)
+        check_manifest(manifest, board, image, version)
 
         # The update manifest and its parts, which let an owner update without
         # losing their settings. Optional, so a release built before this
@@ -222,10 +299,13 @@ def main():
                 sys.exit("manifest-%s-update.json names files dist/ does not "
                          "have: %s -- re-run tools/make_release.py %s"
                          % (board, ", ".join(missing), board))
-            if um.get("version") and um["version"] not in image:
-                sys.exit("manifest-%s-update.json says version %r, which is "
-                         "not the version being published (%r)"
-                         % (board, um["version"], image))
+            # Exact, for the reason given in check_manifest(): a substring
+            # test accepts any version that happens to appear in the
+            # filename.
+            if um.get("version") and um["version"] != version:
+                sys.exit("manifest-%s-update.json says version %r but this "
+                         "publish is %r (%r)"
+                         % (board, um["version"], version, image))
 
             # True means "ask before erasing", and the dialog's checkbox
             # starts unchecked -- so an owner who just presses Install keeps
@@ -238,17 +318,30 @@ def main():
                          % (board, um.get("new_install_prompt_erase")))
 
             # The invariant that actually protects settings: nothing written
-            # may reach nvs at 0xE000. Checked by extent, not just by offset,
-            # because a part starting below it can still run into it.
-            NVS_OFFSET = 0xE000
+            # may touch any part of nvs.
+            #
+            # This asked `off <= NVS_OFFSET < off + size`, and its own comment
+            # claimed that was an extent check. It is not -- it only finds a
+            # part that starts at or before nvs and runs into it. A part
+            # starting anywhere INSIDE nvs passed:
+            #
+            #     part at 0x10000, 0x1000 bytes   -> 0x10000 <= 0xE000 false
+            #
+            # which is 4 KB written in the middle of the owner's settings, by
+            # the manifest whose label promises to keep them. Either end of
+            # nvs needs the same answer, so the test is whether the two
+            # ranges intersect at all.
+            NVS_OFFSET, NVS_SIZE = nvs_extent()
+            NVS_END = NVS_OFFSET + NVS_SIZE
             for p in um["builds"][0]["parts"]:
                 off = p.get("offset", 0)
                 size = os.path.getsize(os.path.join(DIST, p["path"]))
-                if off <= NVS_OFFSET < off + size:
+                if off < NVS_END and NVS_OFFSET < off + size:
                     sys.exit("manifest-%s-update.json writes %s at 0x%X for "
-                             "%d bytes, which covers nvs at 0x%X -- that is "
-                             "the owner's settings."
-                             % (board, p["path"], off, size, NVS_OFFSET))
+                             "%d bytes (through 0x%X), which overlaps nvs at "
+                             "0x%X-0x%X -- that is the owner's settings."
+                             % (board, p["path"], off, size, off + size,
+                                NVS_OFFSET, NVS_END))
         else:
             update_manifest = None
 

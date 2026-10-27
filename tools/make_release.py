@@ -166,10 +166,21 @@ def build_config(board):
     # Fields are "key,type,encoding,value". "x" is the conventional stratum
     # password every pool ignores and is what the shipped templates carry, so
     # flagging it would only teach people to ignore this.
-    SECRET_FIELDS = ("apipassword", "wifipass", "wifissid", "influx_token",
-                     "stratumpass", "fbstratumpass", "poolBPass")
-    STRATUM_PASS = ("stratumpass", "fbstratumpass", "poolBPass")
-    USER_FIELDS = ("stratumuser", "fbstratumuser", "poolBUser")
+    #
+    # Matched by pattern because of how pool B, C and D's keys are spelled. A
+    # pool's settings key is "pool" + its letter + a suffix, and the letter is
+    # LOWERCASE in NVS -- "poolbpass" -- while the API uses "poolBPass"
+    # (main/pool_fields.h says so). A .cvs is an NVS image, so it only ever
+    # holds the lowercase form. This list named the API spelling, so the one
+    # entry that looked like it covered a secondary pool's password matched
+    # nothing at all, for every pool, from the day quad pool landed. It also
+    # named pool B only, so C and D were never in it even by intention.
+    #
+    # Two patterns rather than one list: a pass field may legitimately be "x",
+    # and nothing else here may be anything.
+    PASS_RE = re.compile(r"^((?:fb)?stratumpass|pool[b-d](?:fb)?pass)$")
+    SECRET_RE = re.compile(r"^(apipassword|wifipass|wifissid|influx_token)$")
+    USER_RE = re.compile(r"^((?:fb)?stratumuser|pool[b-d](?:fb)?user)$")
 
     for lineno, line in enumerate(text.splitlines(), 1):
         parts = line.split(",")
@@ -177,13 +188,13 @@ def build_config(board):
             continue
         key = parts[0].strip()
         value = ",".join(parts[3:]).strip()
-        if key in SECRET_FIELDS and value:
-            if key in STRATUM_PASS and value == "x":
+        if value and (SECRET_RE.match(key) or PASS_RE.match(key)):
+            if PASS_RE.match(key) and value == "x":
                 continue
             sys.exit("%s line %d has a filled-in %s. That would be published "
                      "inside config-dist.bin and -full.bin. Clear it and run "
                      "this again." % (os.path.basename(src), lineno, key))
-        if key in USER_FIELDS and value and "REPLACE-WITH-YOUR" not in value:
+        if USER_RE.match(key) and value and "REPLACE-WITH-YOUR" not in value:
             sys.exit("%s line %d sets %s to a real worker string. That would "
                      "be published inside -full.bin. Restore the placeholder "
                      "and run this again."
@@ -215,13 +226,36 @@ def source_offer(ver):
     """
     shutil.copy(os.path.join(ROOT, "LICENSE"), os.path.join(DIST, "LICENSE"))
 
+    # Naming the commit is this file's entire job, so it does not get written
+    # without one.
+    #
+    # The fallback here was commit "unknown". It produced a SOURCE.txt that
+    # read, in full, "commit unknown" followed by `git checkout unknown` --
+    # published beside the binaries, attached to the release and served from
+    # gh-pages, satisfying nothing it exists to satisfy and saying so only to
+    # someone who read it. A recipient would be left with "the latest main",
+    # which stops being the right commit as soon as anything else lands.
+    #
+    # Failing instead is cheap: it happens before anything is published, and
+    # every path that publishes these files already needs a git checkout for
+    # ship.py's own source checks.
     try:
         commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
+            ["git", "rev-parse", "HEAD"], cwd=ROOT,
+            stderr=subprocess.PIPE).decode().strip()
         dirty = bool(subprocess.check_output(
-            ["git", "status", "--porcelain"], cwd=ROOT).decode().strip())
-    except Exception:
-        commit, dirty = "unknown", False
+            ["git", "status", "--porcelain"], cwd=ROOT,
+            stderr=subprocess.PIPE).decode().strip())
+    except Exception as exc:
+        detail = getattr(exc, "stderr", b"") or b""
+        sys.exit("cannot read the commit from git (%s%s), so SOURCE.txt would "
+                 "say \"commit unknown\".\n"
+                 "That file's only job is naming the source these binaries "
+                 "were built from -- on a GPL-3.0 project, publishing them "
+                 "without it is a compliance problem. Build in a git "
+                 "checkout."
+                 % (exc, (": " + detail.decode(errors="replace").strip())
+                    if detail else ""))
 
     text = """Stay Open miner firmware %(ver)s
 

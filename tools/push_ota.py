@@ -97,13 +97,47 @@ def push(host, token, path, image, kind):
         print("HTTP %s: %s" % (exc.code,
                                exc.read()[:300].decode("utf-8", "replace").strip()))
         return 1
+    except TimeoutError as exc:
+        # A timeout is not a reboot, and it used to be reported as one.
+        #
+        # Everything that was not an HTTPError fell into one handler that
+        # printed "this is normal, the miner is rebooting" and returned 0. So
+        # an upload that ran the full UPLOAD_TIMEOUT_S without finishing --
+        # a miner that stopped reading, a WiFi link that went away mid-image
+        # -- exited successfully with a reassuring message. In a script that
+        # is worse than a crash: the next step runs believing the firmware
+        # changed, and `push_ota.py app && push_ota.py www` would push the web
+        # UI of a version that never installed.
+        print("TIMED OUT after %.0fs: %r" % (time.time() - started, exc))
+        print("The miner stopped accepting the upload before it finished, so "
+              "nothing was installed. It may be partway through writing an "
+              "OTA slot; check the version it reports before pushing again.")
+        return 1
+    except urllib.error.URLError as exc:
+        # A timeout during the connect, rather than during the transfer,
+        # arrives wrapped in a URLError instead of raised directly.
+        if isinstance(exc.reason, TimeoutError):
+            print("TIMED OUT after %.0fs: %r" % (time.time() - started, exc))
+            print("The miner did not accept the connection, so nothing was "
+                  "uploaded.")
+            return 1
+        print("connection ended: %r -- this is normal if the whole image went "
+              "out, because the miner restarts as soon as it has it" % (exc,))
     except Exception as exc:
         # The miner restarts the moment it has the whole image, so the
         # connection dropping at the end is the expected outcome and not a
         # failure. Saying so here saves the next person a diagnosis.
-        print("connection ended: %r -- this is normal, the miner is rebooting" % (exc,))
+        print("connection ended: %r -- this is normal if the whole image went "
+              "out, because the miner restarts as soon as it has it" % (exc,))
 
-    print("took %.0fs" % (time.time() - started))
+    elapsed = time.time() - started
+    print("took %.0fs for %d bytes" % (elapsed, len(image)))
+    # Said plainly rather than implied: this script cannot tell a completed
+    # upload from one that was cut short, because the drop looks the same
+    # either way from this end. The miner's own version is the answer.
+    print("Confirm the miner's reported version before treating this as done; "
+          "a dropped connection looks identical from here whether the image "
+          "arrived or not.")
     return 0
 
 
