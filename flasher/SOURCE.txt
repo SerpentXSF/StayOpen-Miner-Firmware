@@ -1,0 +1,38 @@
+Stay Open miner firmware 2.0.34
+
+Corresponding source
+--------------------
+These binaries were built from:
+
+    https://github.com/SerpentXSF/StayOpen-Miner-Firmware
+    commit 03d4af4dff2de08467e7eb0dca75d5b212e4e7f4
+
+    git clone https://github.com/SerpentXSF/StayOpen-Miner-Firmware.git
+    git checkout 03d4af4dff2de08467e7eb0dca75d5b212e4e7f4
+    python tools/build_board.py <board>
+    python tools/make_release.py <board>
+
+where <board> is the one named in the filename of the image you have -- bc01
+or bc04. They are not interchangeable: the boards do not share an ASIC pinout,
+and an image flashed to the wrong one boots, serves its interface, detects the
+chip and never returns a share.
+
+Licence
+-------
+GNU General Public License, version 3. The full text is in the LICENSE file
+published alongside these binaries.
+
+Not "version 3 or later". This file said that until 2026-10-17 and it was
+wrong for the same reason the README was: it claimed a grant the upstream
+never made. ESP-Miner / AxeOS is GPL-3.0, NOTICE.md records every upstream as
+GPL-3.0, and LICENSE here is the plain GPL-3.0 text. A fork cannot widen the
+licence of the code it inherited.
+
+This firmware is a fork of ESP-Miner / AxeOS, which is GPL-3.0, by way of the
+Baichuan/Hammer BC-series vendor firmware. Attribution and the history of what
+came from where are in NOTICE.md and docs/PROVENANCE.md in the source tree.
+
+You are entitled to the complete source for these binaries, to modify it and
+to redistribute it under the same licence. Everything needed to rebuild them
+is in the repository above at the commit named; nothing is withheld and no
+part of the build depends on anything unpublished.
