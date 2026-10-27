@@ -79,6 +79,225 @@ than blanket:
 | The dashboard shows every configured pool, and the split bar reflects the real weights | **Confirmed on the rendered page, 2026-10-17**, on a BC04 running the release: four pool blocks each with their own CONNECTED badge, a four-segment split bar reading A 25% / B 25% / C 25% / D 25%, and per-pool share counts (A 27420/22, B 4234/0, C 4195/0, D 3583/0). Checked by the owner from their own browser; the page needs a sign-in on a non-local host, so it is not something I can reach |
 | Pool C and D panels are named for their own pool, not "Pool B" | **Confirmed on the rendered page, 2026-10-25**, on both boards, by the owner from their own browser. On a BC04 in Quad mode every secondary carries its own failover heading -- "Pool B failover", "Pool C failover", "Pool D failover" -- each inside its own pool's card, and on a BC01 the Dual Pool tab heads its single failover block "Pool B failover". This was the screen the mislabelling was on, and it is gone from it. It had been open since 2.0.31 because the dashboard screenshots that closed the row above are a different page |
 
+## The interface and the release tooling each reported something untrue (fixed in the tree, in no release)
+
+**Status: fixed on `main`, and in no published release.** If you are running
+2.0.34 — the newest release — you have every one of these. They were found by
+reading, on 2026-10-27, in the same pass that produced the 2.0.34 Stratum
+fixes; none of them is a crash and none needed a board, which is why they were
+not held back for one.
+
+The common shape is a report that was wrong in the reassuring direction. A
+check that could not run said everything was fine; a guard named for a thing
+it did not match said it was watching it.
+
+### "Your firmware is up to date" when it could not reach GitHub
+
+The worst of them, because it is the one an owner acts on. `Settings.vue`
+asked GitHub for the latest release with `Promise.allSettled`, which **never
+rejects** — a failed request comes back as a settled result with
+`status: 'rejected'`. Nothing read that status. Both requests failing left
+`foundUpdate` false, which fell through to the same branch as "asked and found
+nothing" and printed *Your firmware is up to date.*
+
+So a miner on an isolated network, behind a DNS failure, or rate-limited by
+GitHub told its owner they were current. The `catch` that was supposed to
+handle this could not fire, because `allSettled` had nothing to throw.
+
+It matters most at exactly the wrong moment: 2.0.34 fixes five defects a pool
+can reach without credentials, and the owners least likely to hear about it
+are the ones whose miner cannot reach GitHub. The status now distinguishes
+three answers — an update exists, there is none, and **it could not ask** —
+and the third says in so many words that it is not a confirmation. The
+rejection reasons go to the console so there is something to diagnose.
+
+One narrower case with it: the two requests are independent, so one can answer
+while the other does not. That now reports a partial result rather than a
+clean bill of health. Both halves read the same repository today, so this is
+unlikely rather than impossible.
+
+### The Chinese interface printed key paths where text belonged
+
+`createI18n` was configured without `fallbackLocale`, and vue-i18n renders a
+missing key as the key path itself. `zh.ts` was four keys short of `en.ts`,
+three of them on the dashboard's Ethernet pill — so **a BC04 in Chinese
+displayed the literal string `dashboard.card.ethernet_status`** next to
+`dashboard.card.eth_on` where the wired-network status goes.
+
+Both halves are fixed: the four keys are filled in, and `fallbackLocale: "en"`
+is set. The keys matter now; the fallback matters next time, because the way
+this happens is that `en.ts` gains a key and `zh.ts` is not touched in the same
+change. With a fallback the worst case is an English label, which is readable.
+Without one it is a developer's key path, which is not.
+
+### The security page was English only, including the part that matters
+
+`SecuritySettings.vue` had every string written in English in the source: the
+title, the fields, the save button, and the two that carry weight — the alert
+that says **this miner has no password**, and the `window.confirm` that asks
+you to agree that clearing it leaves every endpoint reachable without
+credentials.
+
+Those are the two worst strings in the interface to leave untranslated,
+because misreading either one leaves a miner open on its owner's network. The
+rest of the interface has gone through i18n since the beginning; this
+component was simply never wired up. It now reads from a `security` block
+present in both locales.
+
+### A configured pool could be hidden by the mode selector
+
+The Pool settings page derived its mode from **how many** secondary hosts were
+filled: `1 + secondary.filter(p => p.URL !== '').length`. The miner's rule is
+different — it connects every pool that has a host and does not care about the
+gaps — so a configuration with C filled and B empty is one it runs happily.
+That counted as 2, which is Dual, which shows one secondary panel: **an empty
+B on screen, C hidden, and C still mining.** Pressing Save then wrote what the
+page showed.
+
+Four of seven configurations were wrong. B+C counted as 3, which matches none
+of the three radio buttons, so the selector showed nothing selected at all.
+
+The mode is now the one that reaches the highest-lettered configured pool.
+Three secondaries have no mode of their own, so anything past B selects Quad
+and the unused letters appear empty rather than being hidden. Empty and
+visible is honest; configured and hidden is not.
+
+### A Share weight kept dividing the work after its field was hidden
+
+The Weight input is hidden below two secondaries, on the reasonable ground
+that with one secondary the A/B slider says the same thing. The value
+survived: set B to 25 in Quad, drop to Dual, and `build_pool_weights()` in
+`create_jobs_task.c` still normalised pool A's percentage against that 25. A
+slider reading **A 50%** ran A at 67% and B at 33%, from a number the owner
+could no longer see or reach.
+
+The page now zeroes a weight it will not show — on a mode change and on load,
+so what is saved is what is displayed. That also makes the Dual slider exact,
+because with no stated weight the firmware hands the secondary the whole
+remainder.
+
+This is **not** the pool-split defect recorded further down, and does not fix
+it: the normalisation of pool A's own percentage against the secondary weights
+is still there in the firmware, and still wants a soak of its own. What
+changed is that the page has stopped feeding it an input nobody can see.
+
+### "Simulator" on a fan at 100%
+
+The fan slider showed a warning labelled *Simulator* at full speed. It
+describes nothing: the firmware has no mode of that name, and nothing in it
+treats 100% as a simulation. It is vendor cruft that survived the fork. The
+warning worth giving at that setting is that there is no duty left above it,
+so that is what it says now.
+
+### What the release tooling was not checking
+
+Six, all in `tools/`, and each one closes a way to publish something wrong.
+
+**`--push` ran with no guards at all.** Every source check in `ship.py` — a
+clean tree, commits pushed, HEAD on a remote branch — was gated on `--github`.
+But `publish_flasher.py` force-pushes `gh-pages`, and that branch serves
+`-full.bin` to anyone with the URL, with no release and no checkout in
+between. So `ship.py bc01 bc04 --push` from a dirty tree published firmware
+whose own `SOURCE.txt`, served from the same directory, admitted it was not
+built from any public commit. On a GPL-3.0 project that is the compliance
+problem the checks exist to prevent; the gate just named the wrong flag. The
+source checks now run for either flag; the tag and asset-list checks stay on
+`--github`, where they belong.
+
+**The flasher was published before the release existed.** An earlier pass
+moved the flasher push after the checks, which stopped a *refusal* from
+leaving `gh-pages` ahead of the releases page. It did nothing about
+`gh release create` failing on its own — a notes file gh rejects, an upload
+that times out, a token without the scope — because by then the flasher was
+already force-pushed. The page would serve a version the releases page had
+never heard of. The release is now cut first, which makes that failure the
+harmless way round.
+
+**`git fetch` had its return code ignored**, and the point of the call is to
+compare against the real remote rather than a stale tracking ref. A fetch that
+failed — no network, an expired credential — left every comparison below it
+passing on whatever was last fetched. The guards then reported success for the
+one thing they exist to rule out.
+
+**The flasher's nvs check was not the extent check its comment claimed.** It
+asked `off <= NVS_OFFSET < off + size`, which finds only a part starting at or
+before nvs and running into it. A part starting anywhere *inside* nvs passed:
+a part at `0x10000` for `0x1000` bytes is 4 KB written into the middle of the
+owner's settings, by the manifest whose label promises to keep them. It is an
+interval intersection now, and nvs's extent is read from `partitions.csv`
+rather than hardcoded, so moving the partition cannot leave the guard watching
+an address nothing writes.
+
+Two smaller ones in the same file: the manifest's stated version was compared
+as a *substring* of the image filename, so `2.0.3` passed against a 2.0.33
+image; and nothing compared the boards being published against the buttons
+hardcoded in `docs/flasher/index.html`, so publishing one board left a page
+offering the other, whose manifest the branch had no copy of.
+
+**`SOURCE.txt` could be published saying `commit unknown`.** `make_release.py`
+caught any git failure and substituted the literal string, producing a file
+that read `commit unknown` followed by `git checkout unknown` — attached to
+the release, served from `gh-pages`, and satisfying nothing it exists to
+satisfy. Naming the commit is that file's entire job, so it now refuses to be
+written without one.
+
+**A timed-out OTA push reported success.** `push_ota.py` funnelled everything
+that was not an `HTTPError` into one handler that printed *this is normal, the
+miner is rebooting* and returned 0 — including a timeout after the full
+300-second window. In a script that is worse than a crash: the next step runs
+believing the firmware changed, and `push_ota.py app && push_ota.py www` would
+push the web UI of a version that never installed. A timeout returns 1 now,
+and the success path says plainly that it cannot tell a completed upload from
+one that was cut short, because from that end they look the same. The miner's
+reported version is the answer.
+
+**The credential guards never matched pool B, C or D.** Both
+`.githooks/pre-commit` and `make_release.py` listed `poolBPass` — the **API**
+spelling. A pool's settings key is `pool` + its letter + a suffix, and in NVS
+the letter is lowercase: `poolbpass` (`main/pool_fields.h` says so). A `.cvs`
+is an NVS image, so it only ever holds the lowercase form. The one entry that
+looked like it covered a secondary pool's password therefore matched nothing,
+for every pool, since quad pool landed — and it named B only, so C and D were
+never in it even by intention. The hook was also missing `wifissid`
+altogether, which `make_release.py` has always refused. Both are patterns now,
+covering `pool[b-d]` primary and failover, so another pool letter is covered
+the day it exists.
+
+### How far this is checked
+
+**Built, type-checked, and not run on hardware.** `vue-tsc` passes and both
+boards build clean. The web interface changes were not opened in a browser,
+and the boards are deliberately being held on 2.0.33 for the flasher's Update
+mode test, so nothing was flashed.
+
+The tooling changes have more behind them than the interface ones, because
+they could be exercised without a board:
+
+- `publish_flasher.py` was dry-run against the real published 2.0.34
+  artifacts. Every new guard passed on real files: the board/page check, the
+  nvs intersection against all five update parts, exact version comparison on
+  both manifests, and `LICENSE`/`SOURCE.txt` presence. `refs/heads/gh-pages`
+  was left where it was.
+- The nvs arithmetic was checked against nine offset/size pairs, including the
+  real five, the case the old guard was blind to, and the boundary at
+  `0x14000`. The new test is right on all nine; the old one on eight.
+- The exact-version comparison was given two filenames the substring test
+  accepted and now refuses.
+- The board/page check was fired in both directions — a board the page offers
+  and the publish does not, and the reverse.
+- `push_ota.py` was tested against four exception shapes: a read timeout and a
+  connect timeout return 1, a reset and a remote disconnect still return 0.
+- The credential patterns were run over a file holding five real-looking
+  credentials and a real address, and over both shipped `.cvs.example`
+  templates. Five of five caught, the `x` placeholders exempted, and no false
+  positive on either template.
+- The mode mapping was checked over seven pool configurations. The new rule is
+  right on all seven; the old one on three.
+
+What is **not** checked: no release was cut through the reordered `ship.py`
+path, so the ordering change is reasoned from the code rather than observed.
+Nothing has yet published with `--push` under the widened guards.
+
 ## Pool A kept building from a dead session after it dropped (fixed in 2.0.31)
 
 **Status: fixed and published in 2.0.31.** `create_jobs_task` releases
