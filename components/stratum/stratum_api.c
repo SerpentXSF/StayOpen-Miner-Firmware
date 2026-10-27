@@ -28,6 +28,33 @@
  * what makes the documented limit the one that actually applies. */
 #define STRATUM_IDLE_LIMIT_MS (10 * 60 * 1000)
 
+/*
+ * Longest line this file will accumulate from a pool.
+ *
+ * Without a cap, a pool that sends bytes and never sends a newline grows the
+ * accumulator forever: the first few kilobytes come out of the internal heap
+ * that already bottoms out at a few hundred bytes free on every boot, and when
+ * realloc finally fails realloc_json_buffer() calls esp_restart(). So "never
+ * send \n" was a remote reboot, repeatable on every reconnect, needing no
+ * credentials on a plaintext stratum+tcp session.
+ *
+ * A real mining.notify with the full merkle branch list runs to roughly 3 KB.
+ * 16 KB leaves several times that and still bounds the damage.
+ */
+#define STRATUM_MAX_LINE (16 * 1024)
+
+/*
+ * Longest job id accepted from a pool.
+ *
+ * mining.submit is built with the pool's own job id in it, into a fixed
+ * BUFFER_SIZE buffer on the caller's stack. Real pools use 8 to 64 characters.
+ * The snprintf bounds below are what actually prevent the overflow; this cap
+ * refuses the job outright so the miner does not accept work it will never be
+ * able to submit, and says so in the log rather than failing later at the
+ * share.
+ */
+#define STRATUM_MAX_JOB_ID 128
+
 /* Stratum itself nests about four deep: the notify params array holding the
  * merkle branch array. Sixteen leaves room for anything a real pool sends and
  * stops a line that would recurse cJSON into the task's stack canary. */
@@ -182,6 +209,24 @@ char * STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport)
             }
 
             idle_ms = 0;
+
+            /*
+             * Capped before growing. Without this, a pool that sends bytes and
+             * never sends a newline grows the accumulator until realloc fails,
+             * at which point realloc_json_buffer() restarts the board -- a
+             * remote reboot, repeatable on every reconnect, from any pool or
+             * anyone on a plaintext path. See STRATUM_MAX_LINE.
+             */
+            if (strlen(json_rpc_buffer) + (size_t) nbytes + 1 > STRATUM_MAX_LINE) {
+                ESP_LOGW(TAG, "pool sent %u bytes with no newline; dropping "
+                              "the connection rather than growing past %d",
+                         (unsigned) (strlen(json_rpc_buffer) + (size_t) nbytes),
+                         STRATUM_MAX_LINE);
+                free(json_rpc_buffer);
+                json_rpc_buffer = NULL;
+                return NULL;
+            }
+
             realloc_json_buffer(nbytes);
             strncat(json_rpc_buffer, recv_buffer, nbytes);
         } while (!strstr(json_rpc_buffer, "\n"));
@@ -376,24 +421,49 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         
         //if the id is STRATUM_ID_SUBSCRIBE parse it
         } else if (parsed_id == STRATUM_ID_SUBSCRIBE) {
-            result = STRATUM_RESULT_SUBSCRIBE;
-
+            /*
+             * Everything is validated before anything is assigned, and a bad
+             * result resets the method instead of jumping past the assignment.
+             *
+             * The two `goto done` here landed AFTER `message->method = result`
+             * further down, so the message kept the PREVIOUS line's method.
+             * Both callers reuse one message struct for every line, so pool A
+             * would act on a stale MINING_NOTIFY and re-enqueue a
+             * mining_notification the work queue had already freed -- a
+             * use-after-free, then a double free when create_jobs released
+             * what it thought was the old one. The secondary pools NULL their
+             * notification pointer after enqueuing, so they got a NULL
+             * dereference instead. Either way the board goes down.
+             *
+             * This needed no malice: a pool refusing mining.subscribe with the
+             * standard {"id":2,"result":null,"error":[20,...]} reaches this
+             * branch with a cJSON null, GetArrayItem answers NULL, and the old
+             * code jumped. A banned address was enough to do it.
+             *
+             * str_at() also covers the separate crash of reading
+             * ->valuestring off a non-string: {"id":2,"result":[1,2,3]} was
+             * strlen(NULL).
+             */
             cJSON * extranonce2_len_json = cJSON_GetArrayItem(result_json, 2);
-            if (extranonce2_len_json == NULL) {
-                ESP_LOGE(TAG, "Unable to parse extranonce2_len: %s", result_json->valuestring);
-                message->response_success = false;
-                goto done;
-            }
-            message->extranonce_2_len = extranonce2_len_json->valueint;
+            const char * p_extranonce = str_at(result_json, 1);
 
-            cJSON * extranonce_json = cJSON_GetArrayItem(result_json, 1);
-            if (extranonce_json == NULL) {
-                ESP_LOGE(TAG, "Unable parse extranonce: %s", result_json->valuestring);
+            if (!cJSON_IsNumber(extranonce2_len_json) || p_extranonce == NULL) {
+                ESP_LOGE(TAG, "ignoring a malformed mining.subscribe result: "
+                              "extranonce missing or not a string, or its "
+                              "length is not a number");
                 message->response_success = false;
-                goto done;
+                message->method = STRATUM_UNKNOWN;
+                cJSON_Delete(json);
+                return;
             }
-            message->extranonce_str = malloc(strlen(extranonce_json->valuestring) + 1);
-            strcpy(message->extranonce_str, extranonce_json->valuestring);
+
+            result = STRATUM_RESULT_SUBSCRIBE;
+            message->extranonce_2_len = extranonce2_len_json->valueint;
+            /* NULLed by STRATUM_V1_free_message, so this is either NULL or
+             * ours; freed rather than overwritten, which leaked a subscribe's
+             * worth on every reconnect. */
+            free(message->extranonce_str);
+            message->extranonce_str = strdup(p_extranonce);
             message->response_success = true;
 
             //print the extranonce_str
@@ -402,8 +472,11 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
 
         //if the id is STRATUM_ID_CONFIGURE parse it
         } else if (parsed_id == STRATUM_ID_CONFIGURE) {
+            /* cJSON_IsString, not just non-NULL: a result of
+             * {"version-rolling.mask": true} has a NULL valuestring, and
+             * strtoul(NULL) panics. */
             cJSON * mask = cJSON_GetObjectItem(result_json, "version-rolling.mask");
-            if (mask != NULL) {
+            if (cJSON_IsString(mask) && mask->valuestring != NULL) {
                 result = STRATUM_RESULT_VERSION_MASK;
                 message->version_mask = strtoul(mask->valuestring, NULL, 16);
                 ESP_LOGI(TAG, "Set version mask: %08lx", message->version_mask);
@@ -456,6 +529,21 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
             !cJSON_IsArray(merkle_branch)) {
             ESP_LOGW(TAG, "ignoring a malformed mining.notify: params missing "
                           "or not strings");
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
+        }
+
+        /*
+         * The guard above checks types and said nothing about length. The job
+         * id is copied into every mining.submit built for this job, so an
+         * over-long one is a job whose shares can never be sent -- refused
+         * here, where it can be said plainly, rather than at each share.
+         */
+        if (strlen(p_job) > STRATUM_MAX_JOB_ID) {
+            ESP_LOGW(TAG, "ignoring a mining.notify: job id is %u characters "
+                          "and the limit is %d",
+                     (unsigned) strlen(p_job), STRATUM_MAX_JOB_ID);
             message->method = STRATUM_UNKNOWN;
             cJSON_Delete(json);
             return;
@@ -536,36 +624,51 @@ void STRATUM_V1_parse(StratumApiV1Message * message, const char * stratum_json)
         message->version_mask = strtoul(p_mask, NULL, 16);
 
     } else if (message->method == MINING_SET_EXTRANONCE) {
+        /*
+         * Validated the same way as the subscribe result above. Three
+         * separate faults lived in this block:
+         *
+         *  - params [1, 2] gave a non-string item whose ->valuestring is
+         *    NULL, read straight into strlen(). A panic on both pool paths.
+         *  - params with one element, or a params that is not an array at
+         *    all, left the method set to MINING_SET_EXTRANONCE with
+         *    extranonce_str still NULL. Pool A's handler calls strdup() on
+         *    it, so that is a panic too; the secondary path happened to
+         *    check.
+         *  - the two cJSON_PrintUnformatted() results in the old error paths
+         *    were never freed, so repeating a malformed message leaked
+         *    internal RAM a few dozen bytes at a time -- out of the pool that
+         *    already runs down to a few hundred bytes on every boot.
+         */
         cJSON * params = cJSON_GetObjectItem(json, "params");
+        cJSON * extranonce2_len_json = cJSON_IsArray(params)
+                                           ? cJSON_GetArrayItem(params, 1)
+                                           : NULL;
+        const char * p_extranonce = str_at(params, 0);
 
-        if(cJSON_IsArray(params)){
-            cJSON * extranonce2_len_json = cJSON_GetArrayItem(params, 1);
-            if (extranonce2_len_json == NULL) {
-                ESP_LOGE(TAG, "Unable to parse extranonce2_len: %s", cJSON_PrintUnformatted(params));
-                message->response_success = false;
-                goto done;
-            }
-            message->extranonce_2_len = extranonce2_len_json->valueint;
-            cJSON * extranonce_json = cJSON_GetArrayItem(params, 0);
-            if (extranonce_json == NULL) {
-                ESP_LOGE(TAG, "Unable parse extranonce: %s", cJSON_PrintUnformatted(params));
-                message->response_success = false;
-                goto done;
-            }
-
-            if(NULL != message->extranonce_str){
-                free(message->extranonce_str);
-            }
-            message->extranonce_str = malloc(strlen(extranonce_json->valuestring) + 1);
-            strcpy(message->extranonce_str, extranonce_json->valuestring);
-            message->response_success = true;
-            //print the extranonce_str
-            ESP_LOGI(TAG, "extranonce_str: %s", message->extranonce_str);
-            ESP_LOGI(TAG, "extranonce_2_len: %d", message->extranonce_2_len);
+        if (!cJSON_IsNumber(extranonce2_len_json) || p_extranonce == NULL) {
+            ESP_LOGW(TAG, "ignoring a malformed mining.set_extranonce: "
+                          "extranonce missing or not a string, or its length "
+                          "is not a number");
+            message->response_success = false;
+            message->method = STRATUM_UNKNOWN;
+            cJSON_Delete(json);
+            return;
         }
+
+        message->extranonce_2_len = extranonce2_len_json->valueint;
+        free(message->extranonce_str);
+        message->extranonce_str = strdup(p_extranonce);
+        message->response_success = true;
+        //print the extranonce_str
+        ESP_LOGI(TAG, "extranonce_str: %s", message->extranonce_str);
+        ESP_LOGI(TAG, "extranonce_2_len: %d", message->extranonce_2_len);
     }
 
-    done:
+    /* The `done:` label that used to be here is gone with the last `goto`
+     * that reached it. Every one of them skipped the method assignment above,
+     * which is what made a malformed line act on the previous line's method;
+     * each now resets the method and returns on the spot instead. */
     cJSON_Delete(json);
 }
 
@@ -656,8 +759,17 @@ int STRATUM_V1_extranonce_subscribe(esp_transport_handle_t transport, int send_u
 int STRATUM_V1_authenticate(esp_transport_handle_t transport, int send_uid, const char * username, const char * pass)
 {
     char authorize_msg[BUFFER_SIZE];
-    sprintf(authorize_msg, "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
+    /* Owner-supplied rather than pool-supplied, so this is a long worker name
+     * corrupting the stack rather than a remote party doing it; bounded all
+     * the same, since the cost is one check. */
+    int n = snprintf(authorize_msg, sizeof authorize_msg,
+            "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
             pass);
+    if (n < 0 || n >= (int) sizeof authorize_msg) {
+        ESP_LOGE(TAG, "worker name and password need %d bytes and the buffer "
+                      "is %d; not authorising", n, (int) sizeof authorize_msg);
+        return -1;
+    }
     debug_stratum_tx(authorize_msg);
 
     return esp_transport_write(transport, authorize_msg, strlen(authorize_msg), 0);
@@ -666,8 +778,15 @@ int STRATUM_V1_authenticate(esp_transport_handle_t transport, int send_uid, cons
 int STRATUM_V1_authorize(esp_transport_handle_t transport, int send_uid, const char * username, const char * pass)
 {
     char authorize_msg[BUFFER_SIZE];
-    sprintf(authorize_msg, "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
+    /* Bounded for the same reason as STRATUM_V1_authenticate above. */
+    int n = snprintf(authorize_msg, sizeof authorize_msg,
+            "{\"id\": %d, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n", send_uid, username,
             pass);
+    if (n < 0 || n >= (int) sizeof authorize_msg) {
+        ESP_LOGE(TAG, "worker name and password need %d bytes and the buffer "
+                      "is %d; not authorising", n, (int) sizeof authorize_msg);
+        return -1;
+    }
     debug_stratum_tx(authorize_msg);
 
     return esp_transport_write(transport, authorize_msg, strlen(authorize_msg), 0);
@@ -684,9 +803,26 @@ int STRATUM_V1_submit_share(esp_transport_handle_t transport, int send_uid, cons
                             const uint32_t nonce, const uint32_t version)
 {
     char submit_msg[BUFFER_SIZE];
-    sprintf(submit_msg,
+    /*
+     * snprintf, and the truncation checked, because `jobid` and
+     * `extranonce_2` come from the pool and `username` from the owner's
+     * settings. This was sprintf into a BUFFER_SIZE array on the stack of a
+     * task with 6144 bytes of it, so a mining.notify carrying a 3000-character
+     * job id wrote the pool's own bytes upward past the array and over this
+     * frame's return address on the first share found against that job. The
+     * stack canary sits at the low end of the stack and never sees a write
+     * going the other way. No credentials needed: stratum+tcp is plaintext, so
+     * the pool or anyone on the path between could do it.
+     */
+    int n = snprintf(submit_msg, sizeof submit_msg,
             "{\"id\": %d, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%08lx\", \"%08lx\", \"%08lx\"]}\n",
             send_uid, username, jobid, extranonce_2, ntime, nonce, version);
+    if (n < 0 || n >= (int) sizeof submit_msg) {
+        ESP_LOGW(TAG, "not submitting a share: the message needs %d bytes and "
+                      "the buffer is %d -- check the job id and worker name",
+                 n, (int) sizeof submit_msg);
+        return -1;
+    }
     debug_stratum_tx(submit_msg);
 
     return esp_transport_write(transport, submit_msg, strlen(submit_msg), 0);
@@ -697,9 +833,16 @@ int STRATUM_V1_submit_ltc_share(esp_transport_handle_t transport, int send_uid, 
                             const uint32_t nonce)
 {
     char submit_msg[BUFFER_SIZE];
-    sprintf(submit_msg,
+    /* Bounded for the same reason as the Bitcoin variant above. */
+    int n = snprintf(submit_msg, sizeof submit_msg,
             "{\"id\": %d, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%08lx\", \"%08lx\"]}\n",
             send_uid, username, jobid, extranonce_2, ntime, nonce);
+    if (n < 0 || n >= (int) sizeof submit_msg) {
+        ESP_LOGW(TAG, "not submitting a share: the message needs %d bytes and "
+                      "the buffer is %d -- check the job id and worker name",
+                 n, (int) sizeof submit_msg);
+        return -1;
+    }
     debug_stratum_tx(submit_msg);
 
     return esp_transport_write(transport, submit_msg, strlen(submit_msg), 0);

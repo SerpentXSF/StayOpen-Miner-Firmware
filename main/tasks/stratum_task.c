@@ -566,6 +566,23 @@ void stratum_task(void * pvParameters)
                 #endif
 
                 queue_enqueue(&GLOBAL_STATE->stratum_queue, stratum_api_v1_message.mining_notification);
+                /*
+                 * The queue owns it now, so stop holding a pointer to it.
+                 * stratum_poolb_task.c has always done this; this path did
+                 * not, and the message struct is static and reused for every
+                 * line. Any later line that left `method` reading MINING_NOTIFY
+                 * without setting a fresh notification would write through
+                 * this dangling pointer and enqueue it a second time -- a
+                 * use-after-free and then a double free when create_jobs
+                 * released what it took for the previous job.
+                 *
+                 * The parser no longer leaves a stale method behind, so this
+                 * is the second line of defence rather than the fix. It is
+                 * two lines and it turns that whole class of mistake into a
+                 * NULL dereference, which fails loudly instead of corrupting
+                 * the heap.
+                 */
+                stratum_api_v1_message.mining_notification = NULL;
                 //decode_mining_notification(GLOBAL_STATE, stratum_api_v1_message.mining_notification);
             } else if (stratum_api_v1_message.method == MINING_SET_DIFFICULTY) {
                 /*

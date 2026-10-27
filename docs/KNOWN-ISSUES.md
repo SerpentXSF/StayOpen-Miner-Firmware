@@ -684,6 +684,131 @@ already pulled. No extra polling was ever needed, and the 2.0.32-dev soak
 filter has been widened to keep it. Until that run reports, the boot-time
 context recorded above is still an assumption and not a measurement.
 
+## A pool can corrupt the stack, not only crash the miner (fixed in the tree, unreleased)
+
+**Status: five more defects, found by review 2026-10-26, fixed in the tree and
+NOT YET RELEASED.** Every release up to and including 2.0.33 has all five. They
+are pre-existing and none arrived with 2.0.32 — the review below was prompted by
+looking again at the code 2.0.32 had just hardened, which is the honest reason
+it was found and not a claim that 2.0.32 introduced anything.
+
+**The entry below this one says the crash class was closed in 2.0.32. It was
+not.** 2.0.32 closed the paths it looked at. This review looked at the rest, and
+the worst of what it found is a category worse than a crash.
+
+### 1. The job id was written into a stack buffer with no bound
+
+`STRATUM_V1_submit_share()` built `mining.submit` with **`sprintf`** into
+`char submit_msg[2300]` — a local, so on the stack of `ASIC_result_task`, which
+is created with 6144 bytes of it. The job id in that message is the pool's,
+copied from the wire by `strdup` and never measured. The 2.0.32 notify guard
+checks every parameter's **type** and says nothing about **length**.
+
+So a `mining.notify` carrying a 3,000-character job id, followed by a
+`mining.set_difficulty [1]` so a share turns up within seconds, writes the
+pool's own bytes past the end of that array on the first share found against
+that job. It writes **upward**, over the saved registers and return address in
+the frame. `CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY` guards the **low** end
+of a task's stack and never sees a write going the other way.
+
+This needs no credentials. Stratum V1 over `stratum+tcp` is plaintext and
+unauthenticated in both directions, so the pool you chose can do it and so can
+anyone on the path between you and it. The same function serves pools B, C and
+D, which are plaintext by default.
+
+**Fixed** with `snprintf` and the truncation result checked, in
+`STRATUM_V1_submit_share`, `_submit_ltc_share`, `_authorize` and
+`_authenticate`; a share that will not fit is refused with a log line instead of
+being built. The two authorize variants were reachable only by an owner setting
+a 2 KB worker name — self-inflicted rather than remote, bounded anyway because
+the check costs nothing. Separately the notify guard now refuses a job id over
+`STRATUM_MAX_JOB_ID` (128; real pools use 8 to 64), so a job whose shares could
+never be submitted is dropped where that can be said plainly.
+
+### 2. A refused `mining.subscribe` could make the miner free the same job twice
+
+The subscribe-result branch had two `goto done`, and `done:` sat **after**
+`message->method = result`. Both callers reuse one `StratumApiV1Message` for
+every line of the session, and `STRATUM_V1_free_message()` does not reset
+`method`. So a line that jumped left the previous line's method in place and the
+caller acted on it.
+
+For pool A that is the serious one. `stratum_task.c` never cleared
+`mining_notification` after handing it to the work queue, so a stale
+`MINING_NOTIFY` wrote `->difficulty` through a pointer the queue already owned
+or had already freed, then enqueued it a second time — a use-after-free, and a
+double free when `create_jobs_task` released what it thought was the previous
+job. The secondary pools NULL that pointer, so they got a NULL dereference
+instead: a panic rather than heap corruption.
+
+**No misbehaviour was required to reach it.** A pool that refuses
+`mining.subscribe` with the ordinary `{"id":2,"result":null,"error":[20,…]}`
+lands in this branch with a cJSON null; `cJSON_GetArrayItem` answers NULL; the
+code jumped. A banned address or a pool that dislikes the subscribe string was
+enough.
+
+**Fixed** two ways, deliberately. The parser now validates before it assigns
+anything and resets the method on the spot instead of jumping past it, and
+`stratum_task.c` NULLs the notification after enqueuing — two lines the
+secondary path has always had. The second does not fix the bug; it turns that
+whole class of mistake into a loud NULL dereference rather than silent heap
+corruption, which is worth having regardless.
+
+Reading `->valuestring` off a non-string was in the same block:
+`{"id":2,"result":[1,2,3]}` was `strlen(NULL)`. `str_at()` covers it now.
+
+**One behaviour change here, stated because it is a change and not only a
+fix.** The extranonce2 length must now be a JSON *number*. A pool sending it as
+a string — `["…","…","8"]` — used to be accepted, with `valueint` reading 0 off
+the string node, so the session came up and then mined against an extranonce2
+length of zero. It will now be refused and the session reconnected. That is the
+better failure of the two, but it converts a quietly broken pool into a visibly
+reconnecting one, and if a pool ever turns up behaving that way this paragraph
+is the explanation. Standard Stratum V1 sends a number; nothing here has been
+seen to do otherwise.
+
+### 3. `mining.set_extranonce` had three NULL dereferences and a leak
+
+`params` of `[1, 2]` gave a non-string whose `valuestring` went into `strlen`.
+`params` with one element, or a `params` that is not an array at all, left the
+method reading `MINING_SET_EXTRANONCE` with `extranonce_str` still NULL, and
+pool A's handler calls `strdup` on it. Both panic. And the two
+`cJSON_PrintUnformatted()` results in the old error paths were never freed, so
+repeating a malformed message leaked internal RAM a few dozen bytes at a time —
+out of the pool that already runs down to a few hundred bytes free on every
+boot. **Fixed**: validated before assignment, method reset on failure, and the
+prints dropped.
+
+### 4. `version-rolling.mask` was read without a type check
+
+A `mining.configure` result of `{"version-rolling.mask": true}` has a NULL
+`valuestring` and went straight into `strtoul`. **Fixed** with `cJSON_IsString`.
+
+### 5. A pool that never sent a newline rebooted the board
+
+Neither receive path capped its line accumulator. Every read without a `\n`
+grew it — `realloc_json_buffer()` for pool A, `realloc_ctx()` for the
+secondaries — and **both call `esp_restart()` when `realloc` finally fails**. So
+"open a session and send bytes forever without a newline" was a remote reboot,
+repeatable on every reconnect, from any pool or anyone on a plaintext path. The
+first few kilobytes also come out of the internal heap that is already down to
+a few hundred bytes.
+
+**Fixed** with a 16 KB cap on both paths — a real notify with a full merkle
+branch list runs to about 3 KB — dropping the connection instead of growing
+past it. The caller reconnects, which is the right answer to a pool talking
+nonsense.
+
+### How far this is checked
+
+**Built clean on both boards and not run on hardware.** That is the whole of the
+evidence as this is written. The 2.0.32 equivalents were each provoked
+deliberately at a live miner and these have not been, because the two boards
+here are deliberately being held on 2.0.33 so that the browser flasher's
+Update mode has a version to move them to — the one path in the flasher that
+nothing has ever exercised. Running the injection suite against these five
+needs a board, and saying so is better than implying a test that did not happen.
+
 ## A pool can still crash the miner (fixed in 2.0.32)
 
 **Status: four defects, found by review 2026-10-17, all fixed and released in

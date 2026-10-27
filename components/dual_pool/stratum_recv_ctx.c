@@ -16,6 +16,11 @@ static const char *TAG = "stratum_recv_ctx";
 #define RX_BUFFER_SIZE 1024
 #define RX_TIMEOUT_MS  5000
 
+/* Longest line accumulated from a secondary pool. The primary's limit is
+ * STRATUM_MAX_LINE in stratum_api.c and this is the same number for the same
+ * reason: past it, realloc_ctx() reboots the board. */
+#define RX_MAX_LINE (16 * 1024)
+
 static void realloc_ctx(char **bufp, size_t *sizep, size_t len)
 {
     size_t old = strlen(*bufp);
@@ -116,6 +121,22 @@ stratum_rx_t STRATUM_V1_poll_jsonrpc_line_ctx(esp_transport_handle_t transport,
     if (nbytes == 0) {
         /* Nothing within the timeout. A quiet pool is not a dead one. */
         return STRATUM_RX_IDLE;
+    }
+
+    /*
+     * Capped before growing. A secondary pool that sends bytes and never
+     * sends a newline grew this accumulator until realloc failed, and
+     * realloc_ctx() then restarts the board -- so "never send \n" was a
+     * remote reboot, repeatable on every reconnect. B, C and D are plaintext
+     * stratum+tcp, so anyone on the path could do it too. A real notify runs
+     * to about 3 KB; see RX_MAX_LINE.
+     */
+    if (strlen(*bufp) + (size_t) nbytes + 1 > RX_MAX_LINE) {
+        ESP_LOGW(TAG, "pool sent %u bytes with no newline; dropping the "
+                      "connection rather than growing past %d",
+                 (unsigned) (strlen(*bufp) + (size_t) nbytes), RX_MAX_LINE);
+        drop_buffer(bufp, sizep);
+        return STRATUM_RX_ERROR;
     }
 
     realloc_ctx(bufp, sizep, nbytes);
