@@ -2,10 +2,19 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**The current release is 2.0.33** (tag `v2.0.33`), and it is a one-string
-release: it reworded the Share hint on the Pool settings page and changed no
-firmware behaviour whatsoever. Everything below that concerns the firmware
-describes **2.0.32**, which 2.0.33 carries unaltered.
+**The current release is 2.0.34** (tag `v2.0.34`), and it is a security
+release. **Update if you are on anything earlier.** It fixes five
+pre-existing Stratum defects, present in every release up to and including
+2.0.33, one of which lets a pool write its own bytes over a running task's
+return address and none of which needs credentials — `stratum+tcp` is
+plaintext, so the pool or anyone on the path can reach them. The entry "A pool
+can corrupt the stack, not only crash the miner" below has the detail, and
+**its fixes were built clean on both boards and have not been run on
+hardware**; that is stated there and in `docs/releases/2.0.34.md` rather than
+left to be assumed.
+
+**2.0.33** was the release before it: a one-string change that reworded the
+Share hint on the Pool settings page and altered no firmware behaviour at all.
 
 **2.0.32** carried the four Stratum defects a review found on 2026-10-17 -- all
 pre-existing, all present in every release up to and including 2.0.31 -- and
@@ -18,13 +27,15 @@ through below rather than quietly amended.
 fixes, which were also each provoked deliberately on hardware. The reset-reason
 change landed *after* that soak, so the binaries it shipped are not the ones
 that were soaked -- it was verified on both boards, and by the time 2.0.33 was
-cut it had days on them rather than hours. **2.0.33 was not soaked at all**, and
-there is nothing in it a soak could have exercised. If you are running 2.0.32
-or 2.0.33, every column below is fixed in your firmware:
+cut it had days on them rather than hours. **Neither 2.0.33 nor 2.0.34 was
+soaked.** There was nothing in 2.0.33 a soak could have exercised; 2.0.34 is a
+different case, and the reason it was published without one is given in its own
+entry below. If you are running 2.0.32 or later, every column below is fixed in
+your firmware:
 
 | Fixed in 2.0.30 and earlier | Fixed in 2.0.31 | Fixed in 2.0.32 |
 | --- | --- | --- |
-| Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited | A pool cannot crash or reboot the miner -- **this time** including params 5/6/7, `set_difficulty`, `set_version_mask` and deeply nested JSON, each provoked on hardware rather than reasoned about |
+| Self test runs its Ethernet check after the core rail | A dead secondary pool's work, extranonce and held notify are released rather than inherited | Params 5/6/7, `set_difficulty`, `set_version_mask` and deeply nested JSON can no longer crash the miner, each provoked on hardware rather than reasoned about -- but the general claim that **a pool cannot crash or reboot the miner was still false**, for the third time running; see 2.0.34 below |
 | The stall watchdog waits past the regulator's retries | A failed share write counts as a disconnect instead of waiting on lwIP | Sixty seconds of pool silence no longer tears the session down |
 | A masked password is never stored as the password | The parsed Stratum strings are freed | `error_str` is freed once instead of being `strdup`'d twice |
 | Both interfaces cannot share one static IP | Up to four pools, gated to four-ASIC boards | The board reports why it last restarted, in `/api/system/info` |
@@ -41,6 +52,17 @@ or 2.0.33, every column below is fixed in your firmware:
 | A pool offering difficulty 8192 no longer leaves jobs at zero (2.0.30) | |  |
 | The price fetch no longer reads `$--` for a quarter of an hour (2.0.30) | |  |
 | A dropped firmware upload is retried rather than handed back (2.0.30) | |  |
+
+**2.0.34 adds five more to that list and is deliberately not given a column of
+its own**, because a column reads like a settled claim and that is exactly the
+habit this table has been wrong about three times. What it fixes: a pool's job
+id could overwrite a task's return address through an unbounded `sprintf`; a
+refused `mining.subscribe` could make pool A free one job twice; three ways to
+panic through `mining.set_extranonce`; a non-string version mask read with
+`strtoul(NULL)`; and an uncapped receive accumulator that rebooted the board
+when a pool never sent a newline. **Built clean on both boards, not run on
+hardware** — see the entry below for why, and for what would be needed to
+change that.
 
 The right-hand column shipped in 2.0.31. How far each row was checked
 differs, and shipping did not change that, so it is still stated per row rather
@@ -684,10 +706,10 @@ already pulled. No extra polling was ever needed, and the 2.0.32-dev soak
 filter has been widened to keep it. Until that run reports, the boot-time
 context recorded above is still an assumption and not a measurement.
 
-## A pool can corrupt the stack, not only crash the miner (fixed in the tree, unreleased)
+## A pool can corrupt the stack, not only crash the miner (fixed in 2.0.34)
 
-**Status: five more defects, found by review 2026-10-26, fixed in the tree and
-NOT YET RELEASED.** Every release up to and including 2.0.33 has all five. They
+**Status: five more defects, found by review 2026-10-26, all fixed and released
+in 2.0.34.** Every release up to and including **2.0.33** has all five. They
 are pre-existing and none arrived with 2.0.32 — the review below was prompted by
 looking again at the code 2.0.32 had just hardened, which is the honest reason
 it was found and not a claim that 2.0.32 introduced anything.
@@ -802,12 +824,18 @@ nonsense.
 ### How far this is checked
 
 **Built clean on both boards and not run on hardware.** That is the whole of the
-evidence as this is written. The 2.0.32 equivalents were each provoked
-deliberately at a live miner and these have not been, because the two boards
-here are deliberately being held on 2.0.33 so that the browser flasher's
-Update mode has a version to move them to — the one path in the flasher that
-nothing has ever exercised. Running the injection suite against these five
-needs a board, and saying so is better than implying a test that did not happen.
+evidence behind 2.0.34, and it is weaker than the release it supersedes. The
+2.0.32 equivalents were each provoked deliberately at a live miner and these
+have not been, because the two boards here are deliberately being held on
+2.0.33 so that the browser flasher's Update mode has a version to move them to
+— the one path in the flasher that nothing has ever exercised. Running the
+injection suite against these five needs a board, and saying so is better than
+implying a test that did not happen.
+
+These defects are remotely reachable without credentials, which is why 2.0.34
+was published on a code reading and a clean build rather than held until a
+board was free. That was a judgement made on 2026-10-26 with the evidence
+stated, not an oversight.
 
 ## A pool can still crash the miner (fixed in 2.0.32)
 
