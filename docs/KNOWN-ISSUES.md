@@ -2167,6 +2167,32 @@ suggestive but not decisive on that sample.
 `Above target` and `Stale` are both ordinary stratum outcomes and neither is a
 fault in this firmware.
 
+**The cluster was finally measured as a cluster, 2026-10-26.** Both boards had
+just been flashed to 2.0.33, so their counters started at zero and the first
+minutes after a connect were observable from the beginning for once. Three
+samples off the BC01, at 6, 13 and 14 minutes of uptime:
+
+| uptime | accepted | rejected | reasons |
+| --- | --- | --- | --- |
+| 6 min | 61 | 9 | 9 x `Above target` |
+| 13 min | 192 | **9** | unchanged |
+| 14 min | 205 | **9** | unchanged |
+
+**The count did not move while 144 further shares were accepted.** All nine
+arrived inside the first six minutes and all nine are `Above target`, which is
+the pool raising difficulty under a miner that has just arrived at the vardiff
+floor -- jobs built against the low target, submitted after it rose. The BC04
+took 179 shares across the same window and rejected none.
+
+So the shape is settled: on this pool A it is a start-up burst while difficulty
+finds its level, not a rate that persists. **Two samples are the minimum** --
+the 6-minute reading alone works out to 12.8%, which would be alarming and is
+an artifact of dividing a fixed burst by a short window. A single reading of
+this counter has already produced one wrong conclusion in this project.
+
+What this does **not** settle: why it is pool A every time. The volume-and-churn
+explanation above remains the best available and remains unproven.
+
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 
 **Where:** `main/tasks/create_jobs_task.c`.
