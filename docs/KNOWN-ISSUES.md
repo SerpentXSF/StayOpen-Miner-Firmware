@@ -2337,14 +2337,42 @@ the pool raising difficulty under a miner that has just arrived at the vardiff
 floor -- jobs built against the low target, submitted after it rose. The BC04
 took 179 shares across the same window and rejected none.
 
-So the shape is settled: on this pool A it is a start-up burst while difficulty
-finds its level, not a rate that persists. **Two samples are the minimum** --
-the 6-minute reading alone works out to 12.8%, which would be alarming and is
-an artifact of dividing a fixed burst by a short window. A single reading of
-this counter has already produced one wrong conclusion in this project.
+**Two samples are the minimum** -- the 6-minute reading alone works out to
+12.8%, which would be alarming and is an artifact of dividing a fixed burst by
+a short window. A single reading of this counter has already produced one wrong
+conclusion in this project.
 
-What this does **not** settle: why it is pool A every time. The volume-and-churn
-explanation above remains the best available and remains unproven.
+**Corrected the same day, from a fourth sample at 1.45 h: "a burst, not a rate"
+was two mechanisms counted as one number.** Read with the reasons split out
+rather than as a total:
+
+| board | uptime | accepted | `Above target` | `Stale` |
+| --- | --- | --- | --- | --- |
+| BC01 | 14 min | 205 | 9 | 0 |
+| BC01 | 1.45 h | 1,403 | **9** | **2** |
+| BC04 | 1.38 h | 1,298 | 0 | **1** |
+
+The `Above target` count **stopped at 9 and has not moved since minute six**, so
+that part stands: it is difficulty settling after a connect and it ends. What
+continues is `Stale`, which had not appeared at all in the first three samples
+and is a different thing -- a job replaced before the share arrived, which is
+churn rather than difficulty. Two on the BC01 and one on the BC04 across the
+following eighty minutes, against 2,500 accepted between them: roughly 0.1%.
+
+**Counting "rejects" as one number hid that.** The total went 9, 9, 9, 11 and
+looked like a burst that had stopped; the reasons went from one kind to two. The
+field that distinguishes them, `sharesRejectedReasons`, has been in this
+firmware all along. **Report rejects by reason, never as a total** -- the same
+mistake as counting esp-aes log lines instead of failure clusters, and the same
+cure.
+
+Note also that the BC04 has now rejected a share, which earlier entries in this
+file imply it does not do. One `Stale` is not a pattern, and nothing here
+establishes which pool it belonged to -- `sharesRejectedReasons` does not say.
+
+What none of this settles: why the `Above target` burst is always pool A's. The
+volume-and-churn explanation above remains the best available and remains
+unproven.
 
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 
