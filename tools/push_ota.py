@@ -27,14 +27,23 @@ container needs the `www` argument:
 The password is read from a file rather than taken on the command line, so it
 stays out of the shell history and out of the process list. Nothing here
 prints it, or the token it is exchanged for.
+
+An application image is checked against the board that answers, because the
+boards do not share an ASIC pinout: one flashed to the wrong board boots,
+serves its interface, detects its chip and never returns a share. The host and
+the image are separate arguments and nothing compared them, so the mistake
+took one transposed address. See check_board().
 """
 import json
+import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 
 LOGIN_TIMEOUT_S = 15
+INFO_TIMEOUT_S = 20
 
 # Long enough for a 2.8 MB image over WiFi on a busy miner. The upload
 # competes with hashing, the web UI and two Stratum sessions.
@@ -53,6 +62,105 @@ def login(host, password_file):
 
     with urllib.request.urlopen(request, timeout=LOGIN_TIMEOUT_S) as response:
         return json.loads(response.read().decode()).get("token")
+
+
+# A release artifact's name: stay-open-<board>-<version>-ota.bin, or
+# -www-ota.bin. The version is not anchored tightly because it can carry a
+# suffix of its own -- 2.0.31-dev is a real one that has been built here.
+ARTIFACT_RE = re.compile(r"^stay-open-([a-z0-9]+)-.+?-(www-)?ota\.bin$",
+                         re.IGNORECASE)
+
+# Boards that run another board's build, deliberately. A BC01 Pro is a BC01 as
+# far as the image is concerned -- same ASIC pinout, same driver -- and no
+# artifact is named for it, so without this entry an honest update would be
+# refused. Same map, for the same reason, as ASSET_MODEL_ALIAS in
+# main/http_server/axe-os/src/pages/Settings.vue, which picks the asset the
+# miner's own updater offers.
+MODEL_ALIAS = {"bc01-pro": "bc01"}
+
+
+def system_info(host, token):
+    """What the miner says it is. Read, not assumed."""
+    request = urllib.request.Request("http://%s/api/system/info" % host)
+    request.add_header("Authorization", "Bearer " + token)
+    with urllib.request.urlopen(request, timeout=INFO_TIMEOUT_S) as response:
+        return json.loads(response.read().decode())
+
+
+def check_board(host, token, path, kind):
+    """Refuse an application image built for a board other than this one.
+
+    The boards do not share an ASIC pinout. An image flashed to the wrong one
+    boots, serves its interface, detects its chip and never returns a share --
+    make_release.py's check_board() and the board in every release filename
+    exist for precisely that reason, and this tool had no equivalent. The host
+    and the image are separate arguments here, so getting them out of step
+    took one transposed address.
+
+    Two things made that easy rather than exotic. The credential files for the
+    two boards here hold the same password, so passing the wrong one still
+    logs in and proves nothing about which board answered. And the addresses
+    are a digit apart.
+
+    What this does NOT do is read the board out of the image itself. The board
+    comes from the filename, so a renamed or hand-packed image cannot be
+    checked -- and that case says so out loud rather than passing quietly,
+    because an unchecked push that printed nothing would read as a checked
+    one.
+    """
+    name = os.path.basename(path)
+
+    if kind == "www":
+        # Not applicable, and measured rather than taken on trust: in the
+        # 2.0.34 release both boards' -www-ota.bin are the same 2,097,201
+        # bytes with the same SHA-256, while the two -ota.bin differ. The web
+        # UI is built once from one source tree and carries nothing
+        # board-specific, which is also why the miner's own updater will take
+        # any board's copy.
+        print("board check: not applicable -- the web UI image is identical "
+              "on every board")
+        return
+
+    match = ARTIFACT_RE.match(name)
+    if not match:
+        print("board check: NOT MADE -- %r does not name a board, so nothing "
+              "here knows which board it was built for. The boards do not "
+              "share an ASIC pinout; check it yourself before continuing."
+              % name)
+        return
+
+    wanted = match.group(1).lower()
+
+    try:
+        info = system_info(host, token)
+    except Exception as exc:
+        sys.exit("cannot read /api/system/info to find out what %s is (%r), "
+                 "so whether %s belongs on it is unknown. Refusing rather "
+                 "than guessing: the wrong image leaves a miner that looks "
+                 "broken." % (host, exc, name))
+
+    model = (info.get("DeviceModel") or "").strip()
+    if not model:
+        sys.exit("%s did not report a DeviceModel, so whether %s belongs on "
+                 "it cannot be established. Refusing rather than guessing."
+                 % (host, name))
+
+    actual = MODEL_ALIAS.get(model.lower(), model.lower())
+    if actual != wanted:
+        sys.exit("refusing to push %s to %s.\n"
+                 "  that host reports DeviceModel %s (%s ASIC(s))\n"
+                 "  that image is built for %s\n"
+                 "The boards do not share an ASIC pinout, so this would "
+                 "leave a miner that boots, serves its interface, detects "
+                 "its chip and never returns a share. Check the address: the "
+                 "two here are a digit apart and share a password, so a "
+                 "successful login says nothing about which board answered."
+                 % (name, host, model, info.get("asicCount", "?"),
+                    wanted.upper()))
+
+    print("board check: %s reports %s (%s ASIC(s)) and this image is built "
+          "for %s" % (host, model, info.get("asicCount", "?"),
+                      wanted.upper()))
 
 
 def load_image(path, kind):
@@ -157,6 +265,11 @@ def main(argv):
     if not token:
         sys.exit("login did not return a token; wrong password file?")
     print("login: ok")
+
+    # Before the upload, after the login -- it needs the token, and the whole
+    # point is that nothing reaches the flash until the board agrees with the
+    # image.
+    check_board(host, token, path, kind)
 
     return push(host, token, path, image, kind)
 

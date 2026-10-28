@@ -191,7 +191,8 @@ so that is what it says now.
 
 ### What the release tooling was not checking
 
-Six, all in `tools/`, and each one closes a way to publish something wrong.
+Seven, all in `tools/`, and each one closes a way to publish or install
+something wrong.
 
 **`--push` ran with no guards at all.** Every source check in `ship.py` — a
 clean tree, commits pushed, HEAD on a remote branch — was gated on `--github`.
@@ -241,6 +242,45 @@ the release, served from `gh-pages`, and satisfying nothing it exists to
 satisfy. Naming the commit is that file's entire job, so it now refuses to be
 written without one.
 
+**Nothing checked that an update image belonged on the board receiving it.**
+`push_ota.py` takes the host and the image as separate arguments and compared
+neither against the other. It validated the container type byte — an
+application image rejected at the web-UI endpoint and the reverse — and then
+pushed a BC01 build to a BC04 without comment. The boards do not share an ASIC
+pinout, so that leaves a miner which boots, serves its interface, detects its
+chip and never returns a share. `make_release.py`'s `check_board()` and the
+board in every release filename exist for exactly this reason; this tool had no
+equivalent.
+
+Two things made the mistake easy rather than exotic. **The two credential files
+here hold the same password** — `secrets/bc01-api-password.txt` and
+`secrets/bc04-api-password.txt` are byte-identical — so passing the wrong one
+still logs in and proves nothing about which board answered. And the two
+addresses are a digit apart. Both halves were demonstrated the same day: the
+host-to-board mapping was carried backwards for a whole session, every login
+succeeded, and nothing surfaced it until `DeviceModel` was read directly.
+
+It now reads `DeviceModel` from `/api/system/info` after logging in and before
+anything is uploaded, takes the board from the release filename, and refuses a
+disagreement. `BC01-Pro` legitimately runs the BC01 image — same pinout, same
+driver, no artifact named for it — so it is aliased, using the same map and for
+the same reason as `ASSET_MODEL_ALIAS` in `Settings.vue`.
+
+Two cases cannot be checked and say so rather than passing quietly. A
+hand-packed image whose name carries no board prints that the check was **not
+made**, because a silent push would read as a checked one. And a web-UI image
+is genuinely board-independent, which was measured rather than taken from a
+comment: in 2.0.34 both boards' `-www-ota.bin` are the same 2,097,201 bytes
+with the same SHA-256, while the two `-ota.bin` differ in both content and
+length. If the API cannot be read, or reports no `DeviceModel`, it refuses
+rather than guessing — nothing is in the flash yet at that point, so refusing
+costs nothing.
+
+**Still open, and a question rather than a fix:** two credential files holding
+one password look like a safeguard and are not one. Either they should be one
+file, or the two boards should have different passwords. That is the owner's
+call and has not been made.
+
 **A timed-out OTA push reported success.** `push_ota.py` funnelled everything
 that was not an `HTTPError` into one handler that printed *this is normal, the
 miner is rebooting* and returned 0 — including a timeout after the full
@@ -287,6 +327,17 @@ they could be exercised without a board:
   and the publish does not, and the reverse.
 - `push_ota.py` was tested against four exception shapes: a read timeout and a
   connect timeout return 1, a reset and a remote disconnect still return 0.
+- The board/image check was run **against both live boards**, which is the one
+  part of this work that could be proven on hardware without flashing
+  anything, since it only reads `/api/system/info`. The wrong pairing is
+  refused in both directions — a BC01 image at the BC04 and a BC04 image at
+  the BC01 — and the right one allowed in both. Its filename parser was
+  checked against ten names, including a `-dev` version suffix, an uppercased
+  name, and the `-app.bin`/`-full.bin` images that are not update containers
+  at all: right on all ten. Its other branches were exercised with the network
+  stubbed: the `BC01-Pro` alias, a www image at the "wrong" board, an image
+  with no board in its name, an unreachable API, and a response carrying no
+  `DeviceModel`.
 - The credential patterns were run over a file holding five real-looking
   credentials and a real address, and over both shipped `.cvs.example`
   templates. Five of five caught, the `x` placeholders exempted, and no false
