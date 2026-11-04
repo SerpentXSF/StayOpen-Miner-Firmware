@@ -1460,12 +1460,40 @@ remains the route to prefer when the miner is reachable. The browser's Update
 mode now asks about erasing and the box starts unticked; leaving it unticked is
 what keeps the settings.
 
-**Neither the defect nor the fix has been seen on hardware.** Everything above
-is read from the published esp-web-tools package and the published manifests.
-The only owner incident on record was a `-full.bin` flash, which erases by
-design, so nobody has reported losing settings to Update mode — the failure is
-derived, not observed. Confirming it takes one BC04 on USB: update a configured
-miner from the browser with the box unticked, then read `stratumuser`.
+**The fix is now observed, on a BC04, 2026-11-03.** This entry said for three
+releases that neither the defect nor the fix had been seen on hardware, and
+that confirming it took one BC04 on USB. That is what was done.
+
+The owner updated a configured BC04 from the browser flasher's Update mode,
+2.0.33 → 2.0.34, and **chose to keep settings** — which is the path that
+matters, because it is the one the button's own label promises. It worked, and
+the settings came back.
+
+Read off `/api/system/info` afterwards rather than taken from the report: the
+board is on `2.0.34 20261026`, `authEnabled` true, its SSID still set, reset
+reason `Power on reset`, mining at 5,267 GH/s with 5,389 shares accepted and
+**none rejected**. Two of those are the actual proof, and they are proof
+because of where the values live: the board rejoined **its own WiFi
+unaided**, and it still **accepts the stored API password**. Both
+`wifissid`/`wifipass` and `apipassword` are in `nvs`. Had `nvs` been erased
+the board would have come up as an access point with no credentials at all,
+which is exactly the failure this manifest exists to prevent, and it did not.
+
+So the chain reasoned out above — `new_install_prompt_erase: true` puts up the
+prompt, its box starts unticked, and Next with it unticked skips the erase —
+holds on hardware and not only in a reading of the library.
+
+**What is still derived, and will stay that way: the defect itself.** Nobody
+has watched `false` erase a configured miner's settings through Update mode,
+and nobody is going to, because proving it means deliberately flipping the
+flag back on a board with real credentials on it to destroy them. The only
+owner incident on record remains a `-full.bin` flash, which erases by design.
+The failure is inferred from the published `esp-web-tools` source; the fix is
+now measured.
+
+The release notes for 2.0.31 through 2.0.34 each say this had never been run
+on hardware. That was true when each was written and is left alone;
+`docs/releases/2.0.34.md` carries a dated note pointing here.
 
 ## A www update needed a restart the caller had to know about (fixed)
 
@@ -2622,12 +2650,61 @@ rather than as a total:
 | BC01 | 1.45 h | 1,403 | **9** | **2** |
 | BC04 | 1.38 h | 1,298 | 0 | **1** |
 
-The `Above target` count **stopped at 9 and has not moved since minute six**, so
-that part stands: it is difficulty settling after a connect and it ends. What
-continues is `Stale`, which had not appeared at all in the first three samples
-and is a different thing -- a job replaced before the share arrived, which is
-churn rather than difficulty. Two on the BC01 and one on the BC04 across the
-following eighty minutes, against 2,500 accepted between them: roughly 0.1%.
+The `Above target` count **stopped at 9 and has not moved since minute six**,
+~~so that part stands: it is difficulty settling after a connect and it
+ends.~~ What continues is `Stale`, which had not appeared at all in the first
+three samples and is a different thing -- a job replaced before the share
+arrived, which is churn rather than difficulty. Two on the BC01 and one on the
+BC04 across the following eighty minutes, against 2,500 accepted between them:
+roughly 0.1%.
+
+**"And it ends" was corrected again on 2026-11-03, by a sample ninety-six
+times larger.** One BC01 boot, 137.2 hours of it:
+
+| | accepted | `Above target` | `Stale` | total |
+| --- | --- | --- | --- | --- |
+| BC01, 1.45 h (2026-10-27) | 1,403 | 9 | 2 | 11 |
+| **BC01, 137.2 h (2026-11-03)** | **135,188** | **35** | **71** | **106** |
+
+A burst that ends would read 9 at 137 hours. It reads 35. So the conclusion
+was wrong for the third time, and the error was the same one each time: a
+window too short to see the thing it was ruling out. Minute six to minute
+eighty-seven is flat, and that is all the earlier sample ever showed.
+
+**What the long sample does establish**, because the two rates are two orders
+of magnitude apart rather than close:
+
+- The burst is real and dominates the start. The early rate is 6.2
+  `Above target` per hour; the whole-session rate is 0.26 per hour. Had the
+  early rate continued, 137 hours would have produced about 850, not 35.
+- There is a **residual** after it: roughly 26 further `Above target` across
+  136 hours, about one every five hours, which the earlier window could not
+  have detected at all.
+- So the shape is a sharp burst at connect followed by a slow continuing
+  component -- not a burst that stops, and not a flat rate.
+- Rates over the large sample, which supersede the figures above: `Above
+  target` 0.026%, `Stale` 0.053%, 0.078% of shares in total. The "roughly
+  0.1%" for `Stale` was high by about half.
+
+**What it does not establish, and no cumulative counter can.** Whether the
+residual is a fresh small burst on every pool reconnect or a steady trickle.
+`sharesRejectedReasons` is a running total with no timestamps, so every claim
+of the form "it stopped" drawn from it is really a claim about when it was
+read. This board restarted on a `WiFi connection timeout`, so reconnects
+during 137 hours are likely rather than hypothetical, which makes the
+per-reconnect explanation the one to beat.
+
+**The instrument for settling it already exists and has not been pointed at
+this question.** `watch_rejects.py` polls both miners every 15 s and captures
+the pool's own words for each reject, with a timestamp, to
+`reject-capture.log`. Run it on the BC01 across a few reconnects and the
+timestamps answer directly whether the residual clusters at reconnects. It was
+last used on 2026-10-04, before any of this.
+
+**The rule to take from three corrections in a row:** this counter cannot
+answer "has it stopped" at all, whoever reads it. Use it for rates over a
+stated interval and for the split by reason; use timestamps for anything about
+when.
 
 **Counting "rejects" as one number hid that.** The total went 9, 9, 9, 11 and
 looked like a burst that had stopped; the reasons went from one kind to two. The

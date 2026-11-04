@@ -452,11 +452,17 @@ def main():
         # updated that way would come back with no pool, no payout address and
         # no WiFi, from a button labelled "keeps settings".
         #
-        # Derived, not observed: that chain is read from the published package,
-        # and nobody has reported losing settings this way. The one owner
-        # incident on record was a -full.bin flash, which erases by design. The
-        # fix is not observed either -- see docs/KNOWN-ISSUES.md for what a
-        # hardware check would involve.
+        # The fix is observed, as of 2026-11-03: a configured BC04 was updated
+        # from the browser flasher's Update mode with the box left unticked and
+        # its settings survived -- it rejoined its own WiFi and still accepted
+        # its stored API password, both of which live in nvs. So True does what
+        # the reading above says it does.
+        #
+        # The defect is still only derived, and will stay that way: proving
+        # that False erases a configured miner means flipping this back on a
+        # board with real credentials in order to destroy them. The one owner
+        # incident on record was a -full.bin flash, which erases by design.
+        # docs/KNOWN-ISSUES.md keeps the two apart.
         #
         # True puts up the erase prompt with its checkbox UNTICKED, and Next
         # with it unticked calls _startInstall(false): no erase, nvs survives.

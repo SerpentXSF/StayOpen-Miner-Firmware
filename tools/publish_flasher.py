@@ -310,6 +310,11 @@ def main():
             # True means "ask before erasing", and the dialog's checkbox
             # starts unchecked -- so an owner who just presses Install keeps
             # their settings. False here is what erased them before.
+            #
+            # Confirmed on hardware 2026-11-03, which it had not been when
+            # this guard was written: a configured BC04 went 2.0.33 -> 2.0.34
+            # through Update mode with the box unticked and kept its WiFi
+            # credentials and its API password, both of which live in nvs.
             if um.get("new_install_prompt_erase") is not True:
                 sys.exit("manifest-%s-update.json has "
                          "new_install_prompt_erase=%r. It must be True, or "
