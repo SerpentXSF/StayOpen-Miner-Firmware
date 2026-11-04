@@ -308,8 +308,9 @@ const lang = {
         remote_ota_partial: "本次检查有一部分未能连接 GitHub，因此“未发现更新”只覆盖了成功响应的那一半。请重试。",
         remote_ota_new_web: "发现 Web 新版本",
         remote_ota_new_fw: "发现 Firmware 新版本",
-        remote_ota_download_web: "一键升级 Web",
-        remote_ota_download_fw: "一键升级 Firmware",
+        remote_ota_web_unchanged: "本次发布未更改",
+        remote_ota_web_unknown: "本次发布未说明其所含的 Web 版本",
+        remote_ota_then_browse: "仅下载文件 — 下载后请用下方的 Browse 选择该文件进行安装。",
         remote_ota_downloading: "下载固件流中..."
     },
     logs: {

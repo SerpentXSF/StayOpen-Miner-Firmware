@@ -91,6 +91,65 @@ def released_tags():
             for r in json.loads(out.stdout.decode(errors="replace"))}
 
 
+WEB_VERSION_MARKER = "stayopen-web-version"
+
+
+def web_version():
+    """The web interface's own version, from its single source.
+
+    The interface carries a version series of its own -- 1.6.4 -- which has
+    nothing to do with the firmware's 2.0.34. const.ts is where it is
+    declared and generate-version.cjs reads the same line, so this cannot
+    disagree with what the built interface reports.
+    """
+    path = os.path.join(ROOT, "main", "http_server", "axe-os", "src",
+                        "util", "const.ts")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            m = re.search(r"""^const WEB_VERSION\s*=\s*['"]([^'"]+)['"]""",
+                          fh.read(), re.M)
+    except OSError as exc:
+        sys.exit("cannot read the web version from %s: %s" % (path, exc))
+    if not m:
+        sys.exit("no WEB_VERSION in %s -- the release notes carry it so the "
+                 "miner can tell whether its interface is actually behind, "
+                 "and a release without it makes that check unanswerable"
+                 % path)
+    return m.group(1).strip()
+
+
+def notes_with_web_version(notes_file, version):
+    """Copy the notes, appending a machine-readable web version.
+
+    Why this exists: the miner's Check for Updates had no way to tell whether
+    a release's web interface differed from the one installed. A release
+    publishes the firmware version in its tag and says nothing about the
+    interface, so the page compared the interface's 1.6.4 against the release
+    tag and reported an interface update on every release -- including
+    application-only ones like 2.0.34, where the web image is byte-identical
+    to its predecessor's. An owner chased a web update that did not exist.
+
+    The marker is an HTML comment, so it is invisible in the rendered notes
+    on the releases page, and it travels in the release body, which
+    api.github.com serves with CORS headers -- unlike release assets, which
+    send none and so cannot be read by the page at all.
+
+    Generated rather than hand-written into docs/releases/<version>.md, so it
+    cannot drift from what was actually built.
+    """
+    web = web_version()
+    with open(notes_file, encoding="utf-8") as fh:
+        body = fh.read()
+    if WEB_VERSION_MARKER in body:
+        return notes_file, web          # already carries one; leave it alone
+    out = os.path.join(DIST, "release-notes-%s.md" % version)
+    os.makedirs(DIST, exist_ok=True)
+    with open(out, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(body.rstrip("\n"))
+        fh.write("\n\n<!-- %s: %s -->\n" % (WEB_VERSION_MARKER, web))
+    return out, web
+
+
 def main():
     argv = sys.argv[1:]
     if "--notes-file" in argv:
@@ -171,6 +230,18 @@ def main():
         if os.path.isfile(default_notes):
             notes_file = default_notes
             print("release notes from docs/releases/%s.md" % version)
+
+    # The notes carry the web interface's own version, so the miner's update
+    # check can compare interface to interface instead of guessing from the
+    # firmware tag. Done to a copy in dist/, never to the committed file.
+    if github:
+        if notes_file:
+            notes_file, web = notes_with_web_version(notes_file, version)
+            print("release notes carry web version %s" % web)
+        else:
+            print("WARNING: no docs/releases/%s.md, so these notes will not "
+                  "carry a web version and the miner's update check cannot "
+                  "tell whether its interface is behind." % version)
 
     # --push publishes binaries, so it gets the same guards as --github.
     #

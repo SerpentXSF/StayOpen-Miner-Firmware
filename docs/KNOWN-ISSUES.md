@@ -79,6 +79,137 @@ than blanket:
 | The dashboard shows every configured pool, and the split bar reflects the real weights | **Confirmed on the rendered page, 2026-10-17**, on a BC04 running the release: four pool blocks each with their own CONNECTED badge, a four-segment split bar reading A 25% / B 25% / C 25% / D 25%, and per-pool share counts (A 27420/22, B 4234/0, C 4195/0, D 3583/0). Checked by the owner from their own browser; the page needs a sign-in on a non-local host, so it is not something I can reach |
 | Pool C and D panels are named for their own pool, not "Pool B" | **Confirmed on the rendered page, 2026-10-25**, on both boards, by the owner from their own browser. On a BC04 in Quad mode every secondary carries its own failover heading -- "Pool B failover", "Pool C failover", "Pool D failover" -- each inside its own pool's card, and on a BC01 the Dual Pool tab heads its single failover block "Pool B failover". This was the screen the mislabelling was on, and it is gone from it. It had been open since 2.0.31 because the dashboard screenshots that closed the row above are a different page |
 
+## The browser could not update a miner that had a password (fixed in the tree, in no release)
+
+**Status: fixed on `main`, in no published release.** Found 2026-11-04 when an
+owner could not update a BC01 from its own web interface: both images, three
+automatic retries each, every attempt failed with *Upload failed! Do not close
+this page.*
+
+**The upload never sent credentials.** Every other call the interface makes to
+the miner goes through the shared axios instance in
+`util/http/axios/index.ts`, whose request interceptor attaches
+`Authorization: Bearer <token>` from `localStorage`. The OTA upload in
+`Settings.vue` is the one exception: it uses the bare `axios` import, so no
+interceptor runs and no header is attached.
+
+`api_auth_require()` in `main/http_server/api_auth.c` accepts nothing else. Not
+a cookie. Not the `?token=` query parameter — that exists only for WebSockets,
+because a browser cannot set a header on one. So the miner answered **401
+before reading a byte of the body**, measured at 0.1 s.
+
+This is deterministic, not the intermittent mid-transfer reset recorded
+elsewhere in this file. It fails for every image, every retry, on every miner
+that has a password set. It went unnoticed because a miner with authentication
+disabled takes the `auth_disabled` short-circuit and uploads fine — which is
+how this path worked before token login arrived in web 1.2.0.
+
+Fixed by attaching the token the rest of the interface already uses. Confirmed
+in the built bundle rather than only in the source: the shipped
+`Settings-*.js` now reads `localStorage.getItem("auth_token")` and sends
+`Authorization: Bearer` on the `application/octet-stream` post.
+
+**How the diagnosis was reached, including two wrong turns.** Both are written
+down because each produced a change that was made and then taken back out, and
+because a plausible mechanism that survives one test is exactly how the
+rejected-shares conclusions went wrong three times.
+
+1. **LRU purge — wrong, and the fix for it was reverted.** The server runs
+   `max_open_sockets = 8` with `lru_purge_enable = true`, and a session's
+   `lru_counter` is only advanced in `httpd_sess_process()` *after*
+   `httpd_req_delete()` returns — so an upload holds a stale counter for its
+   whole duration and looks like the ideal purge victim. An eviction test
+   confirmed the mechanism exists: a connection left idle while fourteen
+   others arrived was closed, while one used on every iteration survived.
+   `esp_http_server.h` even documents `httpd_sess_update_lru_counter()` for
+   this, and that call was added to both OTA receive loops.
+
+   Then the actual test refuted it. An authenticated upload run while new
+   connections were opened against the miner **completed normally in 37 s**.
+   The reason is structural: `esp_http_server` has one task, and while it is
+   inside the OTA handler it is not in `select()`, so it never reaches
+   `httpd_accept_conn()` and `httpd_sess_close_lru()` cannot fire at all. The
+   purge is unreachable during an upload. The change was reverted rather than
+   shipped as a guard against something that cannot happen.
+
+2. **A missing header that fails instantly versus a progress bar that reached
+   78.9%.** The 401 arrives in 0.1 s, which does not obviously match a bar
+   that climbed most of the way. The code path is unambiguous — no header is
+   attached, and the endpoint accepts nothing else — so the conclusion stands;
+   `onUploadProgress` reports bytes handed to the network stack, which is not
+   the same as bytes the miner accepted. **The exact progress figure is not
+   explained here and is not claimed to be.**
+
+**One real thing the failed experiment did establish:** while an OTA upload is
+running, the miner accepts no new connections at all — three attempts during
+one upload, all `TimeoutError`. The single server task is inside the handler
+for the whole transfer. So the web interface being unresponsive during an
+update is expected behaviour, not a symptom.
+
+### The Web Version row advertised an update that did not exist
+
+The same owner was sent after a web update that was already installed. The row
+compared the release **tag** against the running **firmware** version — done
+deliberately, because comparing the interface's `1.6.4` against a `2.0.34` tag
+reads as newer forever. The side effect: on an application-only release the
+interface row still showed an upgrade arrow. 2.0.34 is exactly that — its web
+image is byte-identical to 2.0.33's — so the badge was advertising nothing.
+
+The interface carries its own version series, so the only honest comparison is
+against another web version, and a release did not publish one. It does now:
+`ship.py` appends `<!-- stayopen-web-version: ... -->` to the notes it
+uploads, read from `const.ts` so it cannot drift from what was built. The
+marker rides in the release body, which `api.github.com` serves with CORS
+headers.
+
+The row now says one of three things: an update is available, **unchanged in
+this release**, or — for every release up to 2.0.34, which carry no marker —
+that the release does not say, which is the truthful answer rather than a
+guess.
+
+`WEB_VERSION` was also bumped to `1.6.5 20261104`. It had not moved since
+`1.6.4 20261003` despite two rounds of interface changes, which did not matter
+while nothing compared it and matters now that releases publish it.
+
+### "Install Web Update" was a promise a browser cannot keep
+
+Both `remote_ota_download_web` ("Install Web Update") and
+`remote_ota_download_fw` ("Install Firmware Update") existed in both locales
+and were referenced nowhere. The only control on either row was `Download`.
+
+They were never wired because in a browser they cannot be. Measured:
+
+| URL the page would have to read | `Access-Control-Allow-Origin` |
+| --- | --- |
+| `api.github.com/.../releases/latest` | `*` |
+| the release asset, and its redirect target | **absent on both hops** |
+
+A page served from the miner may send that request but may not read the
+response, so it can never hand the bytes to the OTA endpoint. The dead strings
+are removed and each Download button now carries the real next step: download,
+then choose the file with Browse.
+
+**One-click install would need the miner to fetch the file itself** — an
+authenticated endpoint taking a URL, with the firmware doing the HTTPS GET.
+That is a real feature with real exposure and is not attempted here.
+
+### How far this is checked
+
+- The 401 was **measured**: an upload with no `Authorization` header is
+  refused in 0.1 s, before any of the 2,855,041 bytes are read.
+- Authenticated uploads from a single-connection client succeeded **three
+  times out of three** against the same miner — 37 s, 21 s, 37 s — covering
+  both the application and web endpoints.
+- The fix is confirmed in the **built bundle**, not only in the source.
+- The CORS results are from a request carrying an `Origin` header, following
+  the redirect, on both hops.
+- The LRU eviction mechanism was demonstrated, and then shown to be
+  unreachable during an upload. Both results are above.
+- **Not checked: the fixed interface has not been loaded in a browser.** It
+  builds and type-checks. The boards cannot run it until a release carries it,
+  and the BC01 was returned to published 2.0.34 rather than left on an
+  unreleased build.
+
 ## The interface and the release tooling each reported something untrue (fixed in the tree, in no release)
 
 **Status: fixed on `main`, and in no published release.** If you are running

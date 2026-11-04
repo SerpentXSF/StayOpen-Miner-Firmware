@@ -30,6 +30,30 @@ const uploadFailed = ref<boolean>(false);
 // --- OTA Check Refs ---
 const checkOtaStatus = ref<string>('');
 const otaChecking = ref<boolean>(false);
+/*
+ * Whether this release's web interface differs from the one you are looking
+ * at -- and, when that cannot be determined, saying so instead of guessing.
+ *
+ *   'available'  the release names a different web version
+ *   'unchanged'  the release names this exact web version
+ *   'unknown'    the release does not say, so no claim is made
+ *   'none'       nothing checked yet, or the firmware is already current
+ *
+ * This row used to compare the release TAG against the running FIRMWARE
+ * version and offer a web update whenever the release was newer. On an
+ * application-only release that is wrong: 2.0.34 shipped a web image
+ * byte-identical to 2.0.33's, and the row still showed an upgrade arrow. An
+ * owner downloaded it, uploaded it by hand, and changed nothing.
+ *
+ * The interface carries its own version series (1.6.4), so the only honest
+ * comparison is against another web version. Releases now publish theirs in
+ * the notes as an HTML comment -- invisible when rendered, and readable here
+ * because api.github.com sends CORS headers for the release body. Release
+ * assets send none, which is also why the file itself cannot be fetched.
+ */
+const WEB_VERSION_RE = /<!--\s*stayopen-web-version:\s*([^>]*?)\s*-->/;
+const webUpdateState = ref<'none' | 'available' | 'unchanged' | 'unknown'>('none');
+
 const remoteWebUrl = ref<string | null>(null);
 const remoteWebReleaseUrl = ref<string | null>(null);
 const remoteWebVersion = ref<string>('');
@@ -134,9 +158,32 @@ const processFirmwareFile = async (file: File | Blob) => {
     for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
       try {
         uploadError = null;
+        /*
+         * The bearer token, which this request never carried.
+         *
+         * Every other call to the miner goes through the shared axios
+         * instance in util/http/axios, whose request interceptor attaches
+         * `Authorization: Bearer <token>` from localStorage. This one is the
+         * exception: it uses the bare `axios` import, so no interceptor runs
+         * and no credentials were sent.
+         *
+         * api_auth_require() in main/http_server/api_auth.c accepts nothing
+         * else -- not a cookie, and not the ?token= query parameter, which
+         * exists only for WebSockets because a browser cannot set a header on
+         * one. So the miner answered 401 before reading a byte of the body,
+         * and the upload could not succeed on any miner with a password set.
+         * Deterministic, not the intermittent reset described below: both
+         * images, every retry, every time.
+         *
+         * It went unnoticed because a miner with authentication disabled
+         * takes the `auth_disabled` short-circuit and uploads fine, which is
+         * how this path worked before token login was introduced.
+         */
+        const authToken = localStorage.getItem('auth_token');
         await axios.post(uploadUrl, file, {
           headers: {
-            'Content-Type': 'application/octet-stream'
+            'Content-Type': 'application/octet-stream',
+            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
           },
           responseType: 'text',
           onUploadProgress: (progressEvent: AxiosProgressEvent) => {
@@ -275,6 +322,7 @@ const pickUpdateAsset = (assets: any[] | undefined, kind: 'app' | 'www') => {
 const checkGithubUpdates = async () => {
   otaChecking.value = true;
   checkOtaStatus.value = sel('remote_ota_checking');
+  webUpdateState.value = 'none';
   remoteWebUrl.value = null;
   remoteWebReleaseUrl.value = null;
   remoteFwUrl.value = null;
@@ -355,12 +403,26 @@ const checkGithubUpdates = async () => {
           gitWebVersion += ` ${nameParts[nameParts.length - 1]}`;
         }
         
-        const localFwForWeb = minerStatusRef.value?.version || '0';
-        if (isVersionNewer(gitWebVersion, localFwForWeb)) {
+        /*
+         * Compared web version to web version, from the marker the release
+         * notes carry. Absent -- every release up to 2.0.34 -- means the
+         * question has no answer here, and 'unknown' says that rather than
+         * inventing one.
+         */
+        const marked = WEB_VERSION_RE.exec(webRes.value.data.body || '');
+        const releaseWeb = marked ? marked[1].trim() : '';
+
+        remoteWebReleaseUrl.value = webRes.value.data.html_url || `https://github.com/${UPDATE_REPO_WWW}/releases/tag/${webRes.value.data.tag_name}`;
+        remoteWebNotes.value = webRes.value.data.body || '';
+
+        if (!releaseWeb) {
+          webUpdateState.value = 'unknown';
+        } else if (releaseWeb === WEB_VERSION.trim()) {
+          webUpdateState.value = 'unchanged';
+        } else {
+          webUpdateState.value = 'available';
           remoteWebUrl.value = binAsset.browser_download_url;
-          remoteWebReleaseUrl.value = webRes.value.data.html_url || `https://github.com/${UPDATE_REPO_WWW}/releases/tag/${webRes.value.data.tag_name}`;
-          remoteWebVersion.value = gitWebVersion;
-          remoteWebNotes.value = webRes.value.data.body || '';
+          remoteWebVersion.value = releaseWeb;
           foundUpdate = true;
         }
       }
@@ -477,6 +539,8 @@ onMounted(async () => {
           <template v-if="remoteWebUrl">
             <a-tag color="warning"><ArrowUpOutlined /> {{ remoteWebVersion }}</a-tag>
           </template>
+          <a-tag v-else-if="webUpdateState === 'unchanged'" color="success">{{ sel('remote_ota_web_unchanged') }}</a-tag>
+          <a-tag v-else-if="webUpdateState === 'unknown'">{{ sel('remote_ota_web_unknown') }}</a-tag>
           <div v-if="remoteWebUrl" style="display: flex; align-items: center; gap: 8px;">
             <a-popover v-if="remoteWebNotes || remoteWebReleaseUrl" :title="sel('remote_ota_release_notes') || 'Notes'" trigger="hover">
               <template #content>
@@ -487,9 +551,17 @@ onMounted(async () => {
               </template>
               <InfoCircleOutlined style="color: #1a81ff; cursor: pointer;" />
             </a-popover>
+            <!-- Download, not install. A browser cannot install this: the
+                 release asset is served without CORS headers, so the page is
+                 allowed to send the request but not to read the bytes. The
+                 two "Install ... Update" strings that used to sit unused in
+                 the translation files promised something that cannot be done
+                 from here, so they are gone and the real step is spelled
+                 out. -->
             <a-button type="primary" size="small" @click="triggerNativeDownload(remoteWebUrl, `web_update_${remoteWebVersion}.bin`)" :disabled="updating">
               <DownloadOutlined /> {{ sel('download') }}
             </a-button>
+            <span class="update-next-step">{{ sel('remote_ota_then_browse') }}</span>
           </div>
         </div>
       </a-descriptions-item>
@@ -513,6 +585,7 @@ onMounted(async () => {
             <a-button type="primary" size="small" @click="triggerNativeDownload(remoteFwUrl, `fw_update_${remoteFwVersion}.bin`)" :disabled="updating">
               <DownloadOutlined /> {{ sel('download') }}
             </a-button>
+            <span class="update-next-step">{{ sel('remote_ota_then_browse') }}</span>
           </div>
         </div>
       </a-descriptions-item>
@@ -545,6 +618,14 @@ onMounted(async () => {
 </template>
 
 <style scoped lang="scss">
+/* The sentence under a Download button saying what the next step is.
+   Quiet, because it is guidance rather than status. */
+.update-next-step {
+    font-size: 0.82rem;
+    opacity: 0.75;
+    color: var(--text-color-secondary);
+}
+
 .set-status-wrap {
   margin-top: 2rem;
 }

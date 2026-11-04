@@ -309,8 +309,9 @@ const lang = {
         remote_ota_partial: "Part of this check could not reach GitHub, so nothing found here covers only the half that answered. Try again.",
         remote_ota_new_web: "New Web Version Available",
         remote_ota_new_fw: "New Firmware Version Available",
-        remote_ota_download_web: "Install Web Update",
-        remote_ota_download_fw: "Install Firmware Update",
+        remote_ota_web_unchanged: "Unchanged in this release",
+        remote_ota_web_unknown: "This release does not say which web version it carries",
+        remote_ota_then_browse: "Downloads the file — then choose it with Browse below to install it.",
         remote_ota_downloading: "Downloading..."
     },
     logs: {

@@ -5,7 +5,13 @@ import { default as langZh } from '@/i18n/zh.ts'
  * 当前 Web 版本号
  * 详细变更记录请查阅: src/CHANGELOG.md
  */
-const WEB_VERSION = '1.6.4 20261003';
+// Bumped 2026-11-04. The interface has changed twice since 1.6.4 and the
+// version did not move: the Stop-reporting-untrue-things pass (i18n
+// fallback, the security page, the pool mode) and this one. That matters
+// now in a way it did not before -- releases publish this string so the
+// miner can tell whether its interface is actually behind, and a stale
+// value would make a changed interface report itself as unchanged.
+const WEB_VERSION = '1.6.5 20261104';
 
 // [新增] 机型配置接口
 export interface ModelConfig {
