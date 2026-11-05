@@ -2829,6 +2829,101 @@ real dropped upload. The failure cannot be reproduced on demand -- it did not
 appear once across a day of deliberate attempts -- so the path has been reasoned
 and its refusal branch tested, but never seen to do the thing it exists for.
 
+## The reject counters are pool A's alone, and a failover erases them
+
+**Found 2026-11-04, by measurement, on a BC04 that had just come back from a
+network outage.** This qualifies every rejected-share rate published here and
+on the 2.0.29 to 2.0.35 release pages. Nothing is retracted outright; what
+changes is what the numbers can mean.
+
+### They are not board totals
+
+`sharesAccepted`, `sharesRejected` and `sharesRejectedReasons` come from
+`SYSTEM_MODULE`, and the only things that write them are
+`SYSTEM_notify_accepted_share()` and `SYSTEM_notify_rejected_share()` in
+`main/system.c`. Those are called from **one place**:
+`main/tasks/stratum_task.c`, which is pool A's task. Secondaries increment
+their own `module->pool[id].shares_accepted` / `shares_rejected` in
+`main/tasks/stratum_poolb_task.c` and are reported separately as
+`poolBSharesAccepted` and so on.
+
+So the statement this file has repeated for five releases — **"every reject on
+both boards was pool A"** — is, as drawn from those fields, not falsifiable. A
+secondary's reject could never have appeared in them. The claim survives only
+because `poolBSharesRejected`, `poolCSharesRejected` and `poolDSharesRejected`
+were separately read as zero, which they were.
+
+But a sharper limit follows: **`rejected_reason_stats` is filled only inside
+`SYSTEM_notify_rejected_share()`, so only pool A has a reason breakdown at
+all.** The secondaries have a count and nothing else. Every question of the
+form "why does a secondary reject, or not" is unanswerable from this API, and
+the "why is it always pool A" puzzle has a component that is simply an
+artefact of which pool was given the instrument.
+
+### A pool A failover zeroes them, with no reboot
+
+`stratum_task.c` flips `is_using_fallback` once `retry_attempts` reaches
+`MAX_RETRY_ATTEMPTS`, which is **3**, and in that same block zeroes
+`shares_accepted`, `shares_rejected`, the whole `rejected_reason_stats` array,
+`rejected_reason_stats_count`, `work_received` and `best_session_nonce_diff`.
+
+**Measured rather than read off the code.** A BC04 dropped off the network
+entirely for roughly twenty minutes on 2026-11-04 — no ICMP, no HTTP — and came
+back with:
+
+| field | before the outage | after |
+| --- | --- | --- |
+| `uptimeSeconds` | 28.33 h | **29.00 h, unbroken** |
+| `lastRestartReason` | — | `None` |
+| `isUsingFallbackStratum` | 0 | **1** |
+| `sharesAccepted` | 25,550 | 3 |
+| `sharesRejected` | 25 | 0 |
+| `sharesRejectedReasons` | 25 x `Stale` | absent |
+| `bestSessionDiff` | 75.2M | 104k |
+
+Six fields, all consistent with that one code path, and the board never
+restarted. The secondaries' own counters were untouched across the same event
+(3,667 / 3,761 / 3,230 accepted, 0 rejected each), which is the control: a
+reboot would have zeroed those too.
+
+### What this does to the published rates
+
+The rates here and in the release notes were computed by dividing a cumulative
+counter by **uptime**. That is only right if the counter's window equals the
+uptime, and it does not: the window is *since the last pool A failover*, which
+is **not observable from the counter itself**. Uptime is therefore an upper
+bound on the window, so every published per-hour and per-cent figure is a
+**lower bound** on the true rate.
+
+The 137.2-hour sample — 135,188 accepted, 35 `Above target`, 71 `Stale` — is
+affected and cannot be repaired after the fact. Whether a failover occurred
+inside those 137 hours is unknowable now; `isUsingFallbackStratum` was not
+recorded with the sample. The figures stay published, with this limit stated,
+rather than being withdrawn: they are the only large sample there is.
+
+**This is the third independent reason this counter cannot answer "has it
+stopped",** after having no timestamps and mixing two reasons into one total.
+And it is the worst of the three, because a failover is exactly the kind of
+event that would produce a fresh burst, and it **erases the evidence of the
+burst it causes.**
+
+### What would actually answer it
+
+`watch_rejects.py` already polls every 15 s and timestamps each reject with the
+pool's own words. It must now also record `isUsingFallbackStratum` and
+`uptimeSeconds` on every sample, so a reset is visible as a reset rather than
+read as a quiet period. Without that it would log the drop to zero as a
+counter going backwards and nothing would say why.
+
+### One operational consequence
+
+A board that has failed over is **mining on pool A's fallback URL, not the
+primary the owner configured**, and stays there until three more failures flip
+it back. `isUsingFallbackStratum` is the only indication, and nothing in the
+interface draws attention to it. The BC04 was in that state for the whole
+period after its outage. A restart clears it, since `is_using_fallback` lives
+in RAM and `SYSTEM_init` starts at the primary.
+
 ## The rejected shares were the pool's, and the miner was already reporting why
 
 Both miners showed a small number of rejected shares -- a burst around connect
