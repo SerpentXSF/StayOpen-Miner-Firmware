@@ -326,19 +326,36 @@ That is a real feature with real exposure and is not attempted here.
   past its 60-second confirm window. It came back on `2.0.35 20261104` with
   `WWWVersion 1.6.5 20261104`, `authEnabled` still true, mining at
   1,636 GH/s. So the board is serving the interface that carries the fix.
-- **Still not checked: that interface has not been loaded in a browser.** It
-  builds, `vue-tsc` passes, and the token-attaching line is present in the
-  shipped bundle. What has not happened is a person opening the page on a
-  miner with a password and uploading an image through it, which is the only
-  test of the defect itself. The authenticated upload has been proven from a
-  script six times out of six across two boards; the browser is the part of
-  the path that was broken and the part still unexercised.
-- **The BC04 was not updated.** It stopped answering on the network between
+- **The badge half is confirmed in a browser.** On 2026-11-04 the owner opened
+  the BC01's settings page and reported the Web Version row reading
+  `1.6.5 20261104` with the tag **Unchanged in this release**. That is the
+  whole marker path exercised end to end by the parts that actually run it:
+  `ship.py` appended the marker to the published body, the release page served
+  it, the shipped parser matched it, and the comparison against the running
+  `WWWVersion` came out equal. Before the fix that row read *update available*
+  on every load, permanently, because the interface compared the application
+  version against the web version.
+- **Still not checked: an upload driven from the browser.** The page loads and
+  parses, but nobody has yet put a file through the Browse control on a miner
+  with a password set, which is the only test of the upload defect itself. The
+  authenticated upload has been proven from a script six times out of six
+  across two boards; the browser is the part of the path that was broken and
+  the part still unexercised. Note that two of the four `.bin` files in a
+  release are rejected before anything is sent -- the raw `-app.bin` (`0xE9`)
+  and `-www.bin` (`0x01`) are not update containers -- so a test must use
+  `-ota.bin` (`0xAA`) or `-www-ota.bin` (`0x55`). Uploading the interface
+  image is the safer of the two: identical code path, but the application
+  partition is never written, so a failure cannot leave the board without a
+  good app image.
+- **The BC04 is on it too.** It had stopped answering on the network between
   two readings on 2026-11-04 -- healthy at 28.33 h uptime and 5,093 GH/s, then
-  no ICMP and no HTTP, with a subnet sweep finding nothing answering as it.
-  Nothing had been pushed to it: the failure was the first `/api/system/info`
-  read, before any upload. Cause unknown and not guessed at here. It is noted
-  because this entry would otherwise read as though both boards carry the fix.
+  no ICMP and no HTTP, with a subnet sweep finding nothing answering as it --
+  and came back about twenty minutes later. **It had not restarted:** uptime
+  unbroken at 29.00 h and `lastRestartReason` `None`, so it was a network
+  outage and not a crash. It was then updated over the air to 2.0.35 the same
+  way as the BC01. What the outage did reveal is recorded above, under the
+  reject counters: it came back on pool A's *fallback* URL with its counters
+  zeroed.
 
 ## The interface and the release tooling each reported something untrue (fixed in 2.0.35)
 
