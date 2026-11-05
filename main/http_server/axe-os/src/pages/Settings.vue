@@ -51,7 +51,24 @@ const otaChecking = ref<boolean>(false);
  * because api.github.com sends CORS headers for the release body. Release
  * assets send none, which is also why the file itself cannot be fetched.
  */
-const WEB_VERSION_RE = /<!--\s*stayopen-web-version:\s*([^>]*?)\s*-->/;
+/*
+ * Anchored to its own line, and the LAST match wins, because the first
+ * version of this pattern was neither.
+ *
+ * 2.0.35's own release notes explain what ship.py appends and spelled the
+ * comment out inside a code span. A regex does not care about backticks, and
+ * this took the first match in the body -- so the release that exists to stop
+ * the row advertising a web update that does not exist advertised one, at
+ * version "...". Found by reading the published page after the release was
+ * cut; the body was corrected in place, which is why a miner on 2.0.35 does
+ * not see it.
+ *
+ * Three independent things now have to fail for that to recur: ship.py
+ * refuses to publish notes containing a marker it did not write (see
+ * notes_with_web_version), the marker must start its line, and the last one
+ * wins -- ship.py appends at the end, so prose above it cannot outrank it.
+ */
+const WEB_VERSION_RE = /^[ \t]*<!--[ \t]*stayopen-web-version:[ \t]*([^>\n]*?)[ \t]*-->[ \t]*$/gm;
 const webUpdateState = ref<'none' | 'available' | 'unchanged' | 'unknown'>('none');
 
 const remoteWebUrl = ref<string | null>(null);
@@ -409,8 +426,8 @@ const checkGithubUpdates = async () => {
          * question has no answer here, and 'unknown' says that rather than
          * inventing one.
          */
-        const marked = WEB_VERSION_RE.exec(webRes.value.data.body || '');
-        const releaseWeb = marked ? marked[1].trim() : '';
+        const marks = [...(webRes.value.data.body || '').matchAll(WEB_VERSION_RE)];
+        const releaseWeb = marks.length ? marks[marks.length - 1][1].trim() : '';
 
         remoteWebReleaseUrl.value = webRes.value.data.html_url || `https://github.com/${UPDATE_REPO_WWW}/releases/tag/${webRes.value.data.tag_name}`;
         remoteWebNotes.value = webRes.value.data.body || '';

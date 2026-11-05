@@ -79,6 +79,79 @@ than blanket:
 | The dashboard shows every configured pool, and the split bar reflects the real weights | **Confirmed on the rendered page, 2026-10-17**, on a BC04 running the release: four pool blocks each with their own CONNECTED badge, a four-segment split bar reading A 25% / B 25% / C 25% / D 25%, and per-pool share counts (A 27420/22, B 4234/0, C 4195/0, D 3583/0). Checked by the owner from their own browser; the page needs a sign-in on a non-local host, so it is not something I can reach |
 | Pool C and D panels are named for their own pool, not "Pool B" | **Confirmed on the rendered page, 2026-10-25**, on both boards, by the owner from their own browser. On a BC04 in Quad mode every secondary carries its own failover heading -- "Pool B failover", "Pool C failover", "Pool D failover" -- each inside its own pool's card, and on a BC01 the Dual Pool tab heads its single failover block "Pool B failover". This was the screen the mislabelling was on, and it is gone from it. It had been open since 2.0.31 because the dashboard screenshots that closed the row above are a different page |
 
+## 2.0.35's own release notes advertised a web update that did not exist
+
+**Status: the published release body was corrected in place on 2026-11-04, so
+no miner should see it. The code that allowed it is fixed on `main` and in no
+release.** This is the defect 2.0.35 exists to fix, reintroduced by the
+sentence describing the fix, and it was live for the few minutes between the
+release being cut and the body being read back.
+
+**What happened.** The release notes explain that `ship.py` appends an HTML
+comment carrying the web version, and the first draft wrote that comment out
+in full inside a Markdown code span so a reader could see its shape. Two
+things then went wrong in sequence, and either one alone would have been
+harmless.
+
+`notes_with_web_version()` asked whether the notes already carried a marker
+with `if WEB_VERSION_MARKER in body` — a substring test on the marker's
+**name**. The prose contains the name, so the test said yes, so the function
+returned the notes unchanged and **appended no real marker**. The log line it
+printed, `release notes carry web version 1.6.5 20261104`, was true about what
+it had read and false about what it had published.
+
+Then the interface's pattern matched the prose. It does not care that the
+comment sits in a code span, and it took the **first** match in the body. So
+the capture was the literal `...` from the explanatory sentence, which is not
+equal to `WEB_VERSION`, which is `available` — an upgrade arrow, a version
+reading `...`, and a Download button offering the web image to someone who
+already had it.
+
+**Measured rather than reasoned.** The published body was fetched with
+`gh release view --json body` and the shipped pattern run against it: one
+match, capturing `'...'`, `webUpdateState` resolving to `available`. That is
+the whole of the evidence and it is unambiguous.
+
+**How it was found, which is the part worth keeping.** Not by a test. By
+reading `ship.py`'s own output after the release was cut: the `gh release
+create` command line in the log named `docs/releases/2.0.35.md` — the
+committed file — where it should have named the generated copy in `dist/`.
+The two paths differing by one directory is the only thing that gave it away,
+and nothing would have failed if it had gone unread.
+
+**Three independent defences now, because one was not enough.**
+
+1. `ship.py` asks with the same pattern the interface uses, and **refuses** a
+   notes file containing any match it did not write itself. A wrong first
+   match is worse than no marker — no marker produces "the release does not
+   say", which is honest, while a wrong one advertises an update that does not
+   exist. Exercised on five bodies: the prose that shipped, a stale marker
+   naming 1.6.4, two markers with the first wrong, the marker's name with no
+   delimiters, and a correct marker already present. The first three refused,
+   the last two allowed, and the correct-marker case left the file alone.
+2. The marker must **start its line**, which prose inside a sentence does not.
+3. The **last** match wins, not the first. `ship.py` appends at the end, so
+   prose above it cannot outrank it. Checked against six bodies including a
+   CRLF one and an indented marker.
+
+Defences 2 and 3 are in the interface, so they are in no release yet; `main`
+has them and `WEB_VERSION` is `1.6.6 20261104`. Defence 1 is in the tooling
+and applies to the next release cut.
+
+**The documentation rule that comes out of it:** a release body is read by a
+regex, so any document that may become one names the marker rather than
+writing it out. Both this file and `docs/releases/2.0.35.md` were rewritten to
+name it.
+
+**What this says about the release it was found in.** 2.0.35's notes claim the
+interface stopped reporting things that were not true. That claim is still
+correct about the four defects it lists. But the release went out with a fifth
+of exactly the same shape, created by the act of describing the fix, and the
+check meant to prevent it reported success — which is the shape this file
+already says is the recurring one: *a report wrong in the reassuring
+direction.* It is recorded here rather than left to the commit log because the
+notes are what an owner reads.
+
 ## The browser could not update a miner that had a password (fixed in 2.0.35)
 
 **Status: fixed and published in 2.0.35.** Found 2026-11-04 when an
@@ -157,10 +230,14 @@ image is byte-identical to 2.0.33's — so the badge was advertising nothing.
 
 The interface carries its own version series, so the only honest comparison is
 against another web version, and a release did not publish one. It does now:
-`ship.py` appends `<!-- stayopen-web-version: ... -->` to the notes it
-uploads, read from `const.ts` so it cannot drift from what was built. The
-marker rides in the release body, which `api.github.com` serves with CORS
-headers.
+`ship.py` appends an HTML comment named `stayopen-web-version` to the notes it
+uploads, carrying the version read from `const.ts` so it cannot drift from
+what was built. The marker rides in the release body, which `api.github.com`
+serves with CORS headers.
+
+The marker is named rather than written out in full in any document that may
+become a release body -- see the entry on what happened when 2.0.35's notes
+spelled it out.
 
 The row now says one of three things: an update is available, **unchanged in
 this release**, or — for every release up to 2.0.34, which carry no marker —

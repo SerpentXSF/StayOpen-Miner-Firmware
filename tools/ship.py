@@ -93,6 +93,12 @@ def released_tags():
 
 WEB_VERSION_MARKER = "stayopen-web-version"
 
+# The same pattern the interface uses, in Settings.vue. Kept identical on
+# purpose: this script decides what to publish and the interface decides what
+# that means, so the two agreeing is the whole mechanism.
+WEB_VERSION_RE = re.compile(r"<!--\s*" + WEB_VERSION_MARKER +
+                            r":\s*([^>]*?)\s*-->")
+
 
 def web_version():
     """The web interface's own version, from its single source.
@@ -140,8 +146,32 @@ def notes_with_web_version(notes_file, version):
     web = web_version()
     with open(notes_file, encoding="utf-8") as fh:
         body = fh.read()
-    if WEB_VERSION_MARKER in body:
-        return notes_file, web          # already carries one; leave it alone
+
+    # Whether the notes already carry a marker, asked with the pattern that
+    # reads it rather than by looking for its name.
+    #
+    # This was `if WEB_VERSION_MARKER in body`. 2.0.35's notes explain what
+    # ship.py appends and wrote the comment out in full inside a code span, so
+    # the name was present, so this returned "already carries one" and
+    # appended nothing. The interface does not care about the backticks and
+    # takes the FIRST match in the body, so the published release told every
+    # miner a web update was available at version "...". That is the defect
+    # 2.0.35 exists to fix, reintroduced by the sentence describing the fix,
+    # and the test being a substring of the name is what let it through.
+    found = [m.strip() for m in WEB_VERSION_RE.findall(body)]
+    if found:
+        if len(found) == 1 and found[0] == web:
+            return notes_file, web      # already correct; leave it alone
+        sys.exit(
+            "%s already contains %d thing(s) matching the web-version marker: "
+            "%s -- and the interface takes the FIRST one, so appending the "
+            "real marker below would not win. Expected at most one, reading "
+            "%r.\n\n"
+            "If that is prose describing the marker, name it instead of "
+            "writing it out: a release body is read by a regex, and a wrong "
+            "first match is worse than no marker at all -- it advertises a "
+            "web update that does not exist."
+            % (notes_file, len(found), ", ".join(repr(f) for f in found), web))
     out = os.path.join(DIST, "release-notes-%s.md" % version)
     os.makedirs(DIST, exist_ok=True)
     with open(out, "w", encoding="utf-8", newline="\n") as fh:

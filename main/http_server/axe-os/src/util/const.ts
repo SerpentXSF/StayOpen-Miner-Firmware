@@ -11,7 +11,7 @@ import { default as langZh } from '@/i18n/zh.ts'
 // now in a way it did not before -- releases publish this string so the
 // miner can tell whether its interface is actually behind, and a stale
 // value would make a changed interface report itself as unchanged.
-const WEB_VERSION = '1.6.5 20261104';
+const WEB_VERSION = '1.6.6 20261104';
 
 // [新增] 机型配置接口
 export interface ModelConfig {
