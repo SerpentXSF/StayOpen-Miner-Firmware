@@ -143,6 +143,44 @@ regex, so any document that may become one names the marker rather than
 writing it out. Both this file and `docs/releases/2.0.35.md` were rewritten to
 name it.
 
+### The same wrong badge, nearly, from the opposite cause
+
+Fixing the above produced a second near-miss within the hour, and it is worth
+its own paragraph because the cause is unrelated and the first fix did nothing
+about it.
+
+`web_version()` read the version from `const.ts`, on the reasoning that
+`generate-version.cjs` reads the same line so the two cannot disagree. True of
+a fresh build. But the marker is published for a **particular release**, and
+the source tree moves on: `const.ts` had just been bumped to `1.6.6 20261104`
+as part of hardening the parser. Regenerating 2.0.35's corrected body
+therefore produced a marker reading **1.6.6**, while the web image published
+in 2.0.35 holds **1.6.5**.
+
+Uploaded, that would have offered every miner on 2.0.35 an update to an
+interface version that does not exist — the third instance of this one badge
+being wrong, and the second in one afternoon.
+
+It was caught by not trusting the tree: searching the packed web partition for
+a version string returns `1.6.5 20261104` for the 2.0.35 image and
+`1.6.4 20261003` for the archived 2.0.34 one, which is the authority, because
+the image is what an owner runs. The published body was written with `1.6.5`
+by hand and then verified by running the pattern **that ships inside 2.0.35**
+against the live body: one match, `1.6.5 20261104`, equal to that interface's
+own `WEB_VERSION`, resolving to `unchanged`.
+
+`web_version()` now takes the release version and the boards, and confirms the
+declared string is present in every board's packed `www` image before it is
+written anywhere. A stale build or a bumped `const.ts` fails there, naming
+both values, rather than being described wrongly to every owner. Exercised on
+four cases: the real stale pair that nearly shipped, a matching pair, one
+board of two stale, and a missing image.
+
+The general lesson, which this file can now point at twice: **the source tree
+is a claim and the artifact is the fact.** The application image comparison in
+2.0.35's notes was done for the same reason and reached the opposite,
+reassuring result.
+
 **What this says about the release it was found in.** 2.0.35's notes claim the
 interface stopped reporting things that were not true. That claim is still
 correct about the four defects it lists. But the release went out with a fifth

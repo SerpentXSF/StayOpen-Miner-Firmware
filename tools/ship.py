@@ -100,13 +100,12 @@ WEB_VERSION_RE = re.compile(r"<!--\s*" + WEB_VERSION_MARKER +
                             r":\s*([^>]*?)\s*-->")
 
 
-def web_version():
-    """The web interface's own version, from its single source.
+def declared_web_version():
+    """What the source tree says the interface's version is.
 
-    The interface carries a version series of its own -- 1.6.4 -- which has
-    nothing to do with the firmware's 2.0.34. const.ts is where it is
-    declared and generate-version.cjs reads the same line, so this cannot
-    disagree with what the built interface reports.
+    The interface carries a version series of its own -- 1.6.5 -- which has
+    nothing to do with the firmware's 2.0.35. const.ts is where it is
+    declared and generate-version.cjs reads the same line.
     """
     path = os.path.join(ROOT, "main", "http_server", "axe-os", "src",
                         "util", "const.ts")
@@ -124,7 +123,57 @@ def web_version():
     return m.group(1).strip()
 
 
-def notes_with_web_version(notes_file, version):
+def web_version(version, boards):
+    """The version of the interface THESE artifacts contain.
+
+    Read from const.ts and then confirmed inside every board's packed web
+    partition, which is the only copy an owner ever runs.
+
+    Why the second half exists. This function used to return the const.ts
+    value alone, on the reasoning that generate-version.cjs reads the same
+    line so the two cannot disagree. They cannot disagree about a *fresh*
+    build -- but the marker is published for a particular release, and the
+    source tree moves on. Correcting 2.0.35's release body after const.ts had
+    been bumped to 1.6.6 regenerated a marker reading 1.6.6 while the
+    published web image held 1.6.5. Uploaded, that would have offered every
+    miner on 2.0.35 an update to an interface version that does not exist --
+    the same defect 2.0.35 was cut to fix, for the second time in one
+    afternoon. It was caught by searching the image for the string instead of
+    trusting the tree.
+
+    So the image is the authority and const.ts is the claim being checked. A
+    stale build fails here rather than being described wrongly to every owner.
+    """
+    declared = declared_web_version()
+    for board in boards:
+        image = os.path.join(DIST, "stay-open-%s-%s-www.bin"
+                             % (board, version))
+        if not os.path.isfile(image):
+            sys.exit("no %s -- the web version in the notes is confirmed "
+                     "against the packed image, so it cannot be written "
+                     "before the image exists" % image)
+        with open(image, "rb") as fh:
+            blob = fh.read()
+        if declared.encode("utf-8") not in blob:
+            found = sorted(set(
+                m.decode("ascii")
+                for m in re.findall(rb"[0-9]+\.[0-9]+\.[0-9]+ 20[0-9]{6}",
+                                    blob)))
+            sys.exit(
+                "const.ts declares WEB_VERSION %r but %s does not contain "
+                "that string%s.\n\n"
+                "The marker tells a miner which interface this release "
+                "carries, and the miner runs the image, not the source tree. "
+                "Publishing the declared value when the image holds a "
+                "different one advertises an interface update that does not "
+                "exist. Rebuild the interface, or check that const.ts was not "
+                "bumped after this release was packaged."
+                % (declared, image,
+                   " (it holds %s)" % ", ".join(found) if found else ""))
+    return declared
+
+
+def notes_with_web_version(notes_file, version, boards):
     """Copy the notes, appending a machine-readable web version.
 
     Why this exists: the miner's Check for Updates had no way to tell whether
@@ -143,7 +192,7 @@ def notes_with_web_version(notes_file, version):
     Generated rather than hand-written into docs/releases/<version>.md, so it
     cannot drift from what was actually built.
     """
-    web = web_version()
+    web = web_version(version, boards)
     with open(notes_file, encoding="utf-8") as fh:
         body = fh.read()
 
@@ -266,7 +315,8 @@ def main():
     # firmware tag. Done to a copy in dist/, never to the committed file.
     if github:
         if notes_file:
-            notes_file, web = notes_with_web_version(notes_file, version)
+            notes_file, web = notes_with_web_version(notes_file, version,
+                                                     boards)
             print("release notes carry web version %s" % web)
         else:
             print("WARNING: no docs/releases/%s.md, so these notes will not "
