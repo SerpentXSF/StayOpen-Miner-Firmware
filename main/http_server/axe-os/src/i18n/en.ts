@@ -77,7 +77,8 @@ const lang = {
             system_fault: 'Hardware fault',
             overheated: 'Device has overheated - See settings.',
             power_fault: 'Check your Power Supply.',
-            low_freq: 'Frequency is set low - See settings.'
+            low_freq: 'Frequency is set low - See settings.',
+            on_failover: 'Mining on a failover endpoint (pool %s), not the configured primary.'
         },
         card: {
             hash_rate: 'HashRate',

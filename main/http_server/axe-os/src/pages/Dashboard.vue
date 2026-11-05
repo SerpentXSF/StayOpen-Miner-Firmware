@@ -246,12 +246,38 @@ const statusProc = computed((): MinerStatusDataProc => {
   }
 });
 
+/* Which pools are running on their failover endpoint rather than the primary
+ * the owner configured.
+ *
+ * Pool A's flag and the secondaries' flags are separate mechanisms -- pool A
+ * steps to `fallbackStratumURL` after MAX_RETRY_ATTEMPTS in stratum_task.c,
+ * each secondary steps independently -- but to an owner they are one question,
+ * so they are answered in one place. Pool A is listed first because it is the
+ * only one whose failover also resets the share counters.
+ */
+const usingFallback = computed(() => !!(appStore.statusRaw as any)?.isUsingFallbackStratum);
+
+const failoverPools = computed(() => {
+  const out: string[] = [];
+  if (usingFallback.value) out.push('A');
+  // Only the secondaries the miner is actually using. `secondaries` lists every
+  // pool that has a host, whether or not dual mining is switched on, and the
+  // card below is hidden on `enabled` -- so counting them unconditionally would
+  // name a pool in the alert whose card is not on the page to look at.
+  if (dualPool.value.enabled) {
+    for (const p of dualPool.value.secondaries) {
+      if (p.failover) out.push(p.letter);
+    }
+  }
+  return out;
+});
+
 const showWarningWrap = computed(() => {
   // systemError belongs here too: this gates the whole alert column, so an
   // alert added below without a matching condition here is simply never
   // rendered. A hardware fault reported by the firmware and shown nowhere is
   // the exact failure this column exists to prevent.
-  return appStore.statusRaw?.systemError || appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
+  return appStore.statusRaw?.systemError || appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || failoverPools.value.length > 0 || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
 })
 
 const hashrateInfo = computed(() => {
@@ -595,6 +621,11 @@ const gaugeColor = computed(() => {
           <a-alert v-if="appStore.statusRaw?.overheat_mode" :showIcon="true" type="error" :message="dal('overheated')" class="db-alert"></a-alert>
           <a-alert v-if="appStore.statusRaw?.power_fault" :showIcon="true" type="error" :message="`${appStore.statusRaw?.power_fault} ${dal('power_fault')}`" class="db-alert"></a-alert>
           <a-alert v-if="!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400" :showIcon="true" type="warning" :message="dal('low_freq')" class="db-alert"></a-alert>
+          <!-- A miner on a failover endpoint is working normally, so nothing
+               else on the page looks wrong. It is still not mining where the
+               owner pointed it, and it stays there until the failover in turn
+               fails enough times to step back. -->
+          <a-alert v-if="failoverPools.length" :showIcon="true" type="warning" :message="dal('on_failover').replace('%s', failoverPools.join(', '))" class="db-alert"></a-alert>
         </a-space>
       </a-col>
 
@@ -984,7 +1015,17 @@ const gaugeColor = computed(() => {
         <section class="bottom-row">
           <div class="card">
             <div class="card-header">
-              <div class="card-title">{{ dll('title') }} [{{ appStore.statusRaw?.isUsingFallbackStratum ? dll('fallback') : dll('primary') }}]</div>
+              <div class="card-head-left">
+                <div class="card-title">{{ dll('title') }}</div>
+                <!-- Which endpoint is in use was already here, as a bracketed
+                     word in the title set in the same colour either way. Both
+                     states are still named -- saying only "fallback" when
+                     something is wrong teaches nobody where to look -- but
+                     only one of them is coloured like a warning. -->
+                <span class="dual-badge" :class="{ 'is-warn': usingFallback }">
+                  {{ usingFallback ? dll('fallback') : dll('primary') }}
+                </span>
+              </div>
               <!-- Pool A had no connection badge while every secondary did, so
                    this was the one pool whose state the page never showed. -->
               <span class="dual-badge" :class="{ 'is-live': poolAConnected }">
@@ -1032,7 +1073,7 @@ const gaugeColor = computed(() => {
                         style="margin-left:.5rem">
                     {{ p.connected ? dll('poolB_connected') : dll('poolB_waiting') }}
                   </span>
-                  <span v-if="p.failover" class="dual-diff" style="margin-left:.4rem">
+                  <span v-if="p.failover" class="dual-badge is-warn" style="margin-left:.4rem">
                     {{ dll('pool_failover') }}
                   </span>
                 </div>
@@ -1383,6 +1424,19 @@ const gaugeColor = computed(() => {
 .dual-badge.is-live {
   color: var(--primary-color);
   border-color: var(--primary-color);
+}
+/* The same palette the alert column uses for a warning, so a failover badge
+   and the failover alert above it read as one state and not two findings. */
+.dual-badge.is-warn {
+  color: #f97316;
+  border-color: rgba(251, 146, 60, 0.45);
+  background-color: rgba(249, 115, 22, 0.1);
+}
+.card-head-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 
 .dual-split-row {
