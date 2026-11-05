@@ -320,10 +320,25 @@ That is a real feature with real exposure and is not attempted here.
   the redirect, on both hops.
 - The LRU eviction mechanism was demonstrated, and then shown to be
   unreachable during an upload. Both results are above.
-- **Not checked: the fixed interface has not been loaded in a browser.** It
-  builds and type-checks. The boards cannot run it until a release carries it,
-  and the BC01 was returned to published 2.0.34 rather than left on an
-  unreleased build.
+- **The fix is now installed.** 2.0.35 was published on 2026-11-04 and the
+  BC01 was updated to it over the air the same hour -- application image
+  first, 36 s, then the web image 22 s later once the application was 90 s
+  past its 60-second confirm window. It came back on `2.0.35 20261104` with
+  `WWWVersion 1.6.5 20261104`, `authEnabled` still true, mining at
+  1,636 GH/s. So the board is serving the interface that carries the fix.
+- **Still not checked: that interface has not been loaded in a browser.** It
+  builds, `vue-tsc` passes, and the token-attaching line is present in the
+  shipped bundle. What has not happened is a person opening the page on a
+  miner with a password and uploading an image through it, which is the only
+  test of the defect itself. The authenticated upload has been proven from a
+  script six times out of six across two boards; the browser is the part of
+  the path that was broken and the part still unexercised.
+- **The BC04 was not updated.** It stopped answering on the network between
+  two readings on 2026-11-04 -- healthy at 28.33 h uptime and 5,093 GH/s, then
+  no ICMP and no HTTP, with a subnet sweep finding nothing answering as it.
+  Nothing had been pushed to it: the failure was the first `/api/system/info`
+  read, before any upload. Cause unknown and not guessed at here. It is noted
+  because this entry would otherwise read as though both boards carry the fix.
 
 ## The interface and the release tooling each reported something untrue (fixed in 2.0.35)
 
@@ -591,9 +606,31 @@ they could be exercised without a board:
 - The mode mapping was checked over seven pool configurations. The new rule is
   right on all seven; the old one on three.
 
-What is **not** checked: no release was cut through the reordered `ship.py`
-path, so the ordering change is reasoned from the code rather than observed.
-Nothing has yet published with `--push` under the widened guards.
+**Observed 2026-11-04, cutting 2.0.35.** This paragraph used to say the
+ordering change was reasoned from the code and that nothing had published with
+`--push` under the widened guards. Both were exercised:
+
+- The widened source checks ran for `--push`: a clean tree, a successful
+  `git fetch`, no unpushed commits, and `HEAD` on `origin/main`. `SOURCE.txt`
+  on the release names `61f21ef`, which `git branch --remotes --contains`
+  confirms is on `origin/main` — the thing those checks exist to guarantee.
+- The release was created **before** `gh-pages` was force-pushed, in that
+  order, and `publish_flasher.py` then pushed. The live
+  `manifest-bc01-update.json` reports version `2.0.35` with
+  `new_install_prompt_erase: true` and five parts at `0x0`, `0xD000`,
+  `0x16000`, `0x20000` and `0x9E0000`. The partition part is 3,072 bytes at
+  `0xD000`, so it stops at `0xDC00` and does not reach `nvs` at `0xE000` —
+  the interval check above, on a real published manifest.
+- The notes defaulted to `docs/releases/2.0.35.md` with no `--notes-file`,
+  which is what that change was for.
+- The stale-artifact guard in `make_release.py` fired on the first attempt,
+  correctly: `dist/` still held the sixteen 2.0.34 `.bin` files. Its message
+  was out of date and was corrected in the same session, since the
+  consequence it named had already been removed by the asset-list change.
+
+What is **not** checked: nothing has exercised a `gh release create` failing
+*after* the release step was moved ahead of the flasher push, which is the
+specific failure that reordering was meant to make harmless.
 
 ## Pool A kept building from a dead session after it dropped (fixed in 2.0.31)
 
