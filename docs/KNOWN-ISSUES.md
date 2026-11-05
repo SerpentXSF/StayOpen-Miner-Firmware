@@ -79,9 +79,9 @@ than blanket:
 | The dashboard shows every configured pool, and the split bar reflects the real weights | **Confirmed on the rendered page, 2026-10-17**, on a BC04 running the release: four pool blocks each with their own CONNECTED badge, a four-segment split bar reading A 25% / B 25% / C 25% / D 25%, and per-pool share counts (A 27420/22, B 4234/0, C 4195/0, D 3583/0). Checked by the owner from their own browser; the page needs a sign-in on a non-local host, so it is not something I can reach |
 | Pool C and D panels are named for their own pool, not "Pool B" | **Confirmed on the rendered page, 2026-10-25**, on both boards, by the owner from their own browser. On a BC04 in Quad mode every secondary carries its own failover heading -- "Pool B failover", "Pool C failover", "Pool D failover" -- each inside its own pool's card, and on a BC01 the Dual Pool tab heads its single failover block "Pool B failover". This was the screen the mislabelling was on, and it is gone from it. It had been open since 2.0.31 because the dashboard screenshots that closed the row above are a different page |
 
-## The browser could not update a miner that had a password (fixed in the tree, in no release)
+## The browser could not update a miner that had a password (fixed in 2.0.35)
 
-**Status: fixed on `main`, in no published release.** Found 2026-11-04 when an
+**Status: fixed and published in 2.0.35.** Found 2026-11-04 when an
 owner could not update a BC01 from its own web interface: both images, three
 automatic retries each, every attempt failed with *Upload failed! Do not close
 this page.*
@@ -210,10 +210,10 @@ That is a real feature with real exposure and is not attempted here.
   and the BC01 was returned to published 2.0.34 rather than left on an
   unreleased build.
 
-## The interface and the release tooling each reported something untrue (fixed in the tree, in no release)
+## The interface and the release tooling each reported something untrue (fixed in 2.0.35)
 
-**Status: fixed on `main`, and in no published release.** If you are running
-2.0.34 — the newest release — you have every one of these. They were found by
+**Status: fixed and published in 2.0.35.** If you are running
+2.0.34 or earlier you have every one of these. They were found by
 reading, on 2026-10-27, in the same pass that produced the 2.0.34 Stratum
 fixes; none of them is a crash and none needed a board, which is why they were
 not held back for one.
