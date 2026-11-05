@@ -316,13 +316,21 @@ def main():
     os.makedirs(DIST, exist_ok=True)
     print("building release artifacts for %s %s from %s" % (board, ver, build))
 
-    # Anything left in dist/ from another version is swept into the release by
-    # ship.py, which collects assets with a plain *.bin glob. That has very
-    # nearly shipped a stale image twice: a 2.0.28 set left behind in the
+    # Anything left in dist/ from another version used to be swept into the
+    # release: ship.py collected assets with a plain *.bin glob. That has very
+    # nearly shipped a stale image twice -- a 2.0.28 set left behind in the
     # release worktree, and a -dev build sitting beside the real one. Neither
     # reached a release, and both times the only thing that caught it was
-    # someone reading the file list. Checked here, before any work is done,
-    # because this is where it is still cheap to fix.
+    # someone reading the file list.
+    #
+    # ship.py no longer globs: it builds the asset list from the names this
+    # script produces and refuses an unexpected .bin, and publish_flasher.py
+    # names its images too. So the consequence of removing this check is no
+    # longer a stale image in a release; it is a refusal at the end, after
+    # both boards have been built. That is a worse place to find out and not a
+    # dangerous one, which is the honest reason this stays rather than the one
+    # the comment used to give. Checked before any artifact is written, which
+    # is where it is still cheap to fix.
     # Matched against the exact names this script produces, not against a
     # substring of the version. "-%s-" % ver is satisfied by
     # stay-open-bc04-2.0.31-dev-ota.bin, which is precisely the -dev build the
@@ -337,8 +345,9 @@ def main():
                    and not good.match(f))
     if stale:
         sys.exit("dist/ holds %d file(s) this release does not produce: %s -- "
-                 "ship.py collects assets with a plain *.bin glob and would "
-                 "upload them alongside %s. Remove them and run this again."
+                 "ship.py would refuse to cut %s with them there, and nothing "
+                 "below should run until it is clear which version dist/ "
+                 "describes. Move them to dist/archive/ and run this again."
                  % (len(stale), ", ".join(stale), ver))
 
     build_config(board)
