@@ -335,18 +335,38 @@ That is a real feature with real exposure and is not attempted here.
   `WWWVersion` came out equal. Before the fix that row read *update available*
   on every load, permanently, because the interface compared the application
   version against the web version.
-- **Still not checked: an upload driven from the browser.** The page loads and
-  parses, but nobody has yet put a file through the Browse control on a miner
-  with a password set, which is the only test of the upload defect itself. The
-  authenticated upload has been proven from a script six times out of six
-  across two boards; the browser is the part of the path that was broken and
-  the part still unexercised. Note that two of the four `.bin` files in a
-  release are rejected before anything is sent -- the raw `-app.bin` (`0xE9`)
-  and `-www.bin` (`0x01`) are not update containers -- so a test must use
-  `-ota.bin` (`0xAA`) or `-www-ota.bin` (`0x55`). Uploading the interface
-  image is the safer of the two: identical code path, but the application
-  partition is never written, so a failure cannot leave the board without a
-  good app image.
+- **The upload is confirmed from a browser, which is the test of the defect
+  itself.** On 2026-11-04 the owner put both update containers through the
+  Browse control on the BC01 with a password set --
+  `stay-open-bc01-2.0.35-ota.bin` and then
+  `stay-open-bc01-2.0.35-www-ota.bin`. Both succeeded. Before the fix neither
+  could: the page sent no `Authorization` header and `api_auth_require()`
+  rejects an unauthenticated upload on any miner with a password, so the only
+  owners for whom this ever worked were the ones who had left their miner
+  open.
+
+  Verified afterwards rather than taken from the page's own success message:
+
+  | check | result |
+  | --- | --- |
+  | `lastRestartReason` | `Web interface update complete`, so the interface upload was the second of the two and the application upload had already cleared its confirm window |
+  | application version, four readings 107 s to 243 s | `2.0.35 20261104` throughout, uptime climbing, no restart |
+  | rollback | **not a tautology**: the inactive OTA slot still held `2.0.34 20261026`, so a silent revert would have reported that |
+  | `authEnabled` | still true -- the upload did not clear the password |
+  | hash rate | 1,498 to 1,707 GH/s, mining normally |
+
+  The badge was recomputed at the same time by running the shipped regex over
+  the live release body rather than reading it off the page: one marker,
+  `1.6.5 20261104`, equal to the board's `WWWVersion`, so the row resolves to
+  *unchanged in this release*. Both halves of the parse and both halves of
+  the upload are now exercised by the parts that run them.
+
+  Two of the four `.bin` files in a release are refused by the page before
+  anything is sent, and that is correct: the raw `-app.bin` (`0xE9`) and
+  `-www.bin` (`0x01`) are not update containers. Only `-ota.bin` (`0xAA`) and
+  `-www-ota.bin` (`0x55`) are. If a test has to pick one, the interface image
+  is the safer: identical code path, but the application partition is never
+  written, so a failure cannot leave the board without a good app image.
 - **The BC04 is on it too.** It had stopped answering on the network between
   two readings on 2026-11-04 -- healthy at 28.33 h uptime and 5,093 GH/s, then
   no ICMP and no HTTP, with a subnet sweep finding nothing answering as it --
