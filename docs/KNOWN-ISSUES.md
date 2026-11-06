@@ -377,6 +377,50 @@ That is a real feature with real exposure and is not attempted here.
   reject counters: it came back on pool A's *fallback* URL with its counters
   zeroed.
 
+## The web version check offered a downgrade to anyone running an unreleased build
+
+**Found 2026-11-05 by running into it, not by reading the code.** A BC01 was
+updated to an interface built from `main` and ahead of the current release, and
+its settings page immediately offered a web "update" to the *older* released
+version, with a download button.
+
+### Why
+
+The web half of the update check compared versions for equality:
+
+    } else if (releaseWeb === WEB_VERSION.trim()) {   // unchanged
+    } else {                                          // "available"
+
+Anything not equal was an update. There was no way for it to say "the release
+is older than what you are running", so being ahead of a release and being
+behind one produced the same answer, and the answer was wrong for one of them.
+
+What makes this a defect rather than an oversight is that **the firmware check
+a few lines below already got it right**, using `isVersionNewer()` to order the
+two versions. The same function held both comparisons and they disagreed about
+what comparing versions means. The web half could have called the helper
+sitting next to it.
+
+### Who it affected
+
+Not an owner on a published release: they are never ahead of one, so the check
+was right for them every time, which is why it survived. It affected exactly
+the person testing the next release -- for whom the page offered to overwrite
+the build under test with the previous one, on a button labelled as an update.
+
+### Fixed
+
+Three outcomes instead of two. Equal is `unchanged`; release newer is
+`available`; release older is the new `ahead` state, which sets no download
+URL and does not set `foundUpdate`, so no download is offered and the page
+still reports the miner as up to date, which it is. The row shows a neutral
+tag reading *Newer than the published release*, in both locales.
+
+A footnote on the rollback that did not happen: taking the offer would not have
+bricked anything, since a web image carries no application code and the board
+would simply have served the older interface. The cost was the test build
+disappearing without warning.
+
 ## The interface and the release tooling each reported something untrue (fixed in 2.0.35)
 
 **Status: fixed and published in 2.0.35.** If you are running

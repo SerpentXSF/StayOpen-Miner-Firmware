@@ -311,6 +311,7 @@ const lang = {
         remote_ota_new_web: "New Web Version Available",
         remote_ota_new_fw: "New Firmware Version Available",
         remote_ota_web_unchanged: "Unchanged in this release",
+        remote_ota_web_ahead: "Newer than the published release",
         remote_ota_web_unknown: "This release does not say which web version it carries",
         remote_ota_then_browse: "Downloads the file — then choose it with Browse below to install it.",
         remote_ota_downloading: "Downloading..."

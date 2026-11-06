@@ -69,7 +69,7 @@ const otaChecking = ref<boolean>(false);
  * wins -- ship.py appends at the end, so prose above it cannot outrank it.
  */
 const WEB_VERSION_RE = /^[ \t]*<!--[ \t]*stayopen-web-version:[ \t]*([^>\n]*?)[ \t]*-->[ \t]*$/gm;
-const webUpdateState = ref<'none' | 'available' | 'unchanged' | 'unknown'>('none');
+const webUpdateState = ref<'none' | 'available' | 'unchanged' | 'ahead' | 'unknown'>('none');
 
 const remoteWebUrl = ref<string | null>(null);
 const remoteWebReleaseUrl = ref<string | null>(null);
@@ -432,15 +432,35 @@ const checkGithubUpdates = async () => {
         remoteWebReleaseUrl.value = webRes.value.data.html_url || `https://github.com/${UPDATE_REPO_WWW}/releases/tag/${webRes.value.data.tag_name}`;
         remoteWebNotes.value = webRes.value.data.body || '';
 
+        /*
+         * Three outcomes, not two. This was written as "equal, or else an
+         * update is available", which cannot tell a miner that is behind the
+         * release from one that is ahead of it -- and the firmware check a
+         * few lines below was already ordering its versions with
+         * isVersionNewer, so the two halves of the same function disagreed
+         * about what comparing versions means.
+         *
+         * Being ahead is not hypothetical: anyone running a build that is not
+         * yet released is, including whoever is testing the next one. For them
+         * the row offered an "update" to an OLDER interface, with a download
+         * button, and taking it would have quietly overwritten the build they
+         * were testing with the previous release.
+         *
+         * 'ahead' deliberately sets no remoteWebUrl and does not set
+         * foundUpdate, so no download is offered and the page still reports
+         * that the miner is up to date -- which it is.
+         */
         if (!releaseWeb) {
           webUpdateState.value = 'unknown';
         } else if (releaseWeb === WEB_VERSION.trim()) {
           webUpdateState.value = 'unchanged';
-        } else {
+        } else if (isVersionNewer(releaseWeb, WEB_VERSION)) {
           webUpdateState.value = 'available';
           remoteWebUrl.value = binAsset.browser_download_url;
           remoteWebVersion.value = releaseWeb;
           foundUpdate = true;
+        } else {
+          webUpdateState.value = 'ahead';
         }
       }
     }
@@ -557,6 +577,7 @@ onMounted(async () => {
             <a-tag color="warning"><ArrowUpOutlined /> {{ remoteWebVersion }}</a-tag>
           </template>
           <a-tag v-else-if="webUpdateState === 'unchanged'" color="success">{{ sel('remote_ota_web_unchanged') }}</a-tag>
+          <a-tag v-else-if="webUpdateState === 'ahead'">{{ sel('remote_ota_web_ahead') }}</a-tag>
           <a-tag v-else-if="webUpdateState === 'unknown'">{{ sel('remote_ota_web_unknown') }}</a-tag>
           <div v-if="remoteWebUrl" style="display: flex; align-items: center; gap: 8px;">
             <a-popover v-if="remoteWebNotes || remoteWebReleaseUrl" :title="sel('remote_ota_release_notes') || 'Notes'" trigger="hover">
