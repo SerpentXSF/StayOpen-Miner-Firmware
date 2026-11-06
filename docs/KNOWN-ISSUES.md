@@ -3050,6 +3050,35 @@ seconds and kept hashing on it at 1,475 GH/s. The owner confirmed that both
 the banner and the amber `FALLBACK` badge rendered. The original primary was
 restored afterwards and the board returned to it with shares climbing.
 
+**It happened a second time, and again nobody noticed (2026-11-06).** A
+routine state read taken before an unrelated web update found the BC04 with
+`isUsingFallbackStratum` 1: pool A's configured primary is a node on the local
+network, and the board had stepped to its public fallback and stayed there,
+hashing 5,220 GH/s to the wrong endpoint. Uptime was 44.67 h with
+`lastRestartReason` `Web interface update complete`, so the failover happened
+some time inside that window and nothing marked when.
+
+Two things this confirms rather than merely argues:
+
+- **The counters cannot date it.** 35,212 accepted and 67 rejected had
+  accumulated since the failover zeroed them, not since boot, so the reject
+  rate for that window belongs to the fallback pool and the primary's own
+  window is gone. This is the third counter reset recorded in two days.
+- **The board was running the interface that could not show it.** The BC04 was
+  still on web `1.6.5`, which names the state in the pool card title in the
+  same colour as everything around it. The amber badge and the alert exist
+  precisely because that was not enough, and this instance is what the fix was
+  for -- found by an API read, which is the thing an owner has no reason to do.
+
+Both boards were taken to web `1.6.7` the same day, so the next occurrence
+should announce itself. The underlying question is still open: **what makes
+pool A fail over here at all.** Two instances, both on a primary that is a
+machine on the same LAN, neither with a recorded cause. A restart clears the
+state without explaining it, and every web update performs a restart, which
+means routine maintenance quietly destroys the evidence. Capture
+`isUsingFallbackStratum` and `uptimeSeconds` on every sample before reasoning
+about reject rates, and snapshot pool state before any push.
+
 **Note for anyone trying to reproduce this: `/api/system/pool/drop` cannot do
 it.** That endpoint refuses pool A by name, because pool A's transport has no
 lock and its receive timeout is ten minutes -- the same missing lock already
