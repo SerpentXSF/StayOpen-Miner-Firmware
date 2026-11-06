@@ -416,6 +416,20 @@ URL and does not set `foundUpdate`, so no download is offered and the page
 still reports the miner as up to date, which it is. The row shows a neutral
 tag reading *Newer than the published release*, in both locales.
 
+**Confirmed on hardware 2026-11-06.** A BC01 was updated to web `1.6.7`, which
+at the time was ahead of the published `1.6.5`, and its settings page reported
+the web row as *Newer than the published release* with **no download button**,
+while the summary below it still read *Your firmware is up to date*. That last
+detail is the one worth having confirmed: an `ahead` state that still set
+`foundUpdate` would have left the page contradicting itself, naming no update
+and announcing one in the same breath.
+
+Verified separately from the board's own served bytes rather than from its
+reported version string, because a miner reporting a new version number proves
+its manifest took, not that the code did. The asset bundle was fetched back off
+the miner over HTTP and decompressed, and both new strings were present in both
+locales.
+
 A footnote on the rollback that did not happen: taking the offer would not have
 bricked anything, since a web image carries no application code and the board
 would simply have served the older interface. The cost was the test build
