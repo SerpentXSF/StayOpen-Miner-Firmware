@@ -2956,10 +2956,49 @@ counter going backwards and nothing would say why.
 
 A board that has failed over is **mining on pool A's fallback URL, not the
 primary the owner configured**, and stays there until three more failures flip
-it back. `isUsingFallbackStratum` is the only indication, and nothing in the
-interface draws attention to it. The BC04 was in that state for the whole
-period after its outage. A restart clears it, since `is_using_fallback` lives
-in RAM and `SYSTEM_init` starts at the primary.
+it back. The BC04 was in that state for the whole period after its outage. A
+restart clears it, since `is_using_fallback` lives in RAM and `SYSTEM_init`
+starts at the primary.
+
+~~`isUsingFallbackStratum` is the only indication, and nothing in the interface
+draws attention to it.~~ **That was wrong and is corrected here.** The
+dashboard did report it: pool A's card title read `Pool [Primary]` or
+`Pool [Fallback]`, and a secondary on failover carried an `on failover`
+marker. The real fault was weaker and more interesting -- both were drawn in
+the same colour as everything around them, so the abnormal state was
+typographically identical to the normal one. The state was present on the page
+and still took an API read to notice, which is a lesson about salience rather
+than about missing data: *reporting a state is not the same as showing it.*
+
+**Fixed 2026-11-05.** Pool A's endpoint moved out of the card title into a
+badge, amber on the failover endpoint and neutral on the primary; the
+secondaries' marker became the same badge instead of grey text; and one alert
+was added to the existing warning column naming every pool that is on its
+failover. Both states are still named, because a badge that appears only when
+something is wrong teaches nobody where to look. The colours are the ones the
+alert column already used, so the badge and the alert read as one state.
+
+Counting only the secondaries the miner is actually using matters here: the
+secondaries list holds every pool that has a host whether or not dual mining is
+switched on, while the card is hidden on `dualEnable`, so counting them
+unconditionally would name a pool in the alert whose card is not on the page.
+
+**Confirmed on hardware 2026-11-05, against a real failover rather than a
+mock.** A BC01 running the build had pool A's primary pointed at a hostname
+under `.invalid`, which RFC 2606 reserves so that nothing is ever contacted,
+and was restarted; the resolution-failure path counts `MAX_RETRY_ATTEMPTS` at
+one second each, so it stepped to its configured fallback in about three
+seconds and kept hashing on it at 1,475 GH/s. The owner confirmed that both
+the banner and the amber `FALLBACK` badge rendered. The original primary was
+restored afterwards and the board returned to it with shares climbing.
+
+**Note for anyone trying to reproduce this: `/api/system/pool/drop` cannot do
+it.** That endpoint refuses pool A by name, because pool A's transport has no
+lock and its receive timeout is ten minutes -- the same missing lock already
+listed as an open defect. So the only way to force a pool A failover is a
+config change plus a restart, which is two cold starts rather than a
+reconnect. Pool A is both the only pool whose failover resets the share
+counters and the only pool whose session cannot be ended for testing.
 
 ## The rejected shares were the pool's, and the miner was already reporting why
 
