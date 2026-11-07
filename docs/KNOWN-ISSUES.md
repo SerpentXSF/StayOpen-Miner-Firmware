@@ -3050,6 +3050,15 @@ seconds and kept hashing on it at 1,475 GH/s. The owner confirmed that both
 the banner and the amber `FALLBACK` badge rendered. The original primary was
 restored afterwards and the board returned to it with shares climbing.
 
+**Correction, measured 2026-11-06: those three seconds are not three seconds
+after the restart.** The count starts when the stratum task first tries, not
+at power-on, and everything before that -- WiFi association and the rest of
+init -- sits outside it. A BC01 driven through the same forced failover was
+**still on its primary at 21 s of uptime and on the fallback by 37 s**. The
+claim about the code was right; the operational reading taken from it was
+wrong. A check made a few seconds after a restart will still show the primary,
+and reads as the failover having failed when it has not yet been attempted.
+
 **It happened a second time, and again nobody noticed (2026-11-06).** A
 routine state read taken before an unrelated web update found the BC04 with
 `isUsingFallbackStratum` 1: pool A's configured primary is a node on the local
@@ -3086,6 +3095,106 @@ listed as an open defect. So the only way to force a pool A failover is a
 config change plus a restart, which is two cold starts rather than a
 reconnect. Pool A is both the only pool whose failover resets the share
 counters and the only pool whose session cannot be ended for testing.
+
+## The first reject rate measured inside one endpoint's own window (2026-11-07)
+
+The section above establishes that the share counters measure *since the last
+pool A failover*, a window the counters themselves cannot report, so every
+rate in this file computed as counter-over-uptime is a lower bound on an
+unknown span. This section is the first measurement without that defect.
+`watch_rejects.py` was rewritten to detect a counter reset, cut the run into
+**windows** between resets, and refuse to quote a rate for any window that
+covers more than one endpoint. A BC01 then ran under it continuously.
+
+Three windows, one board, one evening:
+
+| window | endpoint | span | accepted | rejected | rate | reasons | stratum diff |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | local primary | 1.37 h, **partial** | 1,300 | 0 | -- | -- | 680 |
+| 2 | pool A's fallback, in substance | 0.88 h | 723 | 3 | 0.413% | 3 x `Stale` | 414 / 730 / 10,000 |
+| 3 | local primary, from a cold start | 13.76 h, **still open** | 13,796 | 20 | 0.145% | 14 x `Above target`, 6 x `Stale` | 1,024 / 497 / 665 |
+
+Window 1 is marked partial because the watch joined it in flight: its totals
+are a floor, and its zero rejects mean only "none in the 1.37 h we watched".
+Window 2 was forced -- pool A's primary pointed at a `.invalid` hostname and
+the board restarted -- and the script labelled it `MIXED`, because the endpoint
+flag moved inside it. That label is the conservative one and worth keeping, but
+the record is sharper than the label: of its 211 samples **209 were on the
+fallback, and the 2 primary samples both carried `sharesAccepted` 0**, so no
+share in window 2 was earned on the primary. Window 3 opened at 7 s of uptime
+on the configured primary and is still open; its figures are as of 11:59 on
+2026-11-07.
+
+### Almost every `Above target` arrived in one 64-second burst, right after the difficulty was lowered
+
+Window 3's 20 rejects are not spread across 13.76 hours. **14 of them -- every
+`Above target` in the window -- landed inside about 64 seconds**, and the
+boundary they landed on is specific:
+
+| uptime | stratum diff | accepted | rejected | reasons |
+| --- | --- | --- | --- | --- |
+| 2,061 s | 1,024 | 351 | 2 | `Stale=2` |
+| 2,076 s | **497** | 356 | 2 | `Stale=2` |
+| 2,092 s | 497 | 359 | **7** | `Above target=5` |
+| 2,107 s | 497 | 361 | 10 | `Above target=8` |
+| 2,123 s | 497 | 365 | 15 | `Above target=13` |
+| 2,140 s | 497 | 368 | 16 | `Above target=14` |
+| 2,155 s | 497 | 374 | 16 | `Above target=14` |
+
+The first `Above target` of the whole window appears in the **first 15-second
+poll after `stratumDiff` dropped from 1,024 to 497**, and they stop 64 seconds
+later. Across the burst accepted rose by 12 while rejected rose by 14: for
+about a minute **more than half of what the board submitted was refused**.
+Nothing resembling it occurs in the remaining 13.2 hours, and the window holds
+no failover, no unreachable poll, and no secondary on its failover.
+
+`Above target` means the share did not meet the difficulty the pool was judging
+against. A burst of exactly that, starting at the moment the pool lowers the
+difficulty, is the shape of a difficulty-change race: the miner adopts the
+easier target at once and submits to it, while the pool is still scoring
+against the harder one it has not finished retiring.
+
+**The second difficulty change in the same window is a control, and it behaves
+as that reading predicts.** At 10,684 s of uptime the difficulty moved 497 ->
+665 -- *upward* -- and produced no `Above target` at all. An increase cannot
+produce one: a share aimed at a harder target still clears an easier one. Only
+a decrease can bite.
+
+That is one decrease and one increase, on one board, with the pool's own
+vardiff choosing when. It is a lead with a mechanism and a control that passes,
+not a confirmed defect -- and it names the test that would settle it: drive
+pool A through repeated difficulty decreases and count `Above target` against
+each one.
+
+### This retracts a hypothesis written the night before
+
+With only window 1 (1.37 h, no rejects) and window 2 (3 rejects, all `Stale`)
+in hand, the obvious reading was that `Stale` belongs to the public fallback
+while the local primary produces nothing -- which also appeared to explain the
+BC04's 67 `Stale` accumulating while it sat on its own fallback. **Window 3
+refutes the strong form of that.** The local primary produced 6 `Stale` of its
+own in 13.76 h, so `Stale` is not a property of the fallback, and window 1's
+zero was simply too short a sample to mean anything.
+
+What survives is weaker and still worth testing. On the `Stale` count alone:
+
+| | rejects | submissions | rate | exact 95% interval |
+| --- | --- | --- | --- | --- |
+| local primary (window 3) | 6 | 13,816 | 0.0434% | 0.0159% -- 0.0945% |
+| pool A's fallback (window 2) | 3 | 726 | 0.413% | 0.0853% -- 1.208% |
+
+The point estimates differ by about 9.5x, but on three events the intervals
+**overlap**, between 0.085% and 0.095%, so the difference is suggestive and
+not established. Settling it needs a fallback window measured in hours rather
+than 53 minutes, and that is not a window anyone wants to arrange deliberately
+for long.
+
+### What window 3 does settle
+
+`Above target` has never appeared on the fallback in any recorded window, and
+it is the majority of the primary's rejects. Whatever produces it is on the
+primary's side of the wire -- and the burst above localises it further, to the
+moment the primary's vardiff steps down.
 
 ## The rejected shares were the pool's, and the miner was already reporting why
 
