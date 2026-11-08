@@ -3106,13 +3106,14 @@ unknown span. This section is the first measurement without that defect.
 **windows** between resets, and refuse to quote a rate for any window that
 covers more than one endpoint. A BC01 then ran under it continuously.
 
-Three windows, one board, one evening:
+Four windows, one board, across an evening and the next day:
 
 | window | endpoint | span | accepted | rejected | rate | reasons | stratum diff |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | local primary | 1.37 h, **partial** | 1,300 | 0 | -- | -- | 680 |
 | 2 | pool A's fallback, in substance | 0.88 h | 723 | 3 | 0.413% | 3 x `Stale` | 414 / 730 / 10,000 |
-| 3 | local primary, from a cold start | 13.76 h, **still open** | 13,796 | 20 | 0.145% | 14 x `Above target`, 6 x `Stale` | 1,024 / 497 / 665 |
+| 3 | local primary, cold start to a deliberate stop | **21.69 h, closed** | 21,426 | 32 | 0.149% | 14 x `Above target`, 18 x `Stale` | 1,024 / 497 / 665 |
+| 4 | local primary, cold start (the forced trial) | 0.87 h, still open | 964 | 6 | 0.62% | 6 x `Above target` | 1,024 / 438 / 585 |
 
 Window 1 is marked partial because the watch joined it in flight: its totals
 are a floor, and its zero rejects mean only "none in the 1.37 h we watched".
@@ -3121,9 +3122,14 @@ the board restarted -- and the script labelled it `MIXED`, because the endpoint
 flag moved inside it. That label is the conservative one and worth keeping, but
 the record is sharper than the label: of its 211 samples **209 were on the
 fallback, and the 2 primary samples both carried `sharesAccepted` 0**, so no
-share in window 2 was earned on the primary. Window 3 opened at 7 s of uptime
-on the configured primary and is still open; its figures are as of 11:59 on
-2026-11-07.
+share in window 2 was earned on the primary. **Window 3 is the one that
+matters**: it opened at 7 s of uptime on the configured primary, ran 21.69 h
+with the endpoint flag at 0 on every one of its 5,200-odd samples and no
+unreachable poll, and was closed by a restart taken deliberately to end it. It
+carries no `partial` and no `MIXED`, so its 0.149% is the first reject rate
+this firmware's documentation can attribute to one named endpoint over a known
+span. Window 4 is the trial described below and is still accumulating; its
+figures are as of 20:48 on 2026-11-07.
 
 ### Almost every `Above target` arrived in one 64-second burst, right after the difficulty was lowered
 
@@ -3160,11 +3166,89 @@ as that reading predicts.** At 10,684 s of uptime the difficulty moved 497 ->
 produce one: a share aimed at a harder target still clears an easier one. Only
 a decrease can bite.
 
-That is one decrease and one increase, on one board, with the pool's own
-vardiff choosing when. It is a lead with a mechanism and a control that passes,
-not a confirmed defect -- and it names the test that would settle it: drive
-pool A through repeated difficulty decreases and count `Above target` against
-each one.
+That was one decrease and one increase, on one board, with the pool's own
+vardiff choosing when -- a lead with a mechanism and a control that passed, and
+it named the test that would settle it: drive pool A through repeated
+difficulty decreases and count `Above target` against each one. **That test
+was then run, below.**
+
+### The decrease was forced on purpose, and it reproduced
+
+The board was restarted at 19:56:04 for exactly this. A restart opens a fresh
+pool A session, and this pool opens every session at difficulty 1,024 before
+its vardiff retargets -- so a restart manufactures a difficulty decrease
+without touching the pool's own configuration or the miner's. The 15-second
+watcher kept running throughout; a second poller at 5 seconds was added for the
+trial, which downloads the board's kernel log the instant `stratumDiff` drops,
+because that log carries millisecond timestamps for both the `set_difficulty`
+and every reject, and a poll cadence does not.
+
+The step came at **286 s** of uptime rather than the 2,076 s of the previous
+cold start, so the interval is not fixed and a trial cannot be timed by the
+clock. From the board's own log:
+
+| board ms | event |
+| --- | --- |
+| 284,313 | pool sends `mining.set_difficulty [438]`, down from 1,024 |
+| 284,313 | `stratum_task: Set stratum difficulty: 438` |
+| 284,343 | `create_jobs_task: New job difficulty 438` -- **applied 30 ms later** |
+| 288,303 | **first `Above target`**, 3.99 s after the announcement |
+| 289,303 | the pool issues its next job |
+| 319,313 | last `Above target` -- 6 rejects across 31 s |
+| 324,263 | submissions accepted again, and ever since |
+
+**Two decreases, two bursts; two increases, nothing.** The second increase
+arrived unprompted inside the same window -- 438 -> 585 at 929 s of uptime --
+and produced no `Above target` at all, the count holding at 6 for the rest of
+the window. Four difficulty changes, four outcomes in the direction the reading
+predicts.
+
+Both pollers recorded the same six rejects, by the same pool-assigned ids and
+the same millisecond timestamps, which is the cross-check: two independent
+samplers of one event agreeing on it.
+
+### The mechanism is the pool's, and this firmware is exonerated
+
+The first explanation offered above -- the pool grading an *old* job against the
+old target -- is **wrong**, and the kernel log is what refutes it. The rejects
+landed on the job the pool issued *after* the change, interleaved with accepts
+on that same job. A wholesale target mismatch cannot produce a mixture.
+
+What survives fits the mixture exactly: the pool announces the lower
+difficulty, the miner adopts it at once, and **the pool carries on grading
+against the old, higher difficulty for about half a minute.** The miner then
+submits everything that clears the new difficulty while the pool passes only
+the subset that also clears the old one. That makes a prediction with nothing
+fitted to it -- the accepted fraction during the burst should be the ratio of
+the two difficulties:
+
+| trial | burst | accepted fraction | predicted, new / old | gap |
+| --- | --- | --- | --- | --- |
+| 1,024 -> 497 | 12 accepted, 14 rejected | 0.462 | **0.485** | -0.024 |
+| 1,024 -> 438 | 5 accepted, 6 rejected | 0.455 | **0.428** | +0.027 |
+
+Both observations fall inside their exact 95% binomial intervals, and they miss
+from opposite sides.
+
+**This is therefore not a defect in this firmware.** `stratum_task` applied the
+new difficulty 30 ms after it arrived and `create_jobs_task` had it on the next
+job, which is the correct behaviour and the log shows it happening. The fault
+is on the pool's side: it advertises a difficulty it has not yet begun to
+honour. The only change available here would be to *delay* adopting a
+difficulty decrease by a job or two -- a deliberate workaround for another
+implementation's bug, which is not being written on the strength of two bursts.
+
+Limits worth stating plainly. Two bursts, of 26 and 11 submissions: the ratio
+agreement is the strong part, not the counts. One pool -- pool A's primary here
+is a node on the local network, and nothing in this says the public fallback or
+the BCH secondary behaves the same way. And both trials started from 1,024, so
+nothing here describes a decrease from any other starting difficulty.
+
+**What it costs:** six to fourteen discarded shares per difficulty decrease.
+Against 21,426 accepted shares that is noise, but it is the largest single
+identified contributor to window 3's reject count -- 14 of its 32 rejects came
+from one 64-second pool-side event, and without it the window reads 0.084%
+instead of 0.149%.
 
 ### This retracts a hypothesis written the night before
 
@@ -3172,29 +3256,49 @@ With only window 1 (1.37 h, no rejects) and window 2 (3 rejects, all `Stale`)
 in hand, the obvious reading was that `Stale` belongs to the public fallback
 while the local primary produces nothing -- which also appeared to explain the
 BC04's 67 `Stale` accumulating while it sat on its own fallback. **Window 3
-refutes the strong form of that.** The local primary produced 6 `Stale` of its
-own in 13.76 h, so `Stale` is not a property of the fallback, and window 1's
-zero was simply too short a sample to mean anything.
+refutes the strong form of that.** The local primary produced **18** `Stale` of
+its own across 21.69 h, so `Stale` is not a property of the fallback, and
+window 1's zero was simply too short a sample to mean anything.
 
-What survives is weaker and still worth testing. On the `Stale` count alone:
+What survives got *weaker* as the window ran, which is worth recording as
+plainly as a result that strengthens. On the `Stale` count alone, at the close:
 
 | | rejects | submissions | rate | exact 95% interval |
 | --- | --- | --- | --- | --- |
-| local primary (window 3) | 6 | 13,816 | 0.0434% | 0.0159% -- 0.0945% |
+| local primary (window 3, closed) | 18 | 21,458 | 0.0839% | 0.0497% -- 0.1326% |
 | pool A's fallback (window 2) | 3 | 726 | 0.413% | 0.0853% -- 1.208% |
 
-The point estimates differ by about 9.5x, but on three events the intervals
-**overlap**, between 0.085% and 0.095%, so the difference is suggestive and
-not established. Settling it needs a fallback window measured in hours rather
-than 53 minutes, and that is not a window anyone wants to arrange deliberately
-for long.
+Read at 13.76 h the gap looked like 9.5x with intervals that barely touched.
+By the close it is 4.9x with intervals that **overlap broadly**. There is
+effectively no evidence here for a fallback-specific `Stale` rate, and the
+earlier wording -- "suggestive and not established" -- was already the right
+register for it.
 
-### What window 3 does settle
+**And the primary's own `Stale` rate was not constant inside the window.** Over
+the first 14.1 h it ran 6 rejects in 14,183 shares (0.042%); over the next
+7.1 h, 10 in 6,834 (0.146%), a factor of 3.5, with the difficulty constant at
+665 throughout both stretches, no failover, no unreachable poll and hashrate
+steady. A conditional binomial test returns p = 0.013 one-sided -- **but the
+split point was chosen by eye after the acceleration was noticed**, which
+inflates that figure, so it is a thing to watch rather than a finding. The
+methodological point stands either way: bounding a window to one endpoint fixes
+the *denominator*, and does nothing to make the rate inside it stationary. A
+single percentage for a 21-hour window averages over whatever moved.
 
-`Above target` has never appeared on the fallback in any recorded window, and
-it is the majority of the primary's rejects. Whatever produces it is on the
-primary's side of the wire -- and the burst above localises it further, to the
-moment the primary's vardiff steps down.
+### What is settled, and what is left
+
+`Above target` is now accounted for: every one of the 20 recorded across
+windows 3 and 4 arrived inside about a minute of the pool lowering the
+difficulty, in the proportion that a lagging pool-side threshold predicts. It
+has never appeared on the fallback, and it is not produced by steady-state
+mining at all -- 21 h at a fixed difficulty across roughly 18,000 further
+accepted shares added none.
+
+`Stale` is not accounted for. It is what remains once the difficulty-change
+bursts are removed, it occurs on the primary and on the fallback, it accrues at
+a rate that is not constant even within one window on one endpoint, and nothing
+yet separates it from ordinary block-change latency. It is the open question
+that the instrument was built for and has not answered.
 
 ## The rejected shares were the pool's, and the miner was already reporting why
 
