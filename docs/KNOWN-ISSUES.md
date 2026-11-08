@@ -3285,6 +3285,11 @@ methodological point stands either way: bounding a window to one endpoint fixes
 the *denominator*, and does nothing to make the rate inside it stationary. A
 single percentage for a 21-hour window averages over whatever moved.
 
+**Correction, measured 2026-11-08: this is not an acceleration.** The
+inter-arrival gaps, below, show one 9.47-hour stretch with no `Stale` at all
+and an ordinary rate either side of it. "The rate climbed" and "there was a
+nine-hour hole early on" point at different causes, and it is the second.
+
 ### What is settled, and what is left
 
 `Above target` is now accounted for: every one of the 20 recorded across
@@ -3294,11 +3299,97 @@ has never appeared on the fallback, and it is not produced by steady-state
 mining at all -- 21 h at a fixed difficulty across roughly 18,000 further
 accepted shares added none.
 
-`Stale` is not accounted for. It is what remains once the difficulty-change
-bursts are removed, it occurs on the primary and on the fallback, it accrues at
-a rate that is not constant even within one window on one endpoint, and nothing
-yet separates it from ordinary block-change latency. It is the open question
-that the instrument was built for and has not answered.
+`Stale` **is** now accounted for as well, and it is block-change latency: 27 of
+28 trigger events fall within two minutes of a block boundary, median 20 s. The
+measurement is below. What is left over is not the reason but one 9.47-hour
+stretch in window 3 that produced none at all across 48 blocks.
+
+### `Stale` is block-change latency, measured against the blocks
+
+`Stale` was the one reject reason left unexplained, and the gaps between the
+events answer it. Across window 3 (closed, 18 `Stale`) and window 4 (12 at the
+time of writing), the board's kernel log gives each event a millisecond
+timestamp and the pool's own submission id, and the two agree with the API's
+counter exactly -- 17 counter steps for 18 events and 11 for 12, the difference
+being two polls that stepped by 2. Nothing is missing and nothing is
+double-counted.
+
+**The events are not independent.** Four of the 28 gaps are under two minutes,
+and two of those are consecutive submission ids in the same second:
+
+| window | submission ids | gap | gap in submissions |
+| --- | --- | --- | --- |
+| 3 | 75 -> 76 | 0 s | 1 |
+| 3 | 20,576 -> 20,623 | 116 s | 47 |
+| 4 | 4,520 -> 4,538 | 59 s | 18 |
+| 4 | 13,316 -> 13,317 | 0 s | 1 |
+
+Under a Poisson process with the same counts and spans, four such gaps have
+probability 0.0046 (Monte Carlo, 200,000 draws on the exact conditional null --
+given n events in a fixed span their positions are iid uniform, so no
+distributional approximation is used). Each same-second pair also appears
+independently as the API's counter stepping by 2 inside one 15-second poll.
+That is one cause catching several submissions in flight, not several causes.
+
+**The cause is a block change.** Collapsing events within 120 s into single
+triggers gives 28 triggers over 40.4 h. Measured against mainnet block
+timestamps:
+
+| | triggers |
+| --- | --- |
+| within 120 s of a block boundary | **27 of 28** |
+| median distance to the nearest block | **20 s** |
+| mean position between blocks | 0.309 (0.5 = no relationship) |
+
+P(27 or more within 120 s | triggers independent of blocks) is below 1e-5 over
+100,000 draws of the same conditional null. For comparison, 209 blocks fell in
+the observed span and 28 produced a `Stale`, so **13% of blocks produce one**.
+
+From that, the size of the exposure: at 0.2751 submissions/s and 0.134 triggers
+per block, the window in which a submission must be in flight to come back
+`Stale` is **0.487 s** -- about one submit round trip, which is what this
+mechanism should look like and not something firmware can shorten to zero.
+
+Two limits on the block axis, stated because they bound the conclusion. These
+are block *header* timestamps from a public explorer, which are miner-reported
+and need not match the moment the local node accepted the block; the faithful
+axis is the node's own receipt time, which its RPC can give but was not
+available when this was measured. That shows up in the data: of the 28
+triggers, 20 sit 2-44 s **after** a block, and 8 sit before one, 7 of those
+within 92 s. A `Stale` cannot precede its cause, so those 7 are blocks whose
+header timestamp runs ahead of their propagation -- consistent with the
+mechanism, and the reason the statistic above is two-sided.
+
+**So `Stale` is not this firmware's defect either.** A new block arrives, the
+pool issues a new job, and whatever was already in flight for the old job comes
+back `Stale`. The only way to drive it to zero would be to stop submitting for
+a job before the pool has replaced it, which means discarding valid work on
+speculation. 30-odd events per 40 hours against 40,000 accepted shares is the
+cost of not doing that.
+
+### What the block correlation does not explain
+
+One stretch resists it. From 2.42 h to 11.88 h of window 3's uptime -- 9.47
+hours, 9,363 submissions, **48 blocks** -- there was not one `Stale`. At 0.134
+triggers per block that predicts 6.4, and P(0) = 0.0016.
+
+It is not a hashing lull: submissions ran at 0.2748/s inside the stretch
+against 0.2748/s across the whole window, so the denominator is unchanged. It
+is not an endpoint change, a difficulty change or a missed poll; the window
+carries none of those. And it is not the clustering above, which accounts for
+two extra events per window, not a hole.
+
+Read through the exposure figure, the vulnerability window went to roughly zero
+for 48 consecutive block changes and then came back. Something that varies -- a
+job-push latency, a round-trip time -- would do that, and neither is recorded.
+That is the open question `Stale` leaves behind, and it is a sharper one than
+the rate drift it replaces.
+
+Worth noting for contrast: **window 4's 12 events over 17.1 h are
+indistinguishable from Poisson** once the pairs are collapsed, with a
+coefficient of variation of 0.96 on the trigger gaps. Window 3's is 1.67, and
+the drought is the whole of the difference.
+
 
 ## The rejected shares were the pool's, and the miner was already reporting why
 
