@@ -3203,6 +3203,14 @@ and produced no `Above target` at all, the count holding at 6 for the rest of
 the window. Four difficulty changes, four outcomes in the direction the reading
 predicts.
 
+A third decrease on 2026-11-09 extends that to **three decreases, three bursts**
+(1,024 -> 510 at 303 s of uptime, 8 rejects across 25 s beginning 11.0 s after
+the announcement). And **every increase recorded here has produced nothing**:
+497 -> 665, 438 -> 585, and 510 -> 685, the last of which then held for 25 hours
+across roughly 24,000 further accepted shares without a single `Above target`.
+An increase is the negative control for this mechanism, and it has never
+failed.
+
 Both pollers recorded the same six rejects, by the same pool-assigned ids and
 the same millisecond timestamps, which is the cross-check: two independent
 samplers of one event agreeing on it.
@@ -3226,13 +3234,24 @@ the two difficulties:
 | --- | --- | --- | --- | --- |
 | 1,024 -> 497 | 12 accepted, 14 rejected | 0.462 | **0.485** | -0.024 |
 | 1,024 -> 438 | 5 accepted, 6 rejected | 0.455 | **0.428** | +0.027 |
+| 1,024 -> 510 | 4 accepted, 8 rejected | 0.333 | **0.498** | -0.165 |
 
-Both observations fall inside their exact 95% binomial intervals, and they miss
-from opposite sides.
+All three fall inside their exact 95% binomial intervals, and the first two miss
+from opposite sides. **The third is a much worse fit and is reported as such**:
+0.333 against 0.498 on 12 submissions, interval 0.099 -- 0.651. An interval that
+wide cannot distinguish the prediction from a coin toss, so trial 3 is
+consistent with the mechanism without being evidence for it. The ratio claim
+still rests on trials 1 and 2.
 
 **This is therefore not a defect in this firmware.** `stratum_task` applied the
 new difficulty 30 ms after it arrived and `create_jobs_task` had it on the next
-job, which is the correct behaviour and the log shows it happening. The fault
+job, which is the correct behaviour and the log shows it happening. **That 30 ms
+is one measurement, not a constant**: the third trial showed 450 ms between
+`Set stratum difficulty` and `New job difficulty`. Both are prompt and neither
+is a defect -- `set_difficulty` is handled in the same millisecond it arrives,
+and the figure that varies is the job-creation cycle behind it. Nothing in the
+burst depends on which of the two it is, since the pool goes on grading against
+the old target for about thirty seconds either way. The fault
 is on the pool's side: it advertises a difficulty it has not yet begun to
 honour. The only change available here would be to *delay* adopting a
 difficulty decrease by a job or two -- a deliberate workaround for another
@@ -3301,8 +3320,10 @@ accepted shares added none.
 
 `Stale` **is** now accounted for as well, and it is block-change latency: 27 of
 28 trigger events fall within two minutes of a block boundary, median 20 s. The
-measurement is below. What is left over is not the reason but one 9.47-hour
-stretch in window 3 that produced none at all across 48 blocks.
+measurement is below. What is left over is not the reason but the **drought**:
+stretches in which `Stale` stops completely and then resumes at its previous
+rate. There are now two, in two of the three long windows, the larger running
+18.26 hours across 105 consecutive blocks.
 
 ### `Stale` is block-change latency, measured against the blocks
 
@@ -3367,28 +3388,85 @@ a job before the pool has replaced it, which means discarding valid work on
 speculation. 30-odd events per 40 hours against 40,000 accepted shares is the
 cost of not doing that.
 
-### What the block correlation does not explain
+### What the block correlation does not explain: the drought, reproduced
 
-One stretch resists it. From 2.42 h to 11.88 h of window 3's uptime -- 9.47
-hours, 9,363 submissions, **48 blocks** -- there was not one `Stale`. At 0.134
-triggers per block that predicts 6.4, and P(0) = 0.0016.
+Two of the three long windows contain a stretch in which `Stale` stops
+completely and then comes back. The second is larger than the first, and it was
+caught inside a single window with the rate measured on both sides of it.
 
-It is not a hashing lull: submissions ran at 0.2748/s inside the stretch
-against 0.2748/s across the whole window, so the denominator is unchanged. It
-is not an endpoint change, a difficulty change or a missed poll; the window
-carries none of those. And it is not the clustering above, which accounts for
-two extra events per window, not a hole.
+**First occurrence** -- window 3 of run `20261106T195855`, from 2.42 h to
+11.88 h of uptime: 9.47 hours, 9,363 submissions, **48 blocks**, not one
+`Stale`. At 0.134 triggers per block that predicts 6.4, P(0) = 0.0016. That
+split was found by eye, which inflates the figure.
 
-Read through the exposure figure, the vulnerability window went to roughly zero
-for 48 consecutive block changes and then came back. Something that varies -- a
-job-push latency, a round-trip time -- would do that, and neither is recorded.
-That is the open question `Stale` leaves behind, and it is a sharper one than
-the rate drift it replaces.
+**Second occurrence** -- window 2 of run `20261109T160530`, still open at
+25.94 h when this was written. Splitting the window at its longest gap:
 
-Worth noting for contrast: **window 4's 12 events over 17.1 h are
-indistinguishable from Poisson** once the pairs are collapsed, with a
-coefficient of variation of 0.96 on the trigger gaps. Window 3's is 1.67, and
-the drought is the whole of the difference.
+| segment | hours | submissions | blocks | `Stale` | predicted | per block |
+| --- | --- | --- | --- | --- | --- | --- |
+| before the hole | 3.84 | 3,618 | 13 | 2 | 1.7 | 0.154 |
+| **the hole** | **18.26** | **17,139** | **105** | **0** | **13.3** | **0.000** |
+| after the hole | 3.83 | 3,536 | 21 | 3 | 2.6 | 0.143 |
+
+P(0) across the hole is **1.6e-6**. The published per-block rate is 0.139.
+
+**This within-window contrast is the strongest evidence in the study, and it
+needs no external rate at all.** One window, one endpoint, one difficulty -- 685
+held throughout -- and a submission rate flat across all three segments
+(0.2618, 0.2607, 0.2562 per second) produced 0.154 and 0.143 `Stale` per block
+on either side of 105 consecutive blocks that produced none. Nothing in the
+window changed: no endpoint change, no difficulty change, no fallback, no
+missed poll, and the deduped event count matches the board's own counter
+exactly at every point.
+
+The selection-free test fires on it. Taking the largest of the six spacings --
+a statistic fixed before looking at where the gap is, and now including the two
+**edge** spacings, which an earlier version of this test omitted -- P(longest
+>= 0.707 of the span | 5 events placed uniformly) = **0.0129**.
+
+Two lessons from running that test twice, recorded because both are easy to get
+wrong. Earlier the same day the same window held only 2 events and the same
+statistic gave **0.180**; three more events that afternoon took it to 0.0129.
+**A non-significant max-spacing result on few events is underpowered, not
+negative** -- the statistic is conditioned on the event count, so a window with
+almost no events cannot produce a surprising gap. And on 2 events the window
+looked *uniformly depleted* rather than holed, which suggested the rate was
+simply lower in this run; the afternoon refuted that, because the rate returned
+to prediction inside the same window.
+
+**What the absolute rate will not support.** Comparing this window's count
+against the published 0.139 per block gives P(<= 5) near 1e-4, and that number
+should not be leaned on, because the per-block trigger rate is not constant
+across windows:
+
+| window | span | subs/s | blocks | triggers | per block | predicted | obs/pred |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 3, run `...195855` | 21.69 h | 0.2748 | 129 | 16 | 0.124 | 17.3 | 0.93 |
+| 4, run `...195855` | 43.84 h | 0.3032 | 172 | 32 | **0.186** | 25.4 | **1.26** |
+| 2, run `...160530`, outside the hole | 7.67 h | 0.259 | 34 | 5 | 0.147 | 4.3 | 1.16 |
+
+Window 4 ran a quarter above its own exposure prediction over nearly two days,
+window 3 slightly below it. So the 0.487 s exposure figure is a window average
+rather than a constant, and any test of one window against another window's
+rate inherits that drift. The max-spacing statistic and the within-window
+contrast do not, which is why they carry the finding and the count test does
+not.
+
+**Window 4 remains the negative control the question needs**: 43.84 hours,
+38 `Stale` collapsing to 32 triggers, longest spacing 5.10 h, P = **0.323**.
+Nothing resembling a drought across the longest window in the study. (An
+earlier draft of this section described window 4 as "12 events over 17.1 h";
+those were mid-flight figures taken while the window was still open, and the
+closed figures above supersede them.)
+
+Read through the exposure figure, the vulnerability window went to zero for 105
+consecutive block changes and then returned to its previous value inside the
+same window. Something that varies -- a job-push latency, a round-trip time --
+would do exactly that, and **neither is recorded anywhere.** The faithful axis
+is the local node's own block-receipt time rather than the miner-reported header
+timestamps used above, and its RPC needs credentials that are not on this
+machine. That single measurement is what would turn a reproduced anomaly into a
+mechanism, and it is the open item `Stale` leaves behind.
 
 
 ## The rejected shares were the pool's, and the miner was already reporting why
