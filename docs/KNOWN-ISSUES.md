@@ -1580,9 +1580,18 @@ attributed to this bug.
 **So it remains possible and is no longer the best explanation.** Volume and
 job churn fit the "pool A only" pattern better: pool A carries roughly thirteen
 times the share traffic of pool B and is a solo node whose work goes stale
-whenever the local chain moves. Settling the original question still means
-pointing pool A at something that genuinely goes quiet for over a minute and
-watching whether rejects follow the reconnect.
+whenever the local chain moves.
+
+**That half of it stopped being a guess on 2026-11-08.** `Stale` was measured
+against mainnet block timestamps and the events land within two minutes of a
+block boundary 42 times out of 48, median 22 s, so "its work goes stale
+whenever the local chain moves" is now the measured cause rather than the
+plausible one. It does not rehabilitate this bug as the explanation --
+block-change latency and a receive teardown are different mechanisms that both
+produce `Stale`, and the first is measured on a build where the second provably
+cannot happen. Settling the *original* question still means pointing pool A at
+something that genuinely goes quiet for over a minute and watching whether
+rejects follow the reconnect.
 
 **Fixed** by counting the timeouts and giving up at the ten minutes the code
 already said it wanted, so a quiet pool stays connected and a real FIN still
@@ -3099,21 +3108,57 @@ counters and the only pool whose session cannot be ended for testing.
 ## The first reject rate measured inside one endpoint's own window (2026-11-07)
 
 The section above establishes that the share counters measure *since the last
-pool A failover*, a window the counters themselves cannot report, so every
+pool A failover*, a window the counters themselves cannot report. This section
+is the first measurement without that defect.
+
+**A correction to how that defect was described.** It was stated here as "every
 rate in this file computed as counter-over-uptime is a lower bound on an
-unknown span. This section is the first measurement without that defect.
+unknown span", and that is only true of rates *per hour*. The accepted and
+rejected counters reset together, so their **ratio** is exact for whatever span
+the window covers -- a reject percentage read off one sample is not a bound, it
+is the right answer to a question about an unknown interval. What the unknown
+span ruins is any figure with time in the denominator, and any attempt to
+attribute the rate to a stretch of mining rather than to the window.
 `watch_rejects.py` was rewritten to detect a counter reset, cut the run into
 **windows** between resets, and refuse to quote a rate for any window that
 covers more than one endpoint. A BC01 then ran under it continuously.
 
-Four windows, one board, across an evening and the next day:
+**Where that instrument lives, because this file names it and `tools/` does not
+contain it.** `watch_rejects.py`, `diff_trap.py` and the `reject-capture.log` /
+`reject-samples.csv` they produce all sit outside this repository, and
+deliberately: the watcher holds the LAN addresses of the two boards and reads
+their API passwords from a file kept outside version control, and the kernel
+logs the difficulty trap downloads contain the full `mining.submit` parameters,
+which carry a payout address and a worker name. None of that is publishable as
+it stands. The same goes for `soak_2031.py`, referenced elsewhere in this file;
+`tools/soak_monitor.py` is the one that is in the repo. What *is* reproducible
+from here is the method, which is why the procedure and the exact statistics
+are written out rather than left as "run the script": poll
+`/api/system/info` on a fixed cadence, record `sharesAccepted`,
+`sharesRejected`, `sharesRejectedReasons`, `isUsingFallbackStratum`,
+`stratumDiff` and `uptimeSeconds` on every sample, cut the series at each
+counter reset, and quote nothing across a cut.
+
+Four windows from run `20261106T195855`, one board, across an evening and the
+next day:
 
 | window | endpoint | span | accepted | rejected | rate | reasons | stratum diff |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | local primary | 1.37 h, **partial** | 1,300 | 0 | -- | -- | 680 |
-| 2 | pool A's fallback, in substance | 0.88 h | 723 | 3 | 0.413% | 3 x `Stale` | 414 / 730 / 10,000 |
+| 2 | pool A's fallback, in substance | 0.88 h | 723 | 3 | 0.413% | 3 x `Stale` | 10,000 / 414 / 730 |
 | 3 | local primary, cold start to a deliberate stop | **21.69 h, closed** | 21,426 | 32 | 0.149% | 14 x `Above target`, 18 x `Stale` | 1,024 / 497 / 665 |
-| 4 | local primary, cold start (the forced trial) | 0.87 h, still open | 964 | 6 | 0.62% | 6 x `Above target` | 1,024 / 438 / 585 |
+| 4 | local primary, cold start (the forced trial) | **43.84 h, closed** | 47,805 | 44 | 0.092% | 6 x `Above target`, 38 x `Stale` | 1,024 / 438 / 585 |
+
+Two more from the restart that ended window 4, run `20261109T160530`:
+
+| window | endpoint | span | accepted | rejected | rate | reasons | stratum diff |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | local primary | 30 s, **fragment** | 11 | 0 | -- | -- | 585 |
+| 2 | local primary, cold start (the third trial) | 30.59 h, still open | 28,613 | 15 | 0.052% | 8 x `Above target`, 7 x `Stale` | 1,024 / 510 / 685 |
+
+Window 1 of that run is the 30 seconds between the watcher attaching and the
+counters resetting on the restart. It is recorded for completeness and carries
+nothing.
 
 Window 1 is marked partial because the watch joined it in flight: its totals
 are a floor, and its zero rejects mean only "none in the 1.37 h we watched".
@@ -3128,8 +3173,13 @@ with the endpoint flag at 0 on every one of its 5,200-odd samples and no
 unreachable poll, and was closed by a restart taken deliberately to end it. It
 carries no `partial` and no `MIXED`, so its 0.149% is the first reject rate
 this firmware's documentation can attribute to one named endpoint over a known
-span. Window 4 is the trial described below and is still accumulating; its
-figures are as of 20:48 on 2026-11-07.
+span. Window 4 is the trial described below. **It was published here as "0.87 h,
+still open, 964 accepted, 6 rejected, 0.62%", figures as of 20:48 on
+2026-11-07, which made it look like the worst window in the study.** Closed it
+is the best: 43.84 h and 0.092%, because the 6 `Above target` were a burst in
+its first ten minutes and the 43.58 h that followed produced none. The lesson
+is the one this section exists to make -- a rate read out of an open window is
+a statement about when it was read.
 
 ### Almost every `Above target` arrived in one 64-second burst, right after the difficulty was lowered
 
@@ -3339,10 +3389,17 @@ register for it.
 
 **And the primary's own `Stale` rate was not constant inside the window.** Over
 the first 14.1 h it ran 6 rejects in 14,183 shares (0.042%); over the next
-7.1 h, 10 in 6,834 (0.146%), a factor of 3.5, with the difficulty constant at
-665 throughout both stretches, no failover, no unreachable poll and hashrate
-steady. A conditional binomial test returns p = 0.013 one-sided -- **but the
-split point was chosen by eye after the acceleration was noticed**, which
+7.1 h, 10 in 6,834 (0.146%), a factor of 3.5, with no failover, no unreachable
+poll and hashrate steady. **Two things in that sentence were wrong and are
+corrected here.** It claimed the difficulty was "constant at 665 throughout
+both stretches": 665 only came into force 2.97 h into the window, so the first
+stretch spans the 1,024 and 497 segments as well, and the split was in fact
+measured from the window's open rather than from the step. And the second
+stretch was quoted mid-flight -- closed it is 7.59 h, 12 rejects in 7,303
+shares, 0.164%.
+
+A conditional binomial test returns p = 0.013 one-sided -- **but the split
+point was chosen by eye after the acceleration was noticed**, which
 inflates that figure, so it is a thing to watch rather than a finding. The
 methodological point stands either way: bounding a window to one endpoint fixes
 the *denominator*, and does nothing to make the rate inside it stationary. A
@@ -3355,29 +3412,48 @@ nine-hour hole early on" point at different causes, and it is the second.
 
 ### What is settled, and what is left
 
-`Above target` is now accounted for: every one of the 20 recorded across
-windows 3 and 4 arrived inside about a minute of the pool lowering the
+`Above target` is now accounted for: every one of the **28** recorded across
+the three cold-start windows -- 14 in window 3, 6 in window 4, 8 in window 2 of
+the later run -- arrived inside about a minute of the pool lowering the
 difficulty, in the proportion that a lagging pool-side threshold predicts. It
-has never appeared on the fallback, and it is not produced by steady-state
-mining at all -- 21 h at a fixed difficulty across roughly 18,000 further
-accepted shares added none.
+has never appeared on the fallback.
 
-`Stale` **is** now accounted for as well, and it is block-change latency: 27 of
-28 trigger events fall within two minutes of a block boundary, median 20 s. The
-measurement is below. What is left over is not the reason but the **drought**:
-stretches in which `Stale` stops completely and then resumes at its previous
+**And it is not produced by steady-state mining at all.** Each decrease is
+followed by the pool raising the difficulty and holding it, and those stretches
+are the negative control the claim needs:
+
+| settled difficulty | span | accepted | `Above target` |
+| --- | --- | --- | --- |
+| 665, window 3 | 18.73 h | 18,013 | **0** |
+| 585, window 4 | 43.58 h | 47,528 | **0** |
+| 685, window 2 of the later run | 30.16 h, still accruing | 28,107 | **0** |
+
+The difficulty did not move inside any of the three. On the two closed stretches
+alone that is **62.31 hours and 65,541 accepted shares with no `Above target` at
+all**, at two different difficulties, and the third has added nothing in a
+further thirty hours. An earlier version of this paragraph cited only the first
+of the three, as "21 h ... roughly 18,000", where 21 h was the whole window
+rather than the stretch at 665.
+
+`Stale` **is** now accounted for as well, and it is block-change latency: 42 of
+48 trigger events fall within two minutes of a block boundary, median 22 s. The
+measurement is below. (Published first as 27 of 28 at a median of 20 s, which
+was window 4's uncollapsed events counted while that window was still open.)
+What is left over is not the reason but the **drought**: stretches in which
+`Stale` stops completely and then resumes at its previous
 rate. There are now two, in two of the three long windows, the larger running
 18.26 hours across 105 consecutive blocks.
 
 ### `Stale` is block-change latency, measured against the blocks
 
 `Stale` was the one reject reason left unexplained, and the gaps between the
-events answer it. Across window 3 (closed, 18 `Stale`) and window 4 (12 at the
-time of writing), the board's kernel log gives each event a millisecond
-timestamp and the pool's own submission id, and the two agree with the API's
-counter exactly -- 17 counter steps for 18 events and 11 for 12, the difference
-being two polls that stepped by 2. Nothing is missing and nothing is
-double-counted.
+events answer it. Across window 3 (18 `Stale`) and window 4 (38), both now
+closed, the board's kernel log gives each event a millisecond timestamp and the
+pool's own submission id, and the two agree with the API's counter exactly --
+every time that agreement has been checked, on every window. Nothing is missing
+and nothing is double-counted. (This subsection was first written against
+window 4's 12 events at the time of writing; where a count below differs from
+one here, the closed figure is the one to use.)
 
 **The events are not independent.** Four of the 28 gaps are under two minutes,
 and two of those are consecutive submission ids in the same second:
@@ -3563,11 +3639,22 @@ Read on 2026-10-04:
 | BC04 | 8665 accepted / 2 rejected | 2 x `Stale` |
 
 Both are ordinary stratum outcomes and neither is a fault in this firmware.
-**Above target** means the share did not meet the pool's current difficulty:
-the job was built while the target was lower and the pool raised it before the
-share arrived. **Stale** means the job had already been replaced. Both cluster
+**Above target** means the share did not meet the difficulty the pool was
+grading against. **Stale** means the job had already been replaced. Both cluster
 around difficulty changes and new blocks, which is exactly where the observed
 bursts were -- shortly after a session opens.
+
+**The explanation this paragraph originally gave for `Above target` had the
+sign backwards**, and it is left here struck through rather than deleted
+because it stood in this file for a month and shaped two later entries:
+~~the job was built while the target was lower and the pool raised it before
+the share arrived.~~ It is the opposite. The pool *lowers* the difficulty, the
+miner adopts it immediately, and the pool goes on grading against the old
+higher one for about 35 seconds. Three measured decreases produced a burst
+every time; three measured increases produced nothing at all. See "Almost every
+`Above target` arrived in one 64-second burst" above, which is the measurement
+-- and note that it sits *earlier* in this file than the paragraph it
+corrects.
 
 At 0.06% and 0.02% this is background noise for solo mining. For comparison,
 the dual-pool B endpoint has never refused a share on either board.
@@ -3626,10 +3713,19 @@ samples off the BC01, at 6, 13 and 14 minutes of uptime:
 | 14 min | 205 | **9** | unchanged |
 
 **The count did not move while 144 further shares were accepted.** All nine
-arrived inside the first six minutes and all nine are `Above target`, which is
-the pool raising difficulty under a miner that has just arrived at the vardiff
-floor -- jobs built against the low target, submitted after it rose. The BC04
+arrived inside the first six minutes and all nine are `Above target`. The BC04
 took 179 shares across the same window and rejected none.
+
+**The reading given here was wrong in the same way as the definition above**,
+and this one matters more, because the burst it describes turns out to be the
+mechanism's cleanest unforced example: ~~the pool raising difficulty under a
+miner that has just arrived at the vardiff floor -- jobs built against the low
+target, submitted after it rose.~~ A session on pool A opens at difficulty
+**1,024** and vardiff then brings it *down*. So the first minutes of a connect
+are a difficulty **decrease**, not an increase, and nine `Above target` inside
+six minutes followed by nothing is exactly what the measured mechanism
+predicts. That is also why a plain restart reproduces the burst on demand, with
+no change to either the pool's configuration or the miner's.
 
 **Two samples are the minimum** -- the 6-minute reading alone works out to
 12.8%, which would be alarming and is an artifact of dividing a fixed burst by
@@ -3690,12 +3786,22 @@ read. This board restarted on a `WiFi connection timeout`, so reconnects
 during 137 hours are likely rather than hypothetical, which makes the
 per-reconnect explanation the one to beat.
 
-**The instrument for settling it already exists and has not been pointed at
-this question.** `watch_rejects.py` polls both miners every 15 s and captures
-the pool's own words for each reject, with a timestamp, to
-`reject-capture.log`. Run it on the BC01 across a few reconnects and the
-timestamps answer directly whether the residual clusters at reconnects. It was
-last used on 2026-10-04, before any of this.
+**That was written on 2026-11-03 and has since been done.** The instrument was
+pointed at the question from 2026-11-06 onward -- six windows, 155 hours of
+timestamped samples -- and the answer is in the two sections dated 2026-11-07
+and 2026-11-08 above. Both reject reasons have mechanisms now.
+
+**What that implies for the residual, stated as inference and not as
+measurement.** Every pool A session opens at difficulty 1,024 and vardiff then
+lowers it, and a lowering is what produces a burst; so any reconnect must
+produce one, and the four cold starts measured produced 14, 6, 8 and 9. Roughly
+26 residual `Above target` across 136 hours is then about three or four
+reconnects' worth, which is an unremarkable number for a board that restarted
+on a `WiFi connection timeout`. That is consistent rather than demonstrated:
+every burst observed so far followed a *restart*, and a reconnect without one
+has never been watched. The distinction is the same one that applies to the
+BC01's power-on fault -- a soft reset is not a test of what happens on a cold
+start -- and it cuts the same way here.
 
 **The rule to take from three corrections in a row:** this counter cannot
 answer "has it stopped" at all, whoever reads it. Use it for rates over a
@@ -3713,9 +3819,16 @@ Note also that the BC04 has now rejected a share, which earlier entries in this
 file imply it does not do. One `Stale` is not a pattern, and nothing here
 establishes which pool it belonged to -- `sharesRejectedReasons` does not say.
 
-What none of this settles: why the `Above target` burst is always pool A's. The
-volume-and-churn explanation above remains the best available and remains
-unproven.
+**That question is now settled, and it was still open when this entry was
+written.** Why the `Above target` burst is always pool A's: pool A is the only
+endpoint here that runs vardiff where decreases have been observed, and every
+burst follows a decrease. Why `Stale` concentrates there too: pool A is a local
+solo node whose template moves on every block, and the `Stale` events were
+measured landing within two minutes of a block boundary 42 times out of 48. The
+volume-and-churn guess recorded above was right about the mechanism for `Stale`
+-- "its work goes stale whenever the local chain moves" is what the block
+measurement confirms -- and it was not the explanation for `Above target` at
+all. See the two sections dated 2026-11-07 and 2026-11-08 above.
 
 ## Dual pool kept feeding a pool that had gone away (fixed, verified)
 
