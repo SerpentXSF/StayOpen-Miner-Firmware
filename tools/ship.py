@@ -93,11 +93,29 @@ def released_tags():
 
 WEB_VERSION_MARKER = "stayopen-web-version"
 
-# The same pattern the interface uses, in Settings.vue. Kept identical on
-# purpose: this script decides what to publish and the interface decides what
-# that means, so the two agreeing is the whole mechanism.
+# Two patterns, deliberately NOT the same, because they answer two different
+# questions. The comment here used to say they were "kept identical on
+# purpose"; that was the intent and it was the defect.
+#
+# WEB_VERSION_RE is loose -- it matches a marker-shaped thing anywhere in the
+# body, including inside a code span in the middle of a sentence. It is not a
+# leftover: it is character-for-character the pattern web 1.6.5 shipped with,
+# read with .exec and so taking the FIRST match. Every miner still on 1.6.5 or
+# earlier reads a release body exactly this way, which is why the refusal in
+# notes_with_web_version has to keep asking the loose question -- prose that
+# merely looks like a marker still misleads a page nobody has updated. The
+# anchored pattern arrived in 1.6.6.
+#
+# WEB_VERSION_LINE_RE is what the current interface actually uses, in
+# Settings.vue: anchored, so the marker must occupy its own line, and the LAST
+# match wins. Only this one answers "will a marker already in this body be
+# read at all". Any anchored match is also a loose match, so the loose list is
+# always the longer of the two.
 WEB_VERSION_RE = re.compile(r"<!--\s*" + WEB_VERSION_MARKER +
                             r":\s*([^>]*?)\s*-->")
+WEB_VERSION_LINE_RE = re.compile(
+    r"^[ \t]*<!--[ \t]*" + WEB_VERSION_MARKER +
+    r":[ \t]*([^>\n]*?)[ \t]*-->[ \t]*$", re.M)
 
 
 def declared_web_version():
@@ -208,14 +226,30 @@ def notes_with_web_version(notes_file, version, boards):
     # 2.0.35 exists to fix, reintroduced by the sentence describing the fix,
     # and the test being a substring of the name is what let it through.
     found = [m.strip() for m in WEB_VERSION_RE.findall(body)]
+    readable = [m.strip() for m in WEB_VERSION_LINE_RE.findall(body)]
     if found:
-        if len(found) == 1 and found[0] == web:
+        # Leave the notes alone only when the marker that is already there is
+        # one the interface will actually read: exactly one in the body, on a
+        # line of its own, carrying the right version. Testing this with the
+        # loose pattern -- which is what it did -- accepted a marker buried in
+        # prose and shipped a release the page could not read.
+        if len(found) == 1 and readable == found and found[0] == web:
             return notes_file, web      # already correct; leave it alone
+        if len(found) == 1 and not readable:
+            sys.exit(
+                "%s contains something matching the web-version marker, %r, "
+                "but not on a line of its own -- so the interface's anchored "
+                "pattern will not read it, and appending the real marker "
+                "below would leave two in the body for anyone on an older "
+                "page that reads the first.\n\n"
+                "If that is prose describing the marker, name it instead of "
+                "writing it out."
+                % (notes_file, found[0]))
         sys.exit(
             "%s already contains %d thing(s) matching the web-version marker: "
-            "%s -- and the interface takes the FIRST one, so appending the "
-            "real marker below would not win. Expected at most one, reading "
-            "%r.\n\n"
+            "%s -- and an interface older than 1.6.6 takes the FIRST one, so "
+            "appending the real marker below would not win. Expected at most "
+            "one, on its own line, reading %r.\n\n"
             "If that is prose describing the marker, name it instead of "
             "writing it out: a release body is read by a regex, and a wrong "
             "first match is worse than no marker at all -- it advertises a "
