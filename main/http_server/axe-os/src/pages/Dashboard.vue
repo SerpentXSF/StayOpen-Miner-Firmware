@@ -31,6 +31,16 @@ const poolAConnected = computed(() => {
   return v === undefined ? true : !!v;
 });
 
+/* Not the negation of poolAConnected, deliberately. Both of them answer
+ * "unknown" with silence -- one by reporting the pool as up, the other by
+ * declining to report it as down -- so on firmware that omits the field both
+ * are false, and neither says anything the miner has not claimed. Writing this
+ * as !poolAConnected.value would turn that silence into an alert. */
+const poolADown = computed(() => {
+  const v = (appStore.statusRaw as any)?.poolAConnected;
+  return v !== undefined && !v;
+});
+
 /* Every pool, not just B. statusRaw is the unshaped API payload, so it is read
  * through one accessor here rather than casting in half a dozen template
  * expressions.
@@ -57,6 +67,11 @@ const dualPool = computed(() => {
       port: s[`pool${letter}Port`] ?? 0,
       user: s[`pool${letter}User`] ?? '',
       connected: !!s[`pool${letter}Connected`],
+      // Whether the miner said anything about this pool's session at all.
+      // `connected` coerces an absent field to false, which is right for a
+      // badge and wrong for an alert: firmware that does not report the field
+      // would be accused of having every pool down. See poolADown.
+      connectedKnown: s[`pool${letter}Connected`] !== undefined,
       failover: !!s[`pool${letter}UsingFailover`],
       weight: Number(s[`pool${letter}Weight`]) || 0,
       shares: s[`pool${letter}SharesAccepted`] ?? 0,
@@ -259,14 +274,56 @@ const usingFallback = computed(() => !!(appStore.statusRaw as any)?.isUsingFallb
 
 const failoverPools = computed(() => {
   const out: string[] = [];
-  if (usingFallback.value) out.push('A');
+  // Only while the failover is actually carrying shares. A pool sitting on a
+  // failover endpoint that is itself unreachable is not "mining on a failover
+  // endpoint", it is down, and the alert below says so instead. Before this,
+  // such a pool was described as working normally.
+  if (usingFallback.value && !poolADown.value) out.push('A');
   // Only the secondaries the miner is actually using. `secondaries` lists every
   // pool that has a host, whether or not dual mining is switched on, and the
   // card below is hidden on `enabled` -- so counting them unconditionally would
   // name a pool in the alert whose card is not on the page to look at.
   if (dualPool.value.enabled) {
     for (const p of dualPool.value.secondaries) {
-      if (p.failover) out.push(p.letter);
+      // Same rule as pool A, with the extra condition that it takes a
+      // reported disconnection to override a reported failover. An unknown
+      // session is not evidence of a dead one.
+      if (p.failover && (!p.connectedKnown || p.connected)) out.push(p.letter);
+    }
+  }
+  return out;
+});
+
+/* A pool the miner should be talking to and is not. Three conditions guard it,
+ * and each one is a way the alert could otherwise lie:
+ *
+ *  - the miner has to have reported the session. `poolAConnected` and
+ *    `pool<L>Connected` are emitted unconditionally by this firmware, but
+ *    older builds send neither, and an absent field must not read as "down".
+ *  - a secondary only counts while dual mining is on, which is the same gate
+ *    failoverPools and the pool card use. A configured-but-unused pool is not
+ *    connected and is not meant to be.
+ *  - nothing is said inside the first minute of uptime. Every boot passes
+ *    through not-connected on its way to connected, and an alert that fires on
+ *    every boot is one owners learn to scroll past. An absent or zero uptime
+ *    counts as inside that window: if the age of the reading is unknown,
+ *    silence is the answer that cannot be wrong.
+ *
+ * What it does not do is guess from the hashrate or the share counters. A pool
+ * can be connected and taking no shares for reasons that are not a fault, and
+ * a miner can be hashing with a pool down; only the session flag answers this
+ * question. */
+const POOL_CONNECT_GRACE_SECONDS = 60;
+
+const downPools = computed(() => {
+  const s: any = appStore.statusRaw ?? {};
+  if ((Number(s.uptimeSeconds) || 0) < POOL_CONNECT_GRACE_SECONDS) return [];
+
+  const out: string[] = [];
+  if (poolADown.value) out.push('A');
+  if (dualPool.value.enabled) {
+    for (const p of dualPool.value.secondaries) {
+      if (p.connectedKnown && !p.connected) out.push(p.letter);
     }
   }
   return out;
@@ -277,7 +334,7 @@ const showWarningWrap = computed(() => {
   // alert added below without a matching condition here is simply never
   // rendered. A hardware fault reported by the firmware and shown nowhere is
   // the exact failure this column exists to prevent.
-  return appStore.statusRaw?.systemError || appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || failoverPools.value.length > 0 || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
+  return appStore.statusRaw?.systemError || appStore.statusRaw?.overheat_mode || appStore.statusRaw?.power_fault || failoverPools.value.length > 0 || downPools.value.length > 0 || (!appStore.statusRaw?.frequency || appStore.statusRaw?.frequency < 400);
 })
 
 const hashrateInfo = computed(() => {
@@ -625,6 +682,13 @@ const gaugeColor = computed(() => {
                else on the page looks wrong. It is still not mining where the
                owner pointed it, and it stays there until the failover in turn
                fails enough times to step back. -->
+          <!-- Above the failover alert, and mutually exclusive with it: a pool
+               that is down is the more serious reading of the same subsystem,
+               and the two never name the same pool. Nothing else on this page
+               reports a dead pool -- the hashrate stays up, the badge beside
+               the pool card reads waiting, and a miner submitting to nobody
+               looked identical to one that was working. -->
+          <a-alert v-if="downPools.length" :showIcon="true" type="error" :message="dal('pool_down').replace('%s', downPools.join(', '))" class="db-alert"></a-alert>
           <a-alert v-if="failoverPools.length" :showIcon="true" type="warning" :message="dal('on_failover').replace('%s', failoverPools.join(', '))" class="db-alert"></a-alert>
         </a-space>
       </a-col>

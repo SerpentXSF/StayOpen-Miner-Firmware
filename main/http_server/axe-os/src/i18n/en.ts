@@ -78,7 +78,8 @@ const lang = {
             overheated: 'Device has overheated - See settings.',
             power_fault: 'Check your Power Supply.',
             low_freq: 'Frequency is set low - See settings.',
-            on_failover: 'Mining on a failover endpoint (pool %s), not the configured primary.'
+            on_failover: 'Mining on a failover endpoint (pool %s), not the configured primary.',
+            pool_down: 'Not connected to pool %s - no shares are reaching it.'
         },
         card: {
             hash_rate: 'HashRate',
