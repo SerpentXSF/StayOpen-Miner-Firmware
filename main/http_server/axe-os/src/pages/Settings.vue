@@ -301,6 +301,32 @@ const isVersionNewer = (remoteVer: string, localVerStr: string) => {
 };
 
 /*
+ * Can isVersionNewer actually order this string?
+ *
+ * It cannot say so itself: it returns a boolean, so "older" and "I could not
+ * read that" come back identical. Number('') is 0 and Number('x') is NaN,
+ * which `|| 0` turns into 0 as well, so a version of "..." compares as 0.0.0
+ * and every real version beats it -- isVersionNewer returns false, and a
+ * caller that treats false as "we are ahead" then says so about a string it
+ * never parsed.
+ *
+ * That is not hypothetical. A release body once carried a marker reading
+ * "..." (see WEB_VERSION_RE above), and on this page's earlier two-outcome
+ * logic it advertised a web update at version "...". With three outcomes the
+ * same body would claim the miner is AHEAD of the release instead -- quieter,
+ * still false, and indistinguishable from the genuine case.
+ *
+ * The normalisation here is deliberately the same first two steps as
+ * isVersionNewer's, so this answers a question about that function rather
+ * than about some other idea of a version: strip a leading v, take the part
+ * before any space, hyphen or underscore, and require what is left to be
+ * dot-separated digits. A pre-release like 1.6.8-rc1 still compares, because
+ * isVersionNewer compares its base too.
+ */
+const isVersionComparable = (v: string) =>
+  /^\d+(?:\.\d+)*$/.test((v || '').replace(/^v/i, '').split(/[ \-_]/)[0]);
+
+/*
  * Pick the asset an update actually accepts.
  *
  * A release carries five images. Two of them are update containers the miner
@@ -454,6 +480,17 @@ const checkGithubUpdates = async () => {
           webUpdateState.value = 'unknown';
         } else if (releaseWeb === WEB_VERSION.trim()) {
           webUpdateState.value = 'unchanged';
+        } else if (!isVersionComparable(releaseWeb) ||
+                   !isVersionComparable(WEB_VERSION)) {
+          /*
+           * A marker that is present but not a version is 'unknown', not
+           * 'ahead'. Without this the else below claimed the miner was ahead
+           * of any release whose marker it could not parse -- see
+           * isVersionComparable. An exact string match is still 'unchanged',
+           * above, because two identical strings mean one interface whatever
+           * they look like.
+           */
+          webUpdateState.value = 'unknown';
         } else if (isVersionNewer(releaseWeb, WEB_VERSION)) {
           webUpdateState.value = 'available';
           remoteWebUrl.value = binAsset.browser_download_url;
