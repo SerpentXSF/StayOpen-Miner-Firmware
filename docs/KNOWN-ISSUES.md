@@ -3218,9 +3218,45 @@ samplers of one event agreeing on it.
 ### The mechanism is the pool's, and this firmware is exonerated
 
 The first explanation offered above -- the pool grading an *old* job against the
-old target -- is **wrong**, and the kernel log is what refutes it. The rejects
-landed on the job the pool issued *after* the change, interleaved with accepts
-on that same job. A wholesale target mismatch cannot produce a mixture.
+old target -- is **wrong**, and the per-share job ids are what refute it.
+
+**Correction to an earlier version of this section**, which said the rejects
+"landed on the job the pool issued *after* the change". They did not: in both
+trials the **first** reject sat on the job that was already in force when the
+announcement arrived, issued 25.0 s and 22.0 s earlier. The burst *straddles*
+the job boundary rather than beginning at one, and the corrected picture is a
+stronger argument than the one it replaces.
+
+| | trial 2, 1,024 -> 438 | trial 3, 1,024 -> 510 |
+| --- | --- | --- |
+| we adopted the new difficulty | +30 ms | +450 ms |
+| first reject | +3.92 s | +10.75 s |
+| last reject | **+34.57 s** | **+35.55 s** |
+| on the pre-change job | 1 accepted, 1 rejected | 1 accepted, 1 rejected |
+| on the first post-change job | 4 accepted, 5 rejected | 4 accepted, 7 rejected |
+| the rejects stopped | 0.43 s before that job ended | 2.45 s before it ended |
+
+Four things in that table each independently rule out the reading in which the
+miner is at fault -- that is, the reading where we retarget the job already in
+flight while the pool still grades it at the old difficulty, which would make
+the early adoption ours to answer for:
+
+1. **The pool issued a job after its own announcement and still rejected on
+   it.** Those jobs arrived 5.0 s and 8.0 s *after* the pool announced the
+   lower difficulty. Shares at the announced difficulty, on a job the pool
+   minted after announcing it, have to be accepted under that reading. A
+   majority were rejected.
+2. **The mixture appears on two separate jobs in each trial, independently.**
+   A wholesale job-or-target mismatch cannot produce a mixture at all.
+3. **The rejects stop mid-job**, 0.43 s and 2.45 s before the job carrying them
+   expired. A job-boundary mechanism cannot stop mid-job. A grading threshold
+   that lags by a fixed stretch of time does exactly that.
+4. **The pool kept accepting shares on the superseded job.** Trial 2 accepted a
+   share on the pre-change job 1.44 s *after* issuing its replacement, so
+   old-job shares are not being rejected as such.
+
+The lag is also reproducible to better than a second: **34.57 s and 35.55 s**
+from the pool's announcement to its last `Above target`.
 
 What survives fits the mixture exactly: the pool announces the lower
 difficulty, the miner adopts it at once, and **the pool carries on grading
@@ -3234,14 +3270,22 @@ the two difficulties:
 | --- | --- | --- | --- | --- |
 | 1,024 -> 497 | 12 accepted, 14 rejected | 0.462 | **0.485** | -0.024 |
 | 1,024 -> 438 | 5 accepted, 6 rejected | 0.455 | **0.428** | +0.027 |
-| 1,024 -> 510 | 4 accepted, 8 rejected | 0.333 | **0.498** | -0.165 |
+| 1,024 -> 510 | 5 accepted, 8 rejected | 0.385 | **0.498** | -0.113 |
 
 All three fall inside their exact 95% binomial intervals, and the first two miss
-from opposite sides. **The third is a much worse fit and is reported as such**:
-0.333 against 0.498 on 12 submissions, interval 0.099 -- 0.651. An interval that
+from opposite sides. **The third is the worst fit and is reported as such**:
+0.385 against 0.498 on 13 submissions, interval 0.139 -- 0.684. An interval that
 wide cannot distinguish the prediction from a coin toss, so trial 3 is
 consistent with the mechanism without being evidence for it. The ratio claim
 still rests on trials 1 and 2.
+
+**Trial 3's figure was first published as 4 accepted of 12, a fraction of
+0.333.** That window ran from the first reject to the last, which forces both
+endpoints to be rejects and so biases the fraction down. Measured instead from
+the moment *we* adopted the new difficulty -- every share after that point
+being work at the new target, and so exposed -- it is 5 of 13. Trial 2 is
+unaffected at 5 of 11, because its first share after adoption happened to be a
+reject either way.
 
 **This is therefore not a defect in this firmware.** `stratum_task` applied the
 new difficulty 30 ms after it arrived and `create_jobs_task` had it on the next
@@ -3353,23 +3397,36 @@ independently as the API's counter stepping by 2 inside one 15-second poll.
 That is one cause catching several submissions in flight, not several causes.
 
 **The cause is a block change.** Collapsing events within 120 s into single
-triggers gives 28 triggers over 40.4 h. Measured against mainnet block
-timestamps:
+triggers gives **48 triggers from 56 `Stale` over 65.53 h**, across windows 3
+and 4 both closed. Measured against mainnet block timestamps:
 
 | | triggers |
 | --- | --- |
-| within 120 s of a block boundary | **27 of 28** |
-| median distance to the nearest block | **20 s** |
-| mean position between blocks | 0.309 (0.5 = no relationship) |
+| within 120 s of a block boundary | **42 of 48** |
+| median distance to the nearest block | **22 s** |
 
-P(27 or more within 120 s | triggers independent of blocks) is below 1e-5 over
-100,000 draws of the same conditional null. For comparison, 209 blocks fell in
-the observed span and 28 produced a `Stale`, so **13% of blocks produce one**.
+P(42 or more within 120 s | triggers independent of blocks) is below 1e-5 over
+100,000 draws of the same conditional null. 334 blocks fell in the observed
+span and 48 produced a `Stale`, so **14% of blocks produce one**.
 
-From that, the size of the exposure: at 0.2751 submissions/s and 0.134 triggers
-per block, the window in which a submission must be in flight to come back
-`Stale` is **0.487 s** -- about one submit round trip, which is what this
-mechanism should look like and not something firmware can shorten to zero.
+From that, the size of the exposure: at 0.2938 submissions/s and 0.1437
+triggers per block, the window in which a submission must be in flight to come
+back `Stale` is **0.489 s**. That is the right order for one submit round trip,
+but no round-trip time has been measured here, so the resemblance is an
+observation and not a derivation -- and the drought below shows the exposure is
+a quantity that varies, whose owner this measurement does not identify.
+
+**Two corrections to an earlier version of this section, both of which it
+carried for two days.** First, every figure above was originally computed while
+window 4 was still open: "28 triggers over 40.4 h, 209 blocks, 0.134 per block,
+13%, 27 of 28" is window 3's 16 triggers plus window 4's *uncollapsed* 12
+events. Second, the block cache had a single interior hole of 33 blocks,
+heights 975178 to 975210, falling inside window 4; the earlier extension of
+that cache fixed a short tail and never tested for gaps in the middle.
+Completeness has to be checked by block *height*, where `max - min + 1 == len`
+is exact, and not by whether blocks-per-hour looks plausible. The two errors
+pulled in opposite directions and very nearly cancelled, which is why nothing
+looked wrong: 0.487 s then, 0.489 s now.
 
 Two limits on the block axis, stated because they bound the conclusion. These
 are block *header* timestamps from a public explorer, which are miner-reported
@@ -3396,7 +3453,7 @@ caught inside a single window with the rate measured on both sides of it.
 
 **First occurrence** -- window 3 of run `20261106T195855`, from 2.42 h to
 11.88 h of uptime: 9.47 hours, 9,363 submissions, **48 blocks**, not one
-`Stale`. At 0.134 triggers per block that predicts 6.4, P(0) = 0.0016. That
+`Stale`. At 0.1437 triggers per block that predicts 6.9, P(0) = 0.0010. That
 split was found by eye, which inflates the figure.
 
 **Second occurrence** -- window 2 of run `20261109T160530`, still open at
@@ -3408,7 +3465,9 @@ split was found by eye, which inflates the figure.
 | **the hole** | **18.26** | **17,139** | **105** | **0** | **13.3** | **0.000** |
 | after the hole | 3.83 | 3,536 | 21 | 3 | 2.6 | 0.143 |
 
-P(0) across the hole is **1.6e-6**. The published per-block rate is 0.139.
+P(0) across the hole is **2.8e-7** at the measured 0.1437 triggers per block
+(48 triggers over 334 blocks, derived above), which is the rate used in the
+predicted column.
 
 **This within-window contrast is the strongest evidence in the study, and it
 needs no external rate at all.** One window, one endpoint, one difficulty -- 685
@@ -3422,7 +3481,8 @@ exactly at every point.
 The selection-free test fires on it. Taking the largest of the six spacings --
 a statistic fixed before looking at where the gap is, and now including the two
 **edge** spacings, which an earlier version of this test omitted -- P(longest
->= 0.707 of the span | 5 events placed uniformly) = **0.0129**.
+>= 0.704 of the span | 5 events placed uniformly) = **0.0136**.
+(Published first as 0.707 and 0.0129; 18.26 of 25.94 hours is 0.704.)
 
 Two lessons from running that test twice, recorded because both are easy to get
 wrong. Earlier the same day the same window held only 2 events and the same
@@ -3435,25 +3495,38 @@ simply lower in this run; the afternoon refuted that, because the rate returned
 to prediction inside the same window.
 
 **What the absolute rate will not support.** Comparing this window's count
-against the published 0.139 per block gives P(<= 5) near 1e-4, and that number
-should not be leaned on, because the per-block trigger rate is not constant
-across windows:
+against the measured 0.1437 per block gives P(<= 5) near 1e-5, and that number
+should be leaned on only lightly, because it compares one window against a rate
+pooled from others:
 
 | window | span | subs/s | blocks | triggers | per block | predicted | obs/pred |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 3, run `...195855` | 21.69 h | 0.2748 | 129 | 16 | 0.124 | 17.3 | 0.93 |
-| 4, run `...195855` | 43.84 h | 0.3032 | 172 | 32 | **0.186** | 25.4 | **1.26** |
-| 2, run `...160530`, outside the hole | 7.67 h | 0.259 | 34 | 5 | 0.147 | 4.3 | 1.16 |
+| 3, run `...195855` | 21.69 h | 0.2748 | 129 | 16 | 0.124 | 18.5 | 0.86 |
+| 4, run `...195855` | 43.84 h | 0.3032 | **205** | 32 | **0.156** | 29.5 | **1.09** |
+| 2, run `...160530`, outside the hole | 7.67 h | 0.259 | 34 | 5 | 0.147 | 4.9 | 1.02 |
 
-Window 4 ran a quarter above its own exposure prediction over nearly two days,
-window 3 slightly below it. So the 0.487 s exposure figure is a window average
-rather than a constant, and any test of one window against another window's
-rate inherits that drift. The max-spacing statistic and the within-window
-contrast do not, which is why they carry the finding and the count test does
-not.
+**An earlier version of this table read 172 blocks for window 4, giving 0.186
+per block and an obs/pred of 1.26, and this paragraph argued from that figure
+that the per-block rate drifts badly between windows.** The 172 was the block
+cache's 33-block hole, not the chain. Corrected, the three windows sit at 0.124,
+0.156 and 0.147 against a combined 0.1437, and obs/pred spans 0.86 to 1.09. The
+spread is about 14%, not the 50% the uncorrected table implied, and per-window
+exposure is 0.451 s and 0.515 s rather than anything dramatic.
+
+So the drift argument is much weaker than it was published as, and two things
+follow. The count test against the combined rate is *less* compromised than
+this section previously conceded -- though it is still a comparison across
+windows, and the max-spacing statistic and the within-window contrast remain
+the ones that carry the finding, because they need no external rate at all. And
+the hole's flanking rates, 0.154 and 0.143, now sit almost exactly on the
+combined 0.1437, which strengthens the drought rather than weakening it: the
+rate either side of the hole is the ordinary rate.
 
 **Window 4 remains the negative control the question needs**: 43.84 hours,
-38 `Stale` collapsing to 32 triggers, longest spacing 5.10 h, P = **0.323**.
+38 `Stale` collapsing to 32 triggers, longest spacing 5.10 h, P = **0.526**.
+(An earlier version gave 0.323 here. That is the figure for the 38 raw events;
+on the 32 triggers this sentence says it used, it is 0.526. The conclusion is
+the same either way, and more comfortably so.)
 Nothing resembling a drought across the longest window in the study. (An
 earlier draft of this section described window 4 as "12 events over 17.1 h";
 those were mid-flight figures taken while the window was still open, and the
