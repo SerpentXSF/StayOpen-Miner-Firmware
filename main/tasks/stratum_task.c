@@ -176,6 +176,7 @@ void stratum_close_connection(GlobalState * GLOBAL_STATE)
     esp_transport_handle_t t = GLOBAL_STATE->transport;
     GLOBAL_STATE->transport = NULL;
     GLOBAL_STATE->write_failed = false;
+    GLOBAL_STATE->drop_requested = false;
     pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
 
     if (t == NULL) {
@@ -567,6 +568,7 @@ void stratum_task(void * pvParameters)
          */
         pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
         GLOBAL_STATE->write_failed = false;
+        GLOBAL_STATE->drop_requested = false;
         GLOBAL_STATE->transport = transport;
         pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
 
@@ -582,8 +584,16 @@ void stratum_task(void * pvParameters)
              * submit path has given up on cannot carry on for another ten
              * minutes of reads.
              */
-            if (GLOBAL_STATE->write_failed) {
-                ESP_LOGW(TAG, "pool A: a share could not be written, dropping the session");
+            if (GLOBAL_STATE->write_failed || GLOBAL_STATE->drop_requested) {
+                /* Which one fired decides only what gets logged. Both end the
+                 * session by the same path on purpose: a drop asked for over
+                 * the API is only worth having if it exercises the teardown a
+                 * real failure takes. Same reasoning as the secondaries. */
+                if (GLOBAL_STATE->drop_requested) {
+                    ESP_LOGW(TAG, "pool A: dropping the session, asked over the API");
+                } else {
+                    ESP_LOGW(TAG, "pool A: a share could not be written, dropping the session");
+                }
                 retry_attempts++;
                 stratum_close_connection(GLOBAL_STATE);
                 break;
@@ -596,10 +606,12 @@ void stratum_task(void * pvParameters)
                  * anyone has afterwards and they mean different things: a
                  * failed write is the peer gone, a quiet socket is this end
                  * giving up on a pool that said nothing. */
-                /* Read once. Reading the flag twice could name the wrong
-                 * cause: a share can fail in the window between the read
-                 * returning and this test. */
-                if (GLOBAL_STATE->write_failed) {
+                /* Read once. Reading a flag twice could name the wrong
+                 * cause: a share can fail, or a drop be asked for, in the
+                 * window between the read returning and this test. */
+                if (GLOBAL_STATE->drop_requested) {
+                    ESP_LOGW(TAG, "pool A: receive woken by an API drop, dropping the session");
+                } else if (GLOBAL_STATE->write_failed) {
                     ESP_LOGW(TAG, "pool A: receive woken by a failed share write, dropping the session");
                 } else {
                     ESP_LOGE(TAG, "Failed to receive JSON-RPC line, reconnecting...");

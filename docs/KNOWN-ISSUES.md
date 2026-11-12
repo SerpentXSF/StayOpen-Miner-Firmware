@@ -3102,15 +3102,24 @@ means routine maintenance quietly destroys the evidence. Capture
 `isUsingFallbackStratum` and `uptimeSeconds` on every sample before reasoning
 about reject rates, and snapshot pool state before any push.
 
-**Note for anyone trying to reproduce this: `/api/system/pool/drop` cannot do
-it.** That endpoint refuses pool A by name. ~~because pool A's transport has no
+~~**Note for anyone trying to reproduce this: `/api/system/pool/drop` cannot do
+it.** That endpoint refuses pool A by name, because pool A's transport has no
 lock and its receive timeout is ten minutes -- the same missing lock already
-listed as an open defect.~~ **The stated reason stopped being true before the
-refusal did:** the lock exists, and the share-submit path demonstrates a prompt
-and safe way to end pool A's session from another task. What is missing is only
-a `drop_requested` of pool A's own for the handler to set. So the only way to
-force a pool A failover is still a config change plus a restart, which is two
-cold starts rather than a reconnect. Pool A is both the only pool whose
+listed as an open defect. So the only way to force a pool A failover is a
+config change plus a restart, which is two cold starts rather than a
+reconnect.~~
+
+**Superseded 2026-11-11, unreleased: the endpoint takes pool A now.** The lock
+it was waiting on exists, and the reader is woken rather than left to notice a
+flag up to ten minutes later. `{"pool":"A"}` ends pool A's session in place, so
+a reconnect no longer costs two cold starts -- which is what makes the
+reconnect-without-a-restart case testable at all. It has never been watched.
+
+Two caveats carried over rather than lost: pool A is still the only pool whose
+reconnect resets its share counters, so a drop destroys that session's reject
+history; and its session always reopens at difficulty 1024, so a drop is itself
+a difficulty decrease and should be expected to produce a small burst of `Above
+target`. Pool A is both the only pool whose
 failover resets the share counters and the only pool whose session cannot be
 ended for testing.
 

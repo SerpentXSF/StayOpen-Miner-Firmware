@@ -38,6 +38,7 @@
 #include "dual_clamp.h"
 #include "api_auth.h"
 #include "stratum_task.h"   /* stratum_connected_status() for poolAConnected */
+#include "esp_transport.h"  /* esp_transport_get_socket() for the pool A drop */
 //#include "vcore.h"
 #include "connect.h"
 #include "asic.h"
@@ -1479,13 +1480,20 @@ static esp_err_t POST_restart(httpd_req_t * req)
  * Worth saying plainly: it needs the API password, and the worst an authorised
  * caller achieves is a reconnect the pool was always free to force itself.
  *
- * Pool A is not accepted -- but no longer for the reason this comment used to
- * give. It said pool A's transport had no lock and its receive timeout was ten
- * minutes, so there was no prompt and safe way to end its session from here.
- * The lock exists now, and the share-submit path demonstrates the prompt and
- * safe way: set a flag and wake the reader with shutdown(SHUT_RD). What is
- * still missing is only a drop_requested of pool A's own for this handler to
- * set. See the note on PoolSession::drop_requested.
+ * Pool A is accepted too, since the change that gave its transport a lock.
+ * This comment used to say it could not be: no lock, and a receive that can go
+ * ten minutes without returning, so no prompt and safe way to end its session
+ * from here. Both halves are answered now -- the lock bounds the handle, and
+ * waking the reader with shutdown(SHUT_RD) is what makes it prompt. Without
+ * that wake the flag alone would be honoured up to ten minutes later, which is
+ * useless for the one thing this endpoint is for.
+ *
+ * Pool A differs from the secondaries in two ways a caller should know. Its
+ * reconnect resets its share counters, so a drop loses the accepted/rejected
+ * history the secondaries keep; and its session always reopens at difficulty
+ * 1024 with vardiff walking it back down, so a drop is also a difficulty
+ * decrease, which is the one thing known to produce a burst of Above target
+ * rejects. Both are properties of pool A, not of this endpoint.
  */
 static esp_err_t POST_pool_drop(httpd_req_t * req)
 {
@@ -1511,7 +1519,7 @@ static esp_err_t POST_pool_drop(httpd_req_t * req)
 
     if (total_len <= 0 || total_len >= SCRATCH_BUFSIZE) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "expected a body of {\"pool\":\"B\"|\"C\"|\"D\"}");
+                            "expected a body of {\"pool\":\"A\"|\"B\"|\"C\"|\"D\"}");
         return ESP_OK;
     }
     while (cur_len < total_len) {
@@ -1535,7 +1543,7 @@ static esp_err_t POST_pool_drop(httpd_req_t * req)
         item->valuestring[0] == '\0' || item->valuestring[1] != '\0') {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "\"pool\" must be a single letter: B, C or D");
+                            "\"pool\" must be a single letter: A, B, C or D");
         return ESP_OK;
     }
 
@@ -1545,35 +1553,63 @@ static esp_err_t POST_pool_drop(httpd_req_t * req)
     }
     cJSON_Delete(root);
 
-    if (letter == 'A') {
+    if (letter < 'A' || letter > 'A' + (int) (POOL_MAX - 1)) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "pool A cannot be dropped from here");
-        return ESP_OK;
-    }
-    if (letter < 'A' + (int) POOL_B || letter > 'A' + (int) (POOL_MAX - 1)) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "\"pool\" must be a single letter: B, C or D");
+                            "\"pool\" must be a single letter: A, B, C or D");
         return ESP_OK;
     }
 
     pool_id_t id = (pool_id_t) (letter - 'A');
 
-    /* Same test the pool task uses for "is there anything to connect to". */
-    const char * url = module->pool[id].url;
+    /*
+     * Same test each pool task uses for "is there anything to connect to".
+     * Pool A's configuration is still in its own SystemModule fields rather
+     * than in pool[], which is the same reason it needed its own flag.
+     */
+    const char * url = (id == POOL_A) ? module->pool_url : module->pool[id].url;
     if (url == NULL || url[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "that pool is not configured");
         return ESP_OK;
     }
 
-    bool was_connected = module->pool[id].connected;
+    bool was_connected = (id == POOL_A) ? stratum_connected_status()
+                                        : module->pool[id].connected;
 
     /*
-     * The flag is the whole of it. The pool task owns the session and tears it
-     * down itself on its next pass, which is what makes this safe from here --
-     * closing a transport from under the task reading it is what the
-     * transport_lock exists to prevent.
+     * For the secondaries the flag is the whole of it. The pool task owns the
+     * session and tears it down itself on its next pass, which is what makes
+     * this safe from here -- closing a transport from under the task reading it
+     * is what the transport_lock exists to prevent.
      */
-    GLOBAL_STATE->pool_session[id].drop_requested = true;
+    if (id != POOL_A) {
+        GLOBAL_STATE->pool_session[id].drop_requested = true;
+    } else {
+        /*
+         * Pool A takes one step more, and it is not about safety but about
+         * the flag being noticed. stratum_task only reads it between lines,
+         * and its receive can sit for ten minutes without returning
+         * (STRATUM_V1_receive_jsonrpc_line loops on a 60 s poll up to
+         * STRATUM_IDLE_LIMIT_MS -- not SO_RCVTIMEO, which barely
+         * participates). A drop honoured ten minutes later is no use for
+         * reproducing anything, so wake the reader the way the share-submit
+         * path does.
+         *
+         * Under the lock, which is what makes it safe from this task: a
+         * non-NULL handle observed here implies the fd is still this
+         * session's, because the only code that closes it nulls the handle in
+         * the same critical section. shutdown() itself frees nothing, and
+         * destroying stays stratum_task's alone.
+         */
+        pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
+        GLOBAL_STATE->drop_requested = true;
+        if (GLOBAL_STATE->transport != NULL) {
+            int sock = esp_transport_get_socket(GLOBAL_STATE->transport);
+            if (sock >= 0) {
+                shutdown(sock, SHUT_RD);
+            }
+        }
+        pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
+    }
 
     ESP_LOGW(TAG, "pool %c: session drop requested over the API (was %s)",
              letter, was_connected ? "connected" : "not connected");

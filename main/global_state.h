@@ -399,6 +399,23 @@ typedef struct
     pthread_mutex_t        transport_lock;
     volatile bool          write_failed;
 
+    /*
+     * Set by the API to end pool A's session on purpose, read by stratum_task
+     * in the same place as write_failed and torn down by the same path.
+     *
+     * Kept separate rather than reusing write_failed so the log says which
+     * happened: a requested drop recorded as "a share could not be written"
+     * would read as a network fault in the one record anyone has to work from
+     * afterwards. Same reasoning as PoolSession::drop_requested, which this
+     * mirrors; the comment there explains why the secondaries got theirs
+     * first.
+     *
+     * The HTTP task sets it under transport_lock and wakes the reader the way
+     * the share-submit path does, because a drop nobody can observe for ten
+     * minutes is useless as the test instrument this endpoint exists to be.
+     */
+    volatile bool          drop_requested;
+
     /* ---- how the hashrate is divided ----
      * dual_ratio_a is the two-pool form, kept because that is what is stored
      * in NVS and shown in the UI today; it is handed to the scheduler as

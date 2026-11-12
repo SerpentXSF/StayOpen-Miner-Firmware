@@ -233,17 +233,28 @@ to 0.6 s -- so poll `pool<X>Connected` to watch it:
 {"pool": "C", "wasConnected": true, "status": "drop requested"}
 ```
 
-`B`, `C` or `D`, upper or lower case. Pool A is refused. An unconfigured pool
-gives 404.
+`A`, `B`, `C` or `D`, upper or lower case. An unconfigured pool gives 404.
 
-The reason given here until 2026-11-11 was that pool A's transport had no lock
-and its receive timeout was nominally ten minutes (in every release up to
-2.0.31 it was effectively 60 s, because a poll timeout was read as a close --
-see `docs/KNOWN-ISSUES.md`), so there was no prompt and safe way to end its
-session from the HTTP task. **Pool A's transport has a lock now, and the
-share-submit path is the prompt and safe way that sentence said did not
-exist.** What pool A still lacks is a `drop_requested` of its own for this
-handler to set, which is the only thing now keeping it refused.
+**Pool A was refused until 2026-11-11**, on the grounds that its transport had
+no lock and its receive timeout was nominally ten minutes (in every release up
+to 2.0.31 it was effectively 60 s, because a poll timeout was read as a close
+-- see `docs/KNOWN-ISSUES.md`), so there was no prompt and safe way to end its
+session from the HTTP task. Both halves are answered: the lock bounds the
+handle, and the reader is woken with `shutdown(SHUT_RD)` rather than left to
+notice the flag up to ten minutes later.
+
+Two things about dropping pool A specifically, neither of them a property of
+this endpoint:
+
+- **Its share counters reset on reconnect.** The secondaries keep theirs. So a
+  pool A drop loses the accepted/rejected history for that session, which is
+  the thing that makes pool A's reject figures hard to reason about across a
+  failover.
+- **Its session always reopens at difficulty 1024**, with vardiff walking it
+  back down. So a drop is also a difficulty *decrease*, and a decrease is the
+  one thing known to produce a burst of `Above target` rejects. Expect a
+  handful in the first minute; they are the pool grading against the old
+  target, not a fault.
 
 **Why this exists.** The defects fixed on this path were all about what a new
 session inherits from the one it replaced -- work, extranonce, a held notify --
