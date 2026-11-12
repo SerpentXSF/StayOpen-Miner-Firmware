@@ -3206,16 +3206,104 @@ lock serialises them.
   contains four `pthread_mutex_init` calls -- pool A's transport, the two per
   secondary pool, and `work_queue.c` -- and none is this one. Zero-filled
   `.bss` is not `PTHREAD_MUTEX_INITIALIZER`, so every `pthread_mutex_lock` on
-  it returns `EINVAL` and locks nothing, at all 24 call sites:
-  `asic_result_task.c`, `components/asic/lt0051.c`, `components/asic/bm1370.c`.
-  The job table has had no mutual exclusion since it was written. Not fixed
-  here because it is not this change, and because the right fix is a question
-  -- initialise them, or establish that the accesses are single-task and drop
-  the locks.
+  it returns `EINVAL` and locks nothing. The job table has had no mutual
+  exclusion since it was written. Still not fixed -- but the question this
+  entry left open has since been answered, and two of its own figures were
+  wrong. See "The job table's lock: the question, answered" below.
 - **`send_uid` is incremented non-atomically by two tasks.** The submit path now
   does it under the lock; `stratum_task` does it unlocked in four places. Two
   messages can take the same id, which matters because setup replies are
   identified by id. Pre-existing, and pool B has the same shape.
+
+### The job table's lock: the question, answered (2026-11-12)
+
+The entry above left the fix as a question -- initialise the locks, or
+establish that the accesses are single-task and drop them. Answered by
+reading, with nothing flashed: **initialise them.** Four distinct tasks enter
+these critical sections on a BC board.
+
+| Task | Created | Path to the lock |
+|---|---|---|
+| `ASIC_task`, one per chain, priority 10 | `main.c:1061` | `ASIC_send_work` -> `bm1370.c:421` |
+| `ASIC_result_task`, one per chain, priority 15 | `main.c:1069` | `asic_result_task.c:67` |
+| `stratum_task`, pool A | `main.c:1000` | `cleanQueue`, `stratum_task.c:91` |
+| `stratum_poolb_task`, pools B/C/D | `main.c:1005` | `pool_abandon_work`, `stratum_poolb_task.c:303` |
+
+A sender, a reader at a higher priority than the sender it races, and both
+stratum tasks. There is no reading of this on which the locks are redundant.
+
+**Two figures in the entry above were wrong, and the second one mattered.**
+It said 24 call sites in three files: `asic_result_task.c`,
+`components/asic/lt0051.c`, `components/asic/bm1370.c`. It is **18**
+lock/unlock calls forming **8** critical sections across **five** files --
+the two it omitted being `stratum_task.c` and `stratum_poolb_task.c`, which
+are two of the four racing tasks. The file list dropped half the evidence for
+its own conclusion.
+
+Of the 8 sections only **4 are live**, one per task.
+`ASIC_ltc_result_task` (`asic_result_task.c:306`) is dead -- declared,
+correct, and called by nothing. All three `lt0051.c` sections are
+unreachable: `CONFIG_STAYOPEN_ASIC_LT0051` is absent from `sdkconfig`, so
+`LT0051_send_work` is `#define`d to a no-op at `asic.c:26`, and
+`LT0051_send_work_by_chip` and `LT0051_send_work_by_cores_group` are
+commented out at `asic.c:360` in any case.
+
+**The `EINVAL` claim, verified rather than asserted.** It had been stated
+from memory, and there was one way it could have been wrong, since the IDF
+*does* lazily initialise statically-initialised mutexes:
+
+- `static GlobalState GLOBAL_STATE = { .extranonce_str = NULL, ... }` is a
+  partial designated initialiser, so `valid_jobs_lock[]` is zero.
+- `_PTHREAD_MUTEX_INITIALIZER` is `((pthread_mutex_t) 0xFFFFFFFF)`
+  (`sys/_pthreadtypes.h:172`). **Zero is not it.**
+- So `pthread_mutex_init_if_static()` compares `0` against `0xFFFFFFFF` and
+  does nothing, and `pthread_mutex_lock` goes on to call
+  `pthread_mutex_lock_internal((esp_pthread_mutex_t *)0, portMAX_DELAY)`,
+  whose first line is `if (!mux) { return EINVAL; }`.
+
+Immediate return, no blocking, no protection, and every call site ignores
+the return value. The comment at `asic_result_task.c:46` describes exactly
+the use-after-free the lock was added to prevent, and states that the window
+is not narrow: job ids step by 24 modulo 128, so sixteen slots are used and
+each is recycled every sixteen jobs. That fix has been inert since it was
+written.
+
+**Three things found while answering this, all one family, all bearing on
+what the fix has to be.** `BM1370_send_work` hardcodes index `[0]` --
+`valid_jobs_lock[0]`, `active_jobs[0]`, `valid_jobs[0]`, `job_pool[0]` --
+while `ASIC_task` is created per chain and passes `chain_num`, and
+`ASIC_result_task` guards `valid_jobs_lock[chain_num]`:
+
+- With `MAX_CHAIN_NUM` 2 (`MAX_UART_NUM`, `serial.h:9`), a two-chain board
+  has chain 1's sender writing chain 0's job table under chain 0's lock while
+  chain 1's reader guards chain 1's. **Initialising the locks would not make
+  that correct.**
+- `static uint8_t id = 0` at `bm1370.c:395` is file-scope, shared by both
+  chains' senders, and `id = (id + 24) % 128` is a non-atomic
+  read-modify-write. The job-id counter races too.
+- `valid_jobs[chain]` is allocated only when `chain_pluged[chain]`
+  (`main.c:154`). Because of the hardcoded `[0]`, a board with only chain 1
+  plugged writes through `valid_jobs[0] == NULL` at `bm1370.c:426`.
+  `cleanQueue` null-checks that pointer; `BM1370_send_work` does not.
+
+**Where the init belongs, and in which form.** Beside the other four, and
+**unconditionally** -- not inside the `chain_pluged`-guarded loop at
+`main.c:948`, both for the reason given above the secondaries' loop and
+because the hardcoded `[0]` means chain 0's lock is taken even when chain 0
+is absent.
+
+One choice is left, and the BC04 decides it. Two `pthread_mutex_init` calls
+cost roughly 200 bytes of internal heap, permanently, on a board whose
+steady-state floor measured **23 bytes** on 2026-10-15 -- not the 131 quoted
+above, which is an earlier and milder reading of the same board.
+`xSemaphoreCreateMutexStatic()` with a `StaticSemaphore_t` member puts both
+in `.bss` and removes the init-time failure path with them. For these two
+that is the better form.
+
+Not fixed in this release line. It is a second unproven concurrency change
+to a subsystem whose first one has not yet run on hardware, and the
+hardcoded-index defects above mean the lock fix alone would not finish the
+job.
 
 ### The cost, since this file tracks that
 
