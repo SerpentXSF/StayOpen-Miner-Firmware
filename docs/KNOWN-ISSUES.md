@@ -2,7 +2,9 @@
 
 Things that are understood, worked around, and worth doing properly.
 
-**The current release is 2.0.34** (tag `v2.0.34`), and it is a security
+**The current release is 2.0.36** (tag `v2.0.36`), a web-interface release;
+2.0.35 was the one before it, also the web interface. **2.0.34 is the one to
+read if you are updating from anything earlier**, because it is a security
 release. **Update if you are on anything earlier.** It fixes five
 pre-existing Stratum defects, present in every release up to and including
 2.0.33, one of which lets a pool write its own bytes over a running task's
@@ -760,7 +762,8 @@ hardware errors rather than rejected shares. Not introduced by this fix, and
 the alternative -- leaving those slots valid -- is worse.
 
 **Reading the flag rather than the transport is what made this small.** Pool A's
-transport has no lock, which is why this looked like it needed one;
+transport had no lock at the time, which is why this looked like it needed one
+(it has one now -- see "Pool A's transport has a lock" below);
 `stratum_connected_status()` is already a public accessor, cleared when that
 task's connection loop ends. A notify is only queued after the flag is set, so
 a freshly dequeued notify can never be discarded by the new check, and
@@ -1720,11 +1723,13 @@ DMA free went the other way outright: +28 b/h against -23, ending 7,496 against
 
 ### Not fixed, from the same review
 
-- **Pool A's transport can be destroyed by another task while its owner is
+- ~~**Pool A's transport can be destroyed by another task while its owner is
   reading it.** `asic_result_task.c:190` frees `GLOBAL_STATE->transport` while
   `stratum_task` may be blocked in `esp_transport_read()` on that handle. It is
   why the drop endpoint refuses pool A. Fixing it means a lock on pool A's
-  transport, which stays out of scope.
+  transport, which stays out of scope.~~ **Fixed, unreleased -- see "Pool A's
+  transport has a lock" below.** The line reference also no longer points at
+  anything.
 - **A dead pool A can idle the chain when the slice is long.** `dualSliceMs`
   is clamped to 100–60000 ms. Pool A's slices are skipped with a 10 ms yield,
   and about 3 s of work sits buffered, so at the 2000 ms default nothing
@@ -3098,12 +3103,126 @@ means routine maintenance quietly destroys the evidence. Capture
 about reject rates, and snapshot pool state before any push.
 
 **Note for anyone trying to reproduce this: `/api/system/pool/drop` cannot do
-it.** That endpoint refuses pool A by name, because pool A's transport has no
+it.** That endpoint refuses pool A by name. ~~because pool A's transport has no
 lock and its receive timeout is ten minutes -- the same missing lock already
-listed as an open defect. So the only way to force a pool A failover is a
-config change plus a restart, which is two cold starts rather than a
-reconnect. Pool A is both the only pool whose failover resets the share
-counters and the only pool whose session cannot be ended for testing.
+listed as an open defect.~~ **The stated reason stopped being true before the
+refusal did:** the lock exists, and the share-submit path demonstrates a prompt
+and safe way to end pool A's session from another task. What is missing is only
+a `drop_requested` of pool A's own for the handler to set. So the only way to
+force a pool A failover is still a config change plus a restart, which is two
+cold starts rather than a reconnect. Pool A is both the only pool whose
+failover resets the share counters and the only pool whose session cannot be
+ended for testing.
+
+## Pool A's transport has a lock (2026-11-11, unreleased)
+
+**The defect.** `asic_result_task` called `stratum_close_connection()` from the
+share-submit path. That closes, destroys and nulls `GLOBAL_STATE->transport` --
+from a task that does not own it, while `stratum_task` can be blocked in
+`esp_transport_read()` on the same handle. A use-after-free in the share path.
+
+Pool A now gets the discipline B, C and D have had since 2.0.31: the handle is
+published under a lock, cleared before it is destroyed under the same lock, and
+destroyed by `stratum_task` and nothing else. The submit path sets
+`write_failed` and asks.
+
+**One thing pool A needed that the secondaries did not.** Its reader can go ten
+minutes without returning, so a flag alone could sit unread for that long while
+pool A kept its full share of the slices and every share built for it was
+dropped -- the exact harm `write_failed` exists to prevent. So the submit path
+also wakes the reader with `shutdown(SHUT_RD)`.
+
+Worth recording, because the note this replaced got it wrong and so prescribed
+the wrong fix: **the ten minutes is not `SO_RCVTIMEO`.** That is 600 s but
+barely participates, since `recv()` is only reached once `select()` reports
+readable. It is `STRATUM_V1_receive_jsonrpc_line` looping on its own 60 s poll
+up to `STRATUM_IDLE_LIMIT_MS`. Shortening the socket timeout, which the old
+note suggested, would have changed nothing.
+
+`shutdown()` from a non-owner is safe here for two specific reasons, both worth
+stating because neither is general. The fd cannot have been recycled: a
+non-NULL handle observed under the lock implies the fd is still this session's,
+because the only code that closes it nulls the handle in the same critical
+section. And one socket may be used from two tasks at all only because the IDF
+port sets `LWIP_NETCONN_FULLDUPLEX=1` with `LWIP_NETCONN_SEM_PER_THREAD=1`;
+upstream lwIP defaults both off, where the pattern is unsupported.
+
+### What three reviews found that the first version of the fix had wrong
+
+Kept because the near-misses are the useful part.
+
+- **The first version introduced a worse bug than it fixed.** The new teardown
+  path broke out of the session without going through
+  `STRATUM_V1_receive_jsonrpc_line`, which is the only thing that clears the
+  retained receive accumulator -- every error return from it frees the buffer,
+  so for years "the session ended" and "the buffer was cleared" happened to be
+  the same event. A pool that sent two lines in one segment would have had the
+  second parsed into the **next** session: marked connected on evidence from a
+  dead socket, and work built against the previous session's extranonce, every
+  share from it refused. `cleanup_stratum_buffer()` now runs with the teardown,
+  which also closes the same defect on the `CLIENT_RECONNECT` path, where it
+  has been since that path was written.
+- **A failed write only means "the peer is gone" while one task is writing.**
+  `extranonce.subscribe` is sent from `stratum_task` on the published handle,
+  and it was not taking the lock. On plain TCP lwIP fails one of two concurrent
+  writes; if the loser is the submit path, `write_failed` is set and a healthy
+  session is torn down. On TLS the two interleave in one mbedtls context and
+  corrupt a record. It takes the lock now.
+- **A failed `pthread_mutex_init` degraded silently to no locking at all.**
+  `pthread_mutex_lock` on a zeroed mutex returns `EINVAL` immediately rather
+  than blocking, every call site ignores the return, so the critical sections
+  would run unprotected with nothing in the log -- restoring the original
+  use-after-free. On a board measured at 131 bytes of free internal RAM that is
+  not hypothetical. All four initialisations are now checked and raise a fault.
+- **`SHUT_RDWR` is not merely a wake.** lwIP treats it as a close: it drops the
+  pcb and aborts a write in flight with `ERR_CLSD`. `SHUT_RD` matches the
+  intent -- wake the reader, let its owner tear down.
+- **Holding the lock across `esp_transport_close` was unnecessary.** The first
+  version held it on the reasoning that a submit might still be inside its
+  write; it cannot be, because if it holds the lock the closer has not acquired
+  it. Releasing first matters because a TLS close can block for seconds under
+  `SO_SNDTIMEO`, and `ASIC_result_task` -- one per chain, at a much higher
+  priority -- would wait behind it processing no nonces for any pool.
+  `stratum_poolb_task`'s `pool_close` still holds it across the destroy and
+  could take the same treatment.
+
+**A second race fixed by accident.** With more than one chain there is an
+`ASIC_result_task` per chain and both submit to pool A. Those two writes raced
+each other before, one of them failing and calling the cross-task teardown. The
+lock serialises them.
+
+### Two things the review turned up that are not fixed
+
+- **`GlobalState::valid_jobs_lock[]` is never initialised.** The whole tree
+  contains four `pthread_mutex_init` calls -- pool A's transport, the two per
+  secondary pool, and `work_queue.c` -- and none is this one. Zero-filled
+  `.bss` is not `PTHREAD_MUTEX_INITIALIZER`, so every `pthread_mutex_lock` on
+  it returns `EINVAL` and locks nothing, at all 24 call sites:
+  `asic_result_task.c`, `components/asic/lt0051.c`, `components/asic/bm1370.c`.
+  The job table has had no mutual exclusion since it was written. Not fixed
+  here because it is not this change, and because the right fix is a question
+  -- initialise them, or establish that the accesses are single-task and drop
+  the locks.
+- **`send_uid` is incremented non-atomically by two tasks.** The submit path now
+  does it under the lock; `stratum_task` does it unlocked in four places. Two
+  messages can take the same id, which matters because setup replies are
+  identified by id. Pre-existing, and pool B has the same shape.
+
+### The cost, since this file tracks that
+
+A `pthread_mutex_t` is a 4-byte handle, but `pthread_mutex_init` allocates an
+`esp_pthread_mutex_t` plus a FreeRTOS mutex -- together a little over a hundred
+bytes, pinned to internal RAM by `heap_idf.c`, and never freed because nothing
+in the tree calls `pthread_mutex_destroy`. Against the 131-byte floor recorded
+above, that is most of the worst-case headroom spent on one mutex.
+
+Stated rather than hidden, and the same is true of the six that were already
+there: **no release note or entry has ever accounted for roughly 650 bytes of
+internal DRAM held by the existing session mutexes.** The structure also grows
+8 bytes. If internal RAM has to be won back, `xSemaphoreCreateMutexStatic()`
+with a `StaticSemaphore_t` member would move the whole allocation into `.bss`
+and remove the init-time failure path with it; `main.c` already uses the
+FreeRTOS API directly for `global_parameter_mutex`.
 
 ## The first reject rate measured inside one endpoint's own window (2026-11-07)
 
