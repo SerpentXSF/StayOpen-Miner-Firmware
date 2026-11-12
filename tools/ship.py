@@ -263,6 +263,109 @@ def notes_with_web_version(notes_file, version, boards):
     return out, web
 
 
+# Everything whose content ends up in, or shapes, the packed web partition. A
+# change to any of these changes what an owner's browser runs, which is the
+# whole of what WEB_VERSION is for. The lockfile is deliberately absent: it
+# can move without the bundle moving, and a guard that cries wolf gets
+# switched off.
+WEB_SOURCES = [
+    "main/http_server/axe-os/src",
+    "main/http_server/axe-os/public",
+    "main/http_server/axe-os/index.html",
+    "main/http_server/axe-os/vite.config.ts",
+    "main/http_server/axe-os/package.json",
+]
+
+WEB_VERSION_DECL_RE = r"^const WEB_VERSION = "
+
+
+def check_web_version_bumped(head=None):
+    """Refuse when the interface has changed since WEB_VERSION last moved.
+
+    This is the third defect in a row out of one version string describing two
+    different interfaces, and the first two were both found by reading rather
+    than by anything that fails. On 2026-11-11 two interface changes -- an
+    alert for a disconnected pool, and the update row's unknown state -- were
+    committed and pushed with this string untouched, so the branch and both
+    boards served materially different interfaces answering to
+    `1.6.7 20261105`. Nothing noticed: not the build, not the typecheck, not
+    this script. 1.6.6 was skipped on purpose to avoid exactly that, which is
+    how much it is worth avoiding.
+
+    Two questions, asked in this order because the other order produces a
+    refusal telling you to bump a version you have already bumped:
+
+    1. Is the tree about to be built described by a commit? An uncommitted
+       interface change builds an image whose source is not public, which on a
+       GPL project is a compliance problem and not untidiness. Skipped when
+       `head` names a past commit, since the working tree is then not the
+       subject.
+    2. Has anything under WEB_SOURCES moved since WEB_VERSION last changed?
+       The bump commit itself is outside the range, which is what makes the
+       normal case -- change and bump together in one commit -- pass.
+
+    It runs before the builds rather than beside the publish checks, because a
+    stale version is compiled into the image: finding out afterwards means
+    throwing both boards' builds away.
+
+    `head` exists so this can be asked of a past commit, which is the only way
+    to test that it catches anything.
+    """
+    rev = head or "HEAD"
+
+    if head is None:
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--"] + WEB_SOURCES,
+            cwd=ROOT, capture_output=True, text=True)
+        if dirty.returncode != 0:
+            sys.exit("cannot read the status of the interface sources: %s"
+                     % dirty.stderr.strip())
+        changed = [l[3:].strip('"') for l in dirty.stdout.splitlines()
+                   if l.strip()]
+        if changed:
+            sys.exit("refusing to build: uncommitted changes to the "
+                     "interface:\n  %s\n"
+                     "The image would be built from a tree no commit "
+                     "describes, and a published binary whose source is not "
+                     "public is a compliance problem. Commit them -- with the "
+                     "WEB_VERSION bump, if the interface changed."
+                     % "\n  ".join(changed))
+
+    decl = os.path.join("main", "http_server", "axe-os", "src", "util",
+                        "const.ts")
+    bump = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "-G", WEB_VERSION_DECL_RE,
+         rev, "--", decl],
+        cwd=ROOT, capture_output=True, text=True)
+    if bump.returncode != 0:
+        sys.exit("cannot ask git when WEB_VERSION last changed: %s"
+                 % bump.stderr.strip())
+    sha = bump.stdout.strip()
+    if not sha:
+        sys.exit("no commit in this history ever set WEB_VERSION in %s. If "
+                 "the declaration moved or was renamed, point WEB_SOURCES and "
+                 "WEB_VERSION_DECL_RE at the new one -- do not delete this "
+                 "check, which is the only thing standing between a changed "
+                 "interface and a version string that does not say so." % decl)
+
+    after = subprocess.run(
+        ["git", "log", "--oneline", "%s..%s" % (sha, rev), "--"]
+        + WEB_SOURCES, cwd=ROOT, capture_output=True, text=True)
+    if after.returncode != 0:
+        sys.exit("cannot list interface commits since %s: %s"
+                 % (sha[:12], after.stderr.strip()))
+    if after.stdout.strip():
+        sys.exit("refusing to build: the interface changed after WEB_VERSION "
+                 "was last set, in %s.\n%s\n"
+                 "Those commits change what the browser runs while %r still "
+                 "describes the interface before them, so every miner would "
+                 "be told its interface was unchanged. Bump WEB_VERSION in "
+                 "const.ts and commit it."
+                 % (sha[:12], after.stdout.rstrip(), declared_web_version()))
+
+    return sha
+
+
 def main():
     argv = sys.argv[1:]
     if "--notes-file" in argv:
@@ -304,6 +407,10 @@ def main():
         # caller's cwd could pass this check and then fail at the gh call --
         # which happens AFTER the flasher has been force-pushed.
         notes_file = os.path.abspath(notes_file)
+
+    # Before the builds: a stale interface version is compiled into the
+    # image, so finding out afterwards costs both boards' builds.
+    check_web_version_bumped()
 
     for board in boards:
         print("\n=== building %s ===" % board)
