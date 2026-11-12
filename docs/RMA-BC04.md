@@ -244,12 +244,31 @@ same way. That is the honest version of the warning already in the README.
 
 The board was not returned. A replacement was purchased.
 
-The deciding measurement — whether a **linked** W5500 survives the first
-hashboard power-up on the vendor's own firmware — has never been taken, and at
-this point probably never will be. Two boards have come and gone without it:
-the second died before the test could be run, and the third was soaked on stock
-and then flashed. That is a permanent limitation of this record rather than a
-pending result, and this page does not promise to get stronger later.
+**Corrected and closed 2026-11-11.** This section used to say that the
+deciding measurement — whether a **linked** W5500 survives the first hashboard
+power-up on the vendor's own firmware — had never been taken. That
+contradicted the body of this page: it was taken on 2026-10-20, on a healthy
+board running stock THOR 3.0.5 with Ethernet plugged and linked, and the
+W5500 came through the rail step and held for 49 minutes. The result is
+recorded in full above. The sentence here was written before that test and
+not revisited after it, which is the one thing this page is otherwise careful
+about, and the sort of error that is easiest to make in a document arguing a
+position.
+
+What was still outstanding is narrower, and is now closed for good: a
+**serial console capture** of a powered boot with Ethernet linked. It is the
+only instrument that could show a glitch-and-recover inside the first few
+milliseconds, because the HTTP log endpoint that supplied the 2026-10-20
+timings does not start reporting until seconds in. It needed the last board
+here still running the vendor's firmware, and that board is gone as of
+2026-11-11. Every board that could have answered it has now come and gone:
+the second died before the test could be run, the third was soaked on stock
+and then flashed, and the last left while still holding the only unflashed
+stock image available here.
+
+So the first few milliseconds remain an inference. That is a permanent
+limitation of this record rather than a pending result, and this page does not
+promise to get stronger later.
 
 What has since been established on working hardware is narrower, and is a
 statement about this firmware rather than about the vendor's: holding the W5500
