@@ -596,6 +596,48 @@ static bool s_critical_task_failed = false;
  * a missing reader is still a chain whose owner may want to look at it
  * before it stops.
  */
+/*
+ * A mutex that failed to initialise is the worst outcome this file can
+ * produce, so it is not allowed to pass quietly.
+ *
+ * pthread_mutex_init mallocs -- an esp_pthread_mutex_t plus a FreeRTOS mutex,
+ * both pinned to internal RAM, together a little over a hundred bytes. This
+ * board has been measured with as little as 131 bytes of internal RAM free at
+ * some point in a boot, so the allocation failing is not hypothetical.
+ *
+ * And it fails *silently*. The field stays zero, which is not
+ * PTHREAD_MUTEX_INITIALIZER, so the lazy-init path never fires;
+ * pthread_mutex_lock then returns EINVAL immediately rather than blocking.
+ * Every call site in this tree ignores that return, so every critical section
+ * the mutex guards would run with no mutual exclusion at all and nothing in
+ * the log would say so -- including the share-submit path, where the whole
+ * point of the lock is that a handle is not freed underneath it.
+ *
+ * Raised as a fault rather than a restart, for the reason create_task_checked
+ * gives: a miner that cannot mine safely must not report itself healthy, and a
+ * reboot loop on a board that is short of RAM helps nobody.
+ */
+static void mutex_init_checked(GlobalState *state, pthread_mutex_t *mutex,
+                               const char *what)
+{
+    int rc = pthread_mutex_init(mutex, NULL);
+    if (rc == 0) {
+        return;
+    }
+
+    ESP_LOGE(TAG, "%s mutex did not initialise (%d). Internal heap: %u free, "
+                  "largest block %u.", what, rc,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL));
+    ESP_LOGE(TAG, "Without it the share path has no mutual exclusion. Raising "
+                  "a fault: this miner must not report itself healthy.");
+
+    char info[48];
+    snprintf(info, sizeof(info), "%s mutex init failed", what);
+    SYSTEM_notify_error_info(state, SPECIAL_ERROR, info);
+    s_critical_task_failed = true;
+}
+
 static bool create_task_checked(GlobalState *state, TaskFunction_t fn,
                                 const char *name, uint32_t stack, void *arg,
                                 UBaseType_t prio, bool critical)
@@ -881,6 +923,10 @@ void app_main(void)
     /*create the queue.*/
     queue_init(&GLOBAL_STATE.stratum_queue);
 
+    /* Pool A's own, which the loop below cannot reach. */
+    mutex_init_checked(&GLOBAL_STATE, &GLOBAL_STATE.transport_lock,
+                       "pool A transport");
+
     /*
      * Every secondary pool's queue and the locks guarding its session state.
      *
@@ -892,8 +938,12 @@ void app_main(void)
      */
     for (pool_id_t id = POOL_B; id < POOL_MAX; id++) {
         queue_init(&GLOBAL_STATE.pool_session[id].queue);
-        pthread_mutex_init(&GLOBAL_STATE.pool_session[id].transport_lock, NULL);
-        pthread_mutex_init(&GLOBAL_STATE.pool_session[id].extranonce_lock, NULL);
+        mutex_init_checked(&GLOBAL_STATE,
+                           &GLOBAL_STATE.pool_session[id].transport_lock,
+                           "secondary transport");
+        mutex_init_checked(&GLOBAL_STATE,
+                           &GLOBAL_STATE.pool_session[id].extranonce_lock,
+                           "secondary extranonce");
     }
     for(int i = 0; i < MAX_CHAIN_NUM; i++){
         if(GLOBAL_STATE.chain_pluged[i])

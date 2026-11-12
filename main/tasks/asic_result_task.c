@@ -1,4 +1,7 @@
 #include <lwip/tcpip.h>
+/* for shutdown() on pool A's socket -- see the share-submit path below */
+#include "lwip/sockets.h"
+#include "esp_transport.h"
 
 #include "system.h"
 #include "work_queue.h"
@@ -171,6 +174,10 @@ void ASIC_result_task(void *pvParameters)
                  * blocking dequeue meant no work was built while pool A was
                  * down. It is built now, so the check has to be here.
                  */
+                /* Under pool A's lock, for the reason the secondary branch
+                 * above gives: stratum_task can be tearing this handle down
+                 * at any moment. */
+                pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
                 if (GLOBAL_STATE->transport == NULL) {
                     ESP_LOGD(TAG, "pool A share dropped: not connected");
                 } else {
@@ -186,10 +193,50 @@ void ASIC_result_task(void *pvParameters)
                         asic_result->rolled_version ^ job_version);
 
                     if (ret < 0) {
-                        ESP_LOGI(TAG, "Unable to write share to transport. Closing connection. Ret: %d", ret);
-                        stratum_close_connection(GLOBAL_STATE);
+                        /*
+                         * This used to call stratum_close_connection(), which
+                         * destroyed the handle from this task while
+                         * stratum_task could be blocked in
+                         * esp_transport_read() on it. Ask instead.
+                         */
+                        ESP_LOGW(TAG, "Unable to write share to pool A. Ret: %d", ret);
+                        GLOBAL_STATE->write_failed = true;
+
+                        /*
+                         * And wake the reader, because the flag alone can go
+                         * unread for ten minutes: stratum_task's receive loops
+                         * on a 60 s poll up to STRATUM_IDLE_LIMIT_MS, and for
+                         * all of it pool A keeps its full share of the slices
+                         * while every share built for it is dropped. (Not
+                         * SO_RCVTIMEO, which is also 600 s but barely
+                         * participates -- recv() is only reached once select()
+                         * says readable.)
+                         *
+                         * SHUT_RD, not SHUT_RDWR: the intent is to wake the
+                         * reader and let its owner tear the session down.
+                         * SHUT_RDWR is treated as a close -- it drops the pcb
+                         * and aborts a write in flight with ERR_CLSD -- which
+                         * is more than is wanted from here.
+                         *
+                         * Two things make this safe from a task that must not
+                         * destroy. The fd cannot have been recycled: a
+                         * non-NULL handle observed under this lock implies the
+                         * fd is still this session's, because the only code
+                         * that closes it nulls the handle in the same critical
+                         * section. And one socket may be used from two tasks
+                         * at all only because the IDF port sets
+                         * LWIP_NETCONN_FULLDUPLEX=1 with
+                         * LWIP_NETCONN_SEM_PER_THREAD=1 (lwipopts.h); upstream
+                         * lwIP defaults both off, where this pattern is
+                         * unsupported and would fail quietly.
+                         */
+                        int sock = esp_transport_get_socket(GLOBAL_STATE->transport);
+                        if (sock >= 0) {
+                            shutdown(sock, SHUT_RD);
+                        }
                     }
                 }
+                pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
             }
         }
 
@@ -205,6 +252,17 @@ void ASIC_result_task(void *pvParameters)
     }
 }
 
+/*
+ * Never created. It is declared in asic_result_task.h beside the live task and
+ * nothing calls either the declaration or the definition -- main.c registers
+ * ASIC_result_task only -- and the linker discards the whole function, so it
+ * costs nothing in the image.
+ *
+ * Two things to fix before reviving it, both of which the live task above no
+ * longer does: it writes GLOBAL_STATE->transport with no NULL check at all,
+ * and it calls stratum_close_connection() on a failed write, which is the
+ * cross-task destroy this file was changed to stop.
+ */
 void ASIC_ltc_result_task(void *pvParameters)
 { 
     uint32_t chain_num = ((AsicParam *)(pvParameters))->chain_num;

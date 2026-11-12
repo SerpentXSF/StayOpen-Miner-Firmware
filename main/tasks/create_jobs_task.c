@@ -175,8 +175,10 @@ void create_jobs_task(void *pvParameters)
          * unroutable address from boot, which is the one arrangement where the
          * pointer is never set and the old test did fire.
          *
-         * stratum_connected_status() rather than the transport: pool A's
-         * transport has no lock, and reading a bool that another task writes is
+         * stratum_connected_status() rather than the transport. Pool A's
+         * transport has a lock now, so this could read the handle under it the
+         * way the secondaries do; it does not, and the reason is no longer
+         * that there is no lock. Reading a bool that another task writes is
          * the pattern already used for write_failed. It is cleared when that
          * task's connection loop ends and set when a line arrives, and a notify
          * is only ever queued after it is set -- so a fresh dequeue above can

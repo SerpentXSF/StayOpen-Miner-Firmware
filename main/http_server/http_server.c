@@ -1479,9 +1479,13 @@ static esp_err_t POST_restart(httpd_req_t * req)
  * Worth saying plainly: it needs the API password, and the worst an authorised
  * caller achieves is a reconnect the pool was always free to force itself.
  *
- * Pool A is not accepted. Its transport has no lock and its receive timeout is
- * ten minutes, so there is no prompt and safe way to end its session from
- * here. See the note on PoolSession::drop_requested.
+ * Pool A is not accepted -- but no longer for the reason this comment used to
+ * give. It said pool A's transport had no lock and its receive timeout was ten
+ * minutes, so there was no prompt and safe way to end its session from here.
+ * The lock exists now, and the share-submit path demonstrates the prompt and
+ * safe way: set a flag and wake the reader with shutdown(SHUT_RD). What is
+ * still missing is only a drop_requested of pool A's own for this handler to
+ * set. See the note on PoolSession::drop_requested.
  */
 static esp_err_t POST_pool_drop(httpd_req_t * req)
 {

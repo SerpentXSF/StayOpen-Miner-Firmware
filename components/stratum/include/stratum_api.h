@@ -80,6 +80,18 @@ esp_transport_handle_t STRATUM_V1_transport_init(tls_mode tls, char *cert);
 
 void STRATUM_V1_initialize_buffer();
 
+/*
+ * Drop whatever is sitting in the receive accumulator.
+ *
+ * It has to be exported because the accumulator survives between calls by
+ * design -- everything after the last newline is kept for the next one -- and
+ * every error return from STRATUM_V1_receive_jsonrpc_line frees it, so for a
+ * long time "the session ended" and "the buffer was cleared" happened to be
+ * the same event. They are not: a caller that ends a session any other way
+ * has to clear it, or the next session opens by parsing the dead one's bytes.
+ */
+void cleanup_stratum_buffer();
+
 char *STRATUM_V1_receive_jsonrpc_line(esp_transport_handle_t transport);
 
 int STRATUM_V1_subscribe(esp_transport_handle_t transport, int send_uid, char * model);

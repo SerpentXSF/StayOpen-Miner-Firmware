@@ -153,15 +153,53 @@ bool stratum_last_resolved_hostname(char *host)
 
 void stratum_close_connection(GlobalState * GLOBAL_STATE)
 {
-    if (GLOBAL_STATE->transport == NULL) {
+    /*
+     * Take the handle and null the field under the lock, then let go before
+     * closing it.
+     *
+     * Releasing first is safe, and the reasoning is the whole point of the
+     * lock: a submit can only touch the handle while holding this mutex, so
+     * once we hold it no submit is inside one, and once the field is NULL no
+     * later submit can obtain it. Holding on across the close instead would
+     * be safe too, but esp_transport_close on a TLS session can block for
+     * seconds under SO_SNDTIMEO, and ASIC_result_task -- one per chain, at a
+     * much higher priority -- would wait behind it, processing no nonces for
+     * any pool. (stratum_poolb_task's pool_close does hold it across the
+     * destroy. It could take the same treatment; that is its own change.)
+     *
+     * Only stratum_task may call this. asic_result_task used to, from the
+     * share-submit path, which freed the handle while this task could be
+     * blocked in esp_transport_read() on it; it now sets write_failed and
+     * lets this task do it.
+     */
+    pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
+    esp_transport_handle_t t = GLOBAL_STATE->transport;
+    GLOBAL_STATE->transport = NULL;
+    GLOBAL_STATE->write_failed = false;
+    pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
+
+    if (t == NULL) {
         ESP_LOGE(TAG, "Transport already NULL, not shutting down again..");
         return;
     }
 
     ESP_LOGE(TAG, "Shutting down transport and restarting...");
-    esp_transport_close(GLOBAL_STATE->transport);
-    esp_transport_destroy(GLOBAL_STATE->transport);
-    GLOBAL_STATE->transport = NULL;
+    esp_transport_close(t);
+    esp_transport_destroy(t);
+
+    /*
+     * The receive accumulator keeps everything after the last newline for the
+     * next call, so it has to be dropped with the session. Every error return
+     * from STRATUM_V1_receive_jsonrpc_line frees it, which is why the paths
+     * that end a session *through* a failed read have always been clean -- and
+     * why ending one any other way was not. Both such paths are in this file:
+     * the write_failed break below, and the CLIENT_RECONNECT break, which has
+     * had this defect since it was written. Without this, a pool that sent two
+     * lines in one segment would have the second parsed into the *next*
+     * session -- marking it connected on evidence from a dead socket, and
+     * building work against the previous session's extranonce.
+     */
+    cleanup_stratum_buffer();
     cleanQueue(GLOBAL_STATE);
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
@@ -340,6 +378,13 @@ void stratum_task(void * pvParameters)
     int retry_attempts = 0;
     int retry_critical_attempts = 0;
 
+    /*
+     * Still disabled. Note before re-enabling it: stratum_primary_heartbeat
+     * calls stratum_close_connection() when the primary comes back, and that
+     * is now stratum_task's alone to call. From its own task it would be the
+     * same cross-task destroy this file just stopped doing -- it would have
+     * to set write_failed, or a flag of its own, instead.
+     */
     //xTaskCreate(stratum_primary_heartbeat, "stratum primary heartbeat", 8192, pvParameters, 1, NULL);
 
     //ESP_LOGI(TAG, "Opening connection to pool: %s:%d", stratum_url, port);
@@ -418,8 +463,16 @@ void stratum_task(void * pvParameters)
         const char *protocol_prefix = (tls != DISABLED) ? "stratum+ssl" : "stratum+tcp";
         ESP_LOGI(TAG, "Connecting to: %s://%s:%d (%s)", protocol_prefix, stratum_url, port, STATUM_MODULE.lastResolvedIp);
 
-        GLOBAL_STATE->transport = STRATUM_V1_transport_init(tls, cert);
-        if (GLOBAL_STATE->transport == NULL) {
+        /*
+         * Local until it works. The handle used to be published into
+         * GLOBAL_STATE->transport the moment it was created, so
+         * asic_result_task could find a transport that had not connected,
+         * subscribed or authorized yet and write a share into it. That write
+         * fails, and now that a failed write asks for a teardown, it would
+         * tear down the session that was seconds from being usable.
+         */
+        esp_transport_handle_t transport = STRATUM_V1_transport_init(tls, cert);
+        if (transport == NULL) {
             ESP_LOGE(TAG, "Unable to create transport");
             if (++retry_critical_attempts > MAX_CRITICAL_RETRY_ATTEMPTS) {
                 ESP_LOGE(TAG, "Max retry attempts reached, restarting...");
@@ -431,26 +484,25 @@ void stratum_task(void * pvParameters)
         retry_critical_attempts = 0;
 
         if (tls != DISABLED) {
-            esp_transport_ssl_set_common_name(GLOBAL_STATE->transport, stratum_url);
+            esp_transport_ssl_set_common_name(transport, stratum_url);
         }
 
         ESP_LOGI(TAG, "Transport created, connecting to %s:%d", STATUM_MODULE.lastResolvedIp, port);
-        esp_err_t err = esp_transport_connect(GLOBAL_STATE->transport, STATUM_MODULE.lastResolvedIp, port, 5000);
+        esp_err_t err = esp_transport_connect(transport, STATUM_MODULE.lastResolvedIp, port, 5000);
         if (err != ESP_OK)
         {
             retry_attempts++;
             ESP_LOGE(TAG, "Transport unable to connect to %s:%d (errno %d)", stratum_url, port, err);
             SYSTEM_notify_error_info(GLOBAL_STATE, NETWORK_ERROR, NULL);
             // close the transport
-            esp_transport_close(GLOBAL_STATE->transport);
-            esp_transport_destroy(GLOBAL_STATE->transport);
-            GLOBAL_STATE->transport = NULL;
+            esp_transport_close(transport);
+            esp_transport_destroy(transport);
             // instead of restarting, retry this every 5 seconds
             vTaskDelay(5000 / portTICK_PERIOD_MS);
             continue;
         }
 
-        int sock = esp_transport_get_socket(GLOBAL_STATE->transport);
+        int sock = esp_transport_get_socket(transport);
         if (sock >= 0) {
             if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tcp_snd_timeout, sizeof(tcp_snd_timeout)) != 0) {
                 ESP_LOGE(TAG, "Fail to setsockopt SO_SNDTIMEO");
@@ -467,11 +519,11 @@ void stratum_task(void * pvParameters)
         ///// Start Stratum Action
         // mining.configure - ID: 1
         int configure_message_id = GLOBAL_STATE->send_uid++;
-        STRATUM_V1_configure_version_rolling(GLOBAL_STATE->transport, configure_message_id, &GLOBAL_STATE->version_mask);
+        STRATUM_V1_configure_version_rolling(transport, configure_message_id, &GLOBAL_STATE->version_mask);
 
         // mining.subscribe - ID: 2
         int subscribe_message_id = GLOBAL_STATE->send_uid++;
-        STRATUM_V1_subscribe(GLOBAL_STATE->transport, subscribe_message_id, GLOBAL_STATE->asic_model_str);
+        STRATUM_V1_subscribe(transport, subscribe_message_id, GLOBAL_STATE->asic_model_str);
 
         char * username = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? \
             GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_user : GLOBAL_STATE->SYSTEM_MODULE.pool_user;
@@ -503,19 +555,55 @@ void stratum_task(void * pvParameters)
         int extranonce_message_id = -1;   /* set if we send one, below */
         int authorize_message_id = GLOBAL_STATE->send_uid++;
         // mining.authorize - ID: 3
-        STRATUM_V1_authorize(GLOBAL_STATE->transport, authorize_message_id, username, password);
+        STRATUM_V1_authorize(transport, authorize_message_id, username, password);
 
         // mining.suggest_difficulty - ID: 4
         // STRATUM_V1_suggest_difficulty(GLOBAL_STATE->sock, GLOBAL_STATE->send_uid++, STRATUM_DIFFICULTY);
+
+        /*
+         * Publish it now: connected, subscribed, authorized. write_failed is
+         * cleared in the same breath so a failure recorded against the
+         * session that just ended cannot take down the one replacing it.
+         */
+        pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
+        GLOBAL_STATE->write_failed = false;
+        GLOBAL_STATE->transport = transport;
+        pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
 
         // Everything is set up, lets make sure we don't abandon work unnecessarily.
         GLOBAL_STATE->abandon_work = 0;
 
         while (1) {
+            /*
+             * Checked before the read, not after: the share-submit path sets
+             * this and then shuts the socket down, so the usual way in is the
+             * !line branch below. This catches the other order -- the flag
+             * set while a line was already in the buffer -- so a session the
+             * submit path has given up on cannot carry on for another ten
+             * minutes of reads.
+             */
+            if (GLOBAL_STATE->write_failed) {
+                ESP_LOGW(TAG, "pool A: a share could not be written, dropping the session");
+                retry_attempts++;
+                stratum_close_connection(GLOBAL_STATE);
+                break;
+            }
+
             char * line = STRATUM_V1_receive_jsonrpc_line(GLOBAL_STATE->transport);
             if (!line) {
                 SYSTEM_notify_error_info(GLOBAL_STATE, NETWORK_ERROR, NULL);
-                ESP_LOGE(TAG, "Failed to receive JSON-RPC line, reconnecting...");
+                /* Which of the two it was, because the log is the only record
+                 * anyone has afterwards and they mean different things: a
+                 * failed write is the peer gone, a quiet socket is this end
+                 * giving up on a pool that said nothing. */
+                /* Read once. Reading the flag twice could name the wrong
+                 * cause: a share can fail in the window between the read
+                 * returning and this test. */
+                if (GLOBAL_STATE->write_failed) {
+                    ESP_LOGW(TAG, "pool A: receive woken by a failed share write, dropping the session");
+                } else {
+                    ESP_LOGE(TAG, "Failed to receive JSON-RPC line, reconnecting...");
+                }
                 retry_attempts++;
                 stratum_close_connection(GLOBAL_STATE);
                 break;
@@ -680,7 +768,23 @@ void stratum_task(void * pvParameters)
                         // authorize 成功后发送 extranonce.subscribe（仅一次）
                         if (extranonce_subscribe) {
                             extranonce_message_id = GLOBAL_STATE->send_uid++;
-                            STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transport, extranonce_message_id);
+                            /*
+                             * Under the lock. This is the only other write to
+                             * the published handle, and without the lock it
+                             * can land in the middle of a share submit from
+                             * ASIC_result_task: on plain TCP lwIP fails one of
+                             * the two writes, and if the loser is the submit
+                             * then write_failed is set and a perfectly healthy
+                             * session is torn down -- a failed write only
+                             * means "the peer is gone" while this task is the
+                             * sole writer. On TLS the two interleave inside
+                             * one mbedtls context and corrupt a record.
+                             */
+                            pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
+                            if (GLOBAL_STATE->transport != NULL) {
+                                STRATUM_V1_extranonce_subscribe(GLOBAL_STATE->transport, extranonce_message_id);
+                            }
+                            pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
                         }
                     }
                 } else {

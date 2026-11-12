@@ -172,10 +172,11 @@ typedef struct {
      * written" would read as a network fault in the one record anyone has to
      * work from afterwards, and this flag exists to make faults legible.
      *
-     * There is no equivalent for pool A. Its transport has no lock, and its
-     * receive timeout is ten minutes, so neither closing the socket from
-     * another task nor polling a flag in its loop would be safe or prompt.
-     * Giving pool A one means locking its transport first.
+     * Pool A now has `transport_lock` and `write_failed`, in the GlobalState
+     * fields below rather than in this struct, because its session still
+     * lives there. It does **not** have a `drop_requested`, which is why
+     * POST_pool_drop still refuses it -- the lock it was waiting on exists,
+     * so that is now the only thing in the way.
      */
     volatile bool          drop_requested;
 } PoolSession;
@@ -355,7 +356,48 @@ typedef struct
     uint32_t version_mask;
     bool new_stratum_version_rolling_msg;
 
+    /*
+     * Pool A's session: the handle is published only once the connection is
+     * authorized, cleared before it is destroyed, both under transport_lock,
+     * and destroyed by stratum_task and nothing else.
+     *
+     * Stricter than the secondaries on the first point, which is worth
+     * knowing before anyone "aligns" them. B, C and D publish as soon as the
+     * TCP connect returns and then send configure, subscribe, authorize and
+     * extranonce.subscribe on the published handle with the lock not held
+     * (stratum_poolb_task.c) -- so they still have both windows this removed
+     * for A, and a wider one, every reconnect rather than once.
+     *
+     * It used to be destroyed by whichever task noticed first.
+     * asic_result_task called stratum_close_connection() from the
+     * share-submit path, freeing this handle while stratum_task could be
+     * blocked in esp_transport_read() on it. That is why the drop endpoint
+     * refused pool A, and it is what this pair exists to end.
+     *
+     * write_failed is how the submit path asks for a teardown instead of
+     * performing one. A failed write is the earliest sign the peer has gone:
+     * the receive side cannot tell a vanished peer from a quiet pool until
+     * lwIP exhausts its retransmits. Pool A needs one thing the secondaries
+     * do, though: its reader can go ten minutes without returning, so this
+     * flag on its own could sit unread that long while pool A kept its full
+     * share of the slices and every share built for it was dropped.
+     *
+     * Ten minutes, and not because of SO_RCVTIMEO -- that is 600 s but barely
+     * participates, since recv() is only reached once select() says readable.
+     * It is STRATUM_V1_receive_jsonrpc_line looping on its own 60 s poll up to
+     * STRATUM_IDLE_LIMIT_MS (stratum_api.c). Worth being exact about, because
+     * the note this paragraph replaced blamed the socket timeout and so
+     * prescribed shortening it, which would have changed nothing.
+     *
+     * So the submit path also wakes the reader with shutdown(SHUT_RD). What
+     * makes that safe from a task that must not destroy is not that shutdown
+     * frees nothing -- it is that a non-NULL handle observed under this lock
+     * implies the fd is still this session's, because the only code that
+     * closes it nulls the handle in the same critical section.
+     */
     esp_transport_handle_t transport;
+    pthread_mutex_t        transport_lock;
+    volatile bool          write_failed;
 
     /* ---- how the hashrate is divided ----
      * dual_ratio_a is the two-pool form, kept because that is what is stored
