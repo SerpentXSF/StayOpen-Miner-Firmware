@@ -3642,14 +3642,41 @@ are the negative control the claim needs:
 | --- | --- | --- | --- |
 | 665, window 3 | 18.73 h | 18,013 | **0** |
 | 585, window 4 | 43.58 h | 47,528 | **0** |
-| 685, window 2 of the later run | 30.16 h, still accruing | 28,107 | **0** |
+| 685, window 2 of the later run | **100.06 h** | **93,311** | **0** |
 
-The difficulty did not move inside any of the three. On the two closed stretches
-alone that is **62.31 hours and 65,541 accepted shares with no `Above target` at
-all**, at two different difficulties, and the third has added nothing in a
-further thirty hours. An earlier version of this paragraph cited only the first
-of the three, as "21 h ... roughly 18,000", where 21 h was the whole window
-rather than the stretch at 665.
+The difficulty did not move inside any of the three. Together that is
+**162.37 hours and 158,852 accepted shares with no `Above target` at all**, at
+three different difficulties. An earlier version of this paragraph cited only
+the first of the three, as "21 h ... roughly 18,000", where 21 h was the whole
+window rather than the stretch at 665; a later one could quote only the first
+two, because the third was still running.
+
+**The third stretch is a censored observation, not a terminated one, and that
+is the stronger form.** Its record was closed deliberately at 2026-11-13
+20:38:07, to free the board for a firmware flash. The difficulty was still 685
+at the cut-off, the counter still 0, and the sampler's own closing line reads
+`window 1 still open at stop`. Nothing ended this stretch; we stopped looking
+at it. Across the whole span `Above target` never moved off the 8 it carried in
+from the decrease at the start of the window, while the 32 `Stale` it collected
+are the other reject family doing what block changes do -- for the last of
+them the sampler captured the pool's own
+`{"reject-reason":"Stale","result":false}`.
+
+The span includes a **~14-hour gap in sampling**, from 01:29 on 2026-11-13,
+when a host restart killed the sampler. That costs the ability to timestamp an
+event *inside* the gap and nothing else: BC01's uptime was continuous across
+it, and pool A's reject counters are cumulative since boot, so `Above target`
+reading 8 on both sides of the gap proves rather than suggests that nothing
+happened in it. The figures above are the board's counters, not a row count.
+
+**A second board agrees, and nothing was watching it.** BC04, on the same
+build against the same pool with no sampler attached, reports **zero
+`Above target` across 7.17 days and 152,051 accepted shares** at a settled
+difficulty of 1366; all 77 of its rejects are `Stale`. A pool A session always
+opens at 1,024, so a board sitting at 1366 has had its difficulty moved *up*
+on net -- no decrease, so no burst. That is the mechanism predicting an absence
+on hardware that was never instrumented to test it, which is worth more than
+another instrumented hour at 685.
 
 `Stale` **is** now accounted for as well, and it is block-change latency: 42 of
 48 trigger events fall within two minutes of a block boundary, median 22 s. The
