@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Watch a miner over the network for days and record what happened when it died.
 
-    python tools/soak_monitor.py 192.168.50.223
-    python tools/soak_monitor.py 192.168.50.223 --hours 48 --interval 30
+    python tools/soak_monitor.py 192.0.2.223
+    python tools/soak_monitor.py 192.0.2.223 --hours 48 --interval 30
     python tools/soak_monitor.py 1.2.3.4 --password-file ../secrets/bc04-api-password.txt
 
 Why this exists

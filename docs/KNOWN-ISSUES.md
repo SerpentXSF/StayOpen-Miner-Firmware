@@ -1086,7 +1086,7 @@ trim for. See the entries below for why trimming stacks does not address it.
 
 ### The stack trims were measured on a BC04 and briefly applied to both (resolved)
 
-**Status: resolved 2026-10-15** -- a BC01 was found at 192.168.50.25, it was
+**Status: resolved 2026-10-15** -- a BC01 was found at 192.168.50.x, it was
 instrumented, and the figures came out the same. The paragraphs below record
 what the risk was.
 
@@ -2491,7 +2491,7 @@ Verified on the failed BC04, with and without WiFi:
 E (104159) serpentx: Peripheral init has not finished in 90 s -- the hashboard
                      is not coming up. Starting Ethernet anyway
 I (106189) NETWORK: Ethernet Link Up
-I (108689) esp_netif_handlers: eth ip: 192.168.50.31
+I (108689) esp_netif_handlers: eth ip: 192.168.50.x
 ```
 
 A DHCP lease needs a full four-way exchange, so this also established that the
