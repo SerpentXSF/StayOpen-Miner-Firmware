@@ -3305,6 +3305,43 @@ to a subsystem whose first one has not yet run on hardware, and the
 hardcoded-index defects above mean the lock fix alone would not finish the
 job.
 
+### A rejected setup reply resets the retry counter (2026-11-23, not fixed)
+
+`stratum_task`'s `STRATUM_RESULT_SETUP` branch zeroes `retry_attempts` before
+it looks at whether the reply was a success:
+
+```c
+} else if (stratum_api_v1_message.method == STRATUM_RESULT_SETUP) {
+    // Reset retry attempts after successfully receiving data.
+    retry_attempts = 0;
+    if (stratum_api_v1_message.response_success) {
+```
+
+The comment says "successfully receiving data", and that is what the code
+does -- any setup reply counts, including a refusal. So a pool that answers
+`mining.authorize` with `result:false` keeps the counter at zero, and pool A
+never accumulates the `MAX_RETRY_ATTEMPTS` failures that would move it to the
+fallback. A board whose worker is refused on the primary retries it forever
+rather than falling back to a pool that would take the work.
+
+**This is not new and it is not caused by the primary probe.** It bites any
+board whose primary rejects its worker -- a pool-side ban, an expired account,
+a typo in `stratumUser`. It is recorded here because the probe made it
+reachable from a *second* direction, which is how it was found: a probe that
+only checked for work would have promoted to a pool that refuses this worker,
+and this branch would then have prevented the board ever falling back. It
+would have turned a board mining on its fallback into a board mining nothing.
+
+The probe was made strict instead -- it now requires the authorize reply with
+`result:true` before asking for a switch back -- because that removes the
+combination without touching the path every session takes. Fixing this branch
+properly means deciding what a rejected authorize should do: resetting only on
+`response_success` is not sufficient on its own, since a successful
+`mining.subscribe` reply arrives first and resets the counter anyway. The
+session has to end on a rejected authorize for the failover to ever happen.
+That is a behaviour change for every pool, and it wants its own change and its
+own test.
+
 ### The cost, since this file tracks that
 
 A `pthread_mutex_t` is a 4-byte handle, but `pthread_mutex_init` allocates an
