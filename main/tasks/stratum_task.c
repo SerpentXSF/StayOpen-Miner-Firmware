@@ -5,6 +5,7 @@
 #include "system.h"
 #include "global_state.h"
 #include "lwip/dns.h"
+#include "lwip/netdb.h"
 #include <lwip/tcpip.h>
 #include "lwip/inet.h"
 #include "nvs_config.h"
@@ -22,6 +23,9 @@
 #include "utils.h"
 #include "main.h"
 #include "esp_transport.h"
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
+#include "freertos/idf_additions.h"
 #include "esp_transport_tcp.h"
 #include "esp_transport_ssl.h"
 
@@ -58,8 +62,6 @@ static const char * TAG = "stratum_task";
 static StratumApiV1Message stratum_api_v1_message = {.error_str = NULL, .mining_notification = NULL};
 StratumTaskModule STATUM_MODULE = {.stratum_difficulty = 8192, .isconnected = false, .lastResolvedIp = {0},};
 
-static const char * primary_stratum_url;
-static uint16_t primary_stratum_port;
 
 struct timeval tcp_snd_timeout = {
     .tv_sec = 5,
@@ -138,6 +140,37 @@ char * stratum_get_pool_ip(void)
     return STATUM_MODULE.lastResolvedIp;
 }
 
+/*
+ * Resolve into the caller's own buffer, for anyone who must not touch
+ * STATUM_MODULE.lastResolvedIp. That buffer is shared, and stratum_task reads
+ * it between its own resolve and its connect, so a second writer can send it
+ * to the wrong pool with the wrong credentials. getaddrinfo rather than
+ * gethostbyname because lwip's gethostbyname returns a pointer into static
+ * storage, which races the same way.
+ */
+bool stratum_resolve_into(const char * host, char * out, size_t out_len)
+{
+    if (host == NULL || host[0] == '\0' || out == NULL || out_len == 0) {
+        return false;
+    }
+
+    struct addrinfo hints = {
+        .ai_family = AF_INET,
+        .ai_socktype = SOCK_STREAM,
+    };
+    struct addrinfo * res = NULL;
+
+    if (getaddrinfo(host, NULL, &hints, &res) != 0 || res == NULL) {
+        return false;
+    }
+
+    struct sockaddr_in * sa = (struct sockaddr_in *) res->ai_addr;
+    const char * written = inet_ntop(AF_INET, &sa->sin_addr, out, out_len);
+    freeaddrinfo(res);
+
+    return written != NULL;
+}
+
 bool stratum_last_resolved_hostname(char *host)
 {
     struct hostent *primary_dns_addr = gethostbyname(host);
@@ -205,94 +238,251 @@ void stratum_close_connection(GlobalState * GLOBAL_STATE)
     vTaskDelay(1000 / portTICK_PERIOD_MS);
 }
 
+/*
+ * While pool A is on its fallback, probe the configured primary and ask
+ * stratum_task to go back to it once the primary is genuinely serving work.
+ *
+ * None of this ran before. The xTaskCreate was commented out in the vendor
+ * import (878900f), so the only route back to the primary was the toggle in
+ * stratum_task, which flips is_using_fallback after MAX_RETRY_ATTEMPTS
+ * failures on whichever pool is currently selected. A healthy fallback never
+ * fails, so it never toggled: observed 2026-11-23 with both boards parked on
+ * ckpool for hours while the configured primary answered the whole time. Only
+ * a restart cleared it, is_using_fallback being false at init and never
+ * persisted.
+ *
+ * What the probe accepts as "serving work" is the whole difficulty. A
+ * mining.subscribe *reply* contains the literal "mining.notify" -- it is one
+ * of the subscription tuples in result[0], the element
+ * _parse_stratum_subscribe_result_message() skips past to reach the
+ * extranonce in result[1] -- so searching the buffer for that string matches
+ * a pool that has sent no work at all, and on most pools matches the very
+ * first packet. This waits for a line whose *method* is mining.notify,
+ * accumulating across reads because a notify carrying a full merkle branch
+ * list runs to roughly 3 KB.
+ *
+ * Being strict matters here beyond tidiness: the failover path resets the
+ * share counters, so a promotion that does not stick costs a measurement
+ * window, and a primary that answers a handshake but serves nothing would
+ * otherwise flap against it indefinitely.
+ *
+ * It does not write is_using_fallback. See GlobalState::promote_requested for
+ * why that has to stay stratum_task's alone.
+ *
+ * Resident, with its stack in PSRAM. Created once at stratum_task start, so
+ * it is never created at the moment of a failover, when a BC04's internal
+ * heap is at its worst -- that board has measured 7,680 bytes as its largest
+ * free internal block one minute after boot and 91 bytes free in steady
+ * state. In PSRAM the stack costs no internal RAM at all, only the TCB, and a
+ * task that never exits has no lifecycle left to get wrong.
+ */
+#define PRIMARY_PROBE_PERIOD_MS 60000
+#define PRIMARY_PROBE_QUIET_MS  12000
+#define PRIMARY_PROBE_RX        4096
+#define PRIMARY_PROBE_TX        512
+
+static TaskHandle_t primary_probe_handle = NULL;
+
+/*
+ * Out of internal RAM for the reason above, and safe there: neither buffer is
+ * touched from an ISR or during a flash operation.
+ */
+EXT_RAM_BSS_ATTR static char probe_rx[PRIMARY_PROBE_RX];
+EXT_RAM_BSS_ATTR static char probe_tx[PRIMARY_PROBE_TX];
+EXT_RAM_BSS_ATTR static char probe_url[128];
+EXT_RAM_BSS_ATTR static char probe_user[192];
+EXT_RAM_BSS_ATTR static char probe_pass[64];
+
+/*
+ * A mining.notify *method* line, as opposed to the subscribe reply that
+ * merely advertises the method's name.
+ */
+static bool probe_line_is_notify(const char * line)
+{
+    return strstr(line, "mining.notify") != NULL
+        && strstr(line, "\"method\"") != NULL
+        && strstr(line, "\"result\"") == NULL;
+}
+
+/*
+ * Read until a notify arrives or the deadline passes. Returns true only on a
+ * real job.
+ */
+static bool probe_wait_for_work(esp_transport_handle_t hb)
+{
+    size_t filled = 0;
+    bool overlong = false;
+    int64_t deadline = esp_timer_get_time() + ((int64_t) PRIMARY_PROBE_QUIET_MS * 1000);
+
+    probe_rx[0] = '\0';
+
+    while (esp_timer_get_time() < deadline) {
+        int n = esp_transport_read(hb, probe_rx + filled,
+                                   (int) (PRIMARY_PROBE_RX - 1 - filled), 2000);
+        if (n < 0) {
+            return false;
+        }
+        if (n == 0) {
+            /* A read timeout, which esp_transport.h defines as 0, not an
+             * error. The pool may simply not have a job yet, so keep waiting
+             * until the deadline rather than giving up on the first gap. */
+            continue;
+        }
+
+        filled += (size_t) n;
+        probe_rx[filled] = '\0';
+
+        char * start = probe_rx;
+        char * nl;
+        while ((nl = strchr(start, '\n')) != NULL) {
+            *nl = '\0';
+            if (!overlong && probe_line_is_notify(start)) {
+                return true;
+            }
+            overlong = false;
+            start = nl + 1;
+        }
+
+        size_t rest = strlen(start);
+        if (rest > 0 && start != probe_rx) {
+            memmove(probe_rx, start, rest + 1);
+        }
+        filled = rest;
+
+        if (filled >= PRIMARY_PROBE_RX - 1) {
+            /* One line longer than the buffer. Drop it rather than testing a
+             * fragment, and ignore the remainder of it. */
+            filled = 0;
+            probe_rx[0] = '\0';
+            overlong = true;
+        }
+    }
+
+    return false;
+}
+
 void stratum_primary_heartbeat(void * pvParameters)
 {
     GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
-
-    ESP_LOGI(TAG, "Starting heartbeat thread for primary pool: %s:%d", primary_stratum_url, primary_stratum_port);
-    vTaskDelay(10000 / portTICK_PERIOD_MS);
-
-    int addr_family = AF_INET;
-    int ip_protocol = IPPROTO_IP;
+    SystemModule * module = &GLOBAL_STATE->SYSTEM_MODULE;
 
     struct timeval tcp_timeout = {
         .tv_sec = 5,
         .tv_usec = 0
     };
 
-    while (1)
-    {
-        if (GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback == false) {
-            vTaskDelay(10000 / portTICK_PERIOD_MS);
+    ESP_LOGI(TAG, "primary probe: resident, will watch the primary whenever "
+                  "pool A is on its fallback");
+
+    while (1) {
+        /* Woken by stratum_task at a failover, and on a timeout anyway so a
+         * missed notification cannot park this forever. */
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(PRIMARY_PROBE_PERIOD_MS));
+
+        if (!module->is_using_fallback || GLOBAL_STATE->promote_requested) {
+            continue;
+        }
+        if (!is_wifi_connected() && !network_is_connected()) {
             continue;
         }
 
-        ESP_LOGD(TAG, "Running Heartbeat on: %s!", primary_stratum_url);
-
-        if (!is_wifi_connected()) {
-            ESP_LOGD(TAG, "Heartbeat. Failed WiFi check!");
-            vTaskDelay(10000 / portTICK_PERIOD_MS);
-			if(!network_is_connected())
-			{
-				continue;
-			}
+        /*
+         * Copy before use. A settings PATCH does free() then strdup() on
+         * pool_url and pool_user while this runs, and the pointers are held
+         * across a resolve, a connect and up to twelve seconds of reads.
+         */
+        if (module->pool_url == NULL || module->pool_url[0] == '\0') {
+            continue;
         }
+        snprintf(probe_url, sizeof(probe_url), "%s", module->pool_url);
+        snprintf(probe_user, sizeof(probe_user), "%s",
+                 module->pool_user ? module->pool_user : "");
+        snprintf(probe_pass, sizeof(probe_pass), "%s",
+                 module->pool_pass ? module->pool_pass : "");
+        uint16_t port = module->pool_port;
+        tls_mode tls = module->pool_tls;
+        char * cert = module->pool_cert;
 
-        if (!stratum_last_resolved_hostname(primary_stratum_url)) {
-            vTaskDelay(60000 / portTICK_PERIOD_MS);
+        /* Our own buffer, never STATUM_MODULE.lastResolvedIp, which
+         * stratum_task reads between its own resolve and its connect. */
+        char probe_ip[INET_ADDRSTRLEN] = {0};
+        if (!stratum_resolve_into(probe_url, probe_ip, sizeof(probe_ip))) {
+            ESP_LOGD(TAG, "primary probe: cannot resolve %s yet", probe_url);
             continue;
         }
 
-        ESP_LOGD(TAG, "Heartbeat. Connecting to %s:%d", STATUM_MODULE.lastResolvedIp, primary_stratum_port);
+        esp_transport_handle_t hb = STRATUM_V1_transport_init(tls, cert);
+        if (hb == NULL) {
+            continue;
+        }
+        if (tls != DISABLED) {
+            esp_transport_ssl_set_common_name(hb, probe_url);
+        }
 
-        esp_transport_handle_t hb_transport = STRATUM_V1_transport_init(DISABLED, NULL);
-        if (hb_transport == NULL) {
-            ESP_LOGD(TAG, "Heartbeat. Failed transport init!");
-            vTaskDelay(60000 / portTICK_PERIOD_MS);
+        if (esp_transport_connect(hb, probe_ip, port, 5000) != ESP_OK) {
+            ESP_LOGD(TAG, "primary probe: %s:%d not answering yet", probe_ip, port);
+            esp_transport_close(hb);
+            esp_transport_destroy(hb);
             continue;
         }
 
-        esp_err_t err = esp_transport_connect(hb_transport, STATUM_MODULE.lastResolvedIp, primary_stratum_port, 5000);
-        if (err != ESP_OK)
-        {
-            ESP_LOGD(TAG, "Heartbeat. Failed connect check: %s:%d (errno %d)", STATUM_MODULE.lastResolvedIp, primary_stratum_port, err);
-            esp_transport_close(hb_transport);
-            esp_transport_destroy(hb_transport);
-            vTaskDelay(60000 / portTICK_PERIOD_MS);
-            continue;
-        }
-
-        int hb_sock = esp_transport_get_socket(hb_transport);
+        int hb_sock = esp_transport_get_socket(hb);
         if (hb_sock >= 0) {
-            if (setsockopt(hb_sock, SOL_SOCKET, SO_RCVTIMEO , &tcp_timeout, sizeof(tcp_timeout)) != 0) {
-                ESP_LOGE(TAG, "Fail to setsockopt SO_RCVTIMEO ");
+            if (setsockopt(hb_sock, SOL_SOCKET, SO_RCVTIMEO, &tcp_timeout, sizeof(tcp_timeout)) != 0) {
+                ESP_LOGE(TAG, "primary probe: fail to setsockopt SO_RCVTIMEO");
             }
         }
 
-        int send_uid = 1;
-        STRATUM_V1_subscribe(hb_transport, send_uid++, GLOBAL_STATE->asic_model_str);
-        STRATUM_V1_authenticate(hb_transport, send_uid++, GLOBAL_STATE->SYSTEM_MODULE.pool_user, GLOBAL_STATE->SYSTEM_MODULE.pool_pass);
+        /*
+         * Written here rather than through STRATUM_V1_subscribe and
+         * STRATUM_V1_authenticate, which each put a char[2300] on the
+         * caller's stack. Two of those plus newlib's formatting is more than
+         * this task should carry.
+         */
+        int n = snprintf(probe_tx, sizeof(probe_tx),
+                         "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": []}\n");
+        if (n > 0 && n < (int) sizeof(probe_tx)) {
+            esp_transport_write(hb, probe_tx, n, 0);
+        }
 
-        static char recv_buffer[BUFFER_SIZE];
-        memset(recv_buffer, 0, BUFFER_SIZE);
-        int bytes_received = esp_transport_read(hb_transport, recv_buffer, BUFFER_SIZE - 1, 5000);
+        n = snprintf(probe_tx, sizeof(probe_tx),
+                     "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}\n",
+                     probe_user, probe_pass);
+        if (n > 0 && n < (int) sizeof(probe_tx)) {
+            esp_transport_write(hb, probe_tx, n, 0);
+        }
 
-        esp_transport_close(hb_transport);
-        esp_transport_destroy(hb_transport);
+        bool serving = probe_wait_for_work(hb);
 
-        if (bytes_received == -1)  {
-            vTaskDelay(60000 / portTICK_PERIOD_MS);
+        esp_transport_close(hb);
+        esp_transport_destroy(hb);
+
+        if (!serving) {
+            ESP_LOGD(TAG, "primary probe: %s:%d answered but served no work", probe_url, port);
             continue;
         }
 
-        if (strstr(recv_buffer, "mining.notify") != NULL) {
-            ESP_LOGI(TAG, "Heartbeat successful and in fallback mode. Switching back to primary.");
-            GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = false;
-            stratum_close_connection(GLOBAL_STATE);
-            continue;
-        }
+        /*
+         * Ask, do not act. Set the request, then shut the live socket down for
+         * reading so stratum_task wakes out of its receive instead of waiting
+         * out the timeout; the close, and the flag that selects the pool, stay
+         * that task's alone.
+         */
+        ESP_LOGI(TAG, "primary probe: %s:%d is serving work, asking for a switch back",
+                 probe_url, port);
+        GLOBAL_STATE->promote_requested = true;
 
-        vTaskDelay(60000 / portTICK_PERIOD_MS);
+        pthread_mutex_lock(&GLOBAL_STATE->transport_lock);
+        if (GLOBAL_STATE->transport != NULL) {
+            int sock = esp_transport_get_socket(GLOBAL_STATE->transport);
+            if (sock >= 0) {
+                shutdown(sock, SHUT_RD);
+            }
+        }
+        pthread_mutex_unlock(&GLOBAL_STATE->transport_lock);
+
+        ESP_LOGD(TAG, "primary probe: %u stack bytes never used",
+                 (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)));
     }
 }
 
@@ -368,8 +558,6 @@ void stratum_task(void * pvParameters)
 {
     GlobalState * GLOBAL_STATE = (GlobalState *) pvParameters;
 
-    primary_stratum_url = GLOBAL_STATE->SYSTEM_MODULE.pool_url;
-    primary_stratum_port = GLOBAL_STATE->SYSTEM_MODULE.pool_port;
     char * stratum_url = GLOBAL_STATE->SYSTEM_MODULE.pool_url;
     uint16_t port = GLOBAL_STATE->SYSTEM_MODULE.pool_port;
     bool extranonce_subscribe = GLOBAL_STATE->SYSTEM_MODULE.pool_extranonce_subscribe;
@@ -380,16 +568,35 @@ void stratum_task(void * pvParameters)
     int retry_critical_attempts = 0;
 
     /*
-     * Still disabled. Note before re-enabling it: stratum_primary_heartbeat
-     * calls stratum_close_connection() when the primary comes back, and that
-     * is now stratum_task's alone to call. From its own task it would be the
-     * same cross-task destroy this file just stopped doing -- it would have
-     * to set write_failed, or a flag of its own, instead.
+     * Created here, once, with its stack in PSRAM: see the comment above the
+     * probe for why it is resident rather than started at the failover. A
+     * failure is not fatal -- it only means this board cannot climb back off
+     * its fallback without a restart, which is what it did before -- so it is
+     * logged loudly and mining carries on.
      */
-    //xTaskCreate(stratum_primary_heartbeat, "stratum primary heartbeat", 8192, pvParameters, 1, NULL);
+    if (xTaskCreateWithCaps(stratum_primary_heartbeat, "primary probe", 8192,
+                            pvParameters, 1, &primary_probe_handle,
+                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        primary_probe_handle = NULL;
+        ESP_LOGE(TAG, "primary probe: could not be created; a failover will be "
+                      "one-way until the fallback itself fails or the board restarts");
+    }
 
     //ESP_LOGI(TAG, "Opening connection to pool: %s:%d", stratum_url, port);
     while (1) {
+        /*
+         * Consume a promotion the probe asked for, here at the top, before
+         * any of the three reads of is_using_fallback that one connection
+         * attempt makes. Doing it here is what keeps those three agreeing;
+         * see GlobalState::promote_requested.
+         */
+        if (GLOBAL_STATE->promote_requested) {
+            GLOBAL_STATE->promote_requested = false;
+            GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = false;
+            retry_attempts = 0;
+            ESP_LOGI(TAG, "pool A: the primary is serving work again, switching back to it");
+        }
+
         if (!is_wifi_connected()) {
             //SYSTEM_notify_error_info(GLOBAL_STATE, WIFI_CONNETION_ERROR, NULL);
             ESP_LOGI(TAG, "WiFi disconnected, attempting to reconnect...");
@@ -433,6 +640,13 @@ void stratum_task(void * pvParameters)
             
             ESP_LOGI(TAG, "Switching target due to too many failures (retries: %d)...", retry_attempts);
             retry_attempts = 0;
+
+            /* Going to the fallback is the only direction that needs a way
+             * back. Waking the probe is an optimisation, not the mechanism:
+             * it re-reads is_using_fallback on its own timeout regardless. */
+            if (primary_probe_handle != NULL) {
+                xTaskNotifyGive(primary_probe_handle);
+            }
         }
 
         stratum_url = GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback ? GLOBAL_STATE->SYSTEM_MODULE.fallback_pool_url : GLOBAL_STATE->SYSTEM_MODULE.pool_url;
@@ -584,17 +798,26 @@ void stratum_task(void * pvParameters)
              * submit path has given up on cannot carry on for another ten
              * minutes of reads.
              */
-            if (GLOBAL_STATE->write_failed || GLOBAL_STATE->drop_requested) {
+            if (GLOBAL_STATE->write_failed || GLOBAL_STATE->drop_requested
+                    || GLOBAL_STATE->promote_requested) {
                 /* Which one fired decides only what gets logged. Both end the
                  * session by the same path on purpose: a drop asked for over
                  * the API is only worth having if it exercises the teardown a
                  * real failure takes. Same reasoning as the secondaries. */
-                if (GLOBAL_STATE->drop_requested) {
+                if (GLOBAL_STATE->promote_requested) {
+                    ESP_LOGW(TAG, "pool A: ending the fallback session to go back to the primary");
+                } else if (GLOBAL_STATE->drop_requested) {
                     ESP_LOGW(TAG, "pool A: dropping the session, asked over the API");
                 } else {
                     ESP_LOGW(TAG, "pool A: a share could not be written, dropping the session");
                 }
-                retry_attempts++;
+                /* A promotion is not a failed connection. Counting it would
+                 * let a flaky fallback reach MAX_RETRY_ATTEMPTS on the
+                 * promotion itself and toggle straight back, wiping the share
+                 * counters once a minute. */
+                if (!GLOBAL_STATE->promote_requested) {
+                    retry_attempts++;
+                }
                 stratum_close_connection(GLOBAL_STATE);
                 break;
             }
@@ -609,14 +832,18 @@ void stratum_task(void * pvParameters)
                 /* Read once. Reading a flag twice could name the wrong
                  * cause: a share can fail, or a drop be asked for, in the
                  * window between the read returning and this test. */
-                if (GLOBAL_STATE->drop_requested) {
+                if (GLOBAL_STATE->promote_requested) {
+                    ESP_LOGW(TAG, "pool A: receive woken to go back to the primary");
+                } else if (GLOBAL_STATE->drop_requested) {
                     ESP_LOGW(TAG, "pool A: receive woken by an API drop, dropping the session");
                 } else if (GLOBAL_STATE->write_failed) {
                     ESP_LOGW(TAG, "pool A: receive woken by a failed share write, dropping the session");
                 } else {
                     ESP_LOGE(TAG, "Failed to receive JSON-RPC line, reconnecting...");
                 }
-                retry_attempts++;
+                if (!GLOBAL_STATE->promote_requested) {
+                    retry_attempts++;
+                }
                 stratum_close_connection(GLOBAL_STATE);
                 break;
             }

@@ -416,6 +416,20 @@ typedef struct
      */
     volatile bool          drop_requested;
 
+    /*
+     * Set by the primary probe when the configured primary is serving work
+     * again, and consumed by stratum_task at the top of its loop.
+     *
+     * The probe deliberately does not touch is_using_fallback itself.
+     * stratum_task reads that flag three times in one connection attempt --
+     * for the url and port, for the TLS mode and certificate, and for the
+     * user and password -- so a second writer can have it answer differently
+     * at each, which ends with the primary's credentials sent to the fallback
+     * host, or the fallback's to the primary. Keeping one writer is what makes
+     * those three reads agree.
+     */
+    volatile bool          promote_requested;
+
     /* ---- how the hashrate is divided ----
      * dual_ratio_a is the two-pool form, kept because that is what is stored
      * in NVS and shown in the UI today; it is handed to the scheduler as
