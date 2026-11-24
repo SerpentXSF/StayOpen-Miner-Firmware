@@ -3305,6 +3305,45 @@ to a subsystem whose first one has not yet run on hardware, and the
 hardcoded-index defects above mean the lock fix alone would not finish the
 job.
 
+### Two things about the primary probe that are not measured (2026-11-23)
+
+The probe task is resident and its idle path is measured. On a BC04 running
+this code, `TASKS` reports:
+
+```
+primary probe        prio  1  unused   5840
+```
+
+So about 2,350 of its 8,192 stack bytes are in use while it sits on the
+primary doing nothing but the per-minute check. Two things that figure does
+not cover:
+
+**The TLS path has never run.** 8,192 was chosen, not measured, and the deep
+path is a TLS handshake: mbedtls runs on this task's stack, and
+`esp_crt_bundle` logs at INFO from inside the x509 verify callback, which puts
+the `_svfprintf_r` path (around 1.6 KB on its own) on top of the handshake's
+deepest point. Both boards here run pool A in plaintext (`stratumtls 0`), so
+nothing in this house exercises it. An overflow on a PSRAM stack also writes
+over neighbouring heap before the canary check notices, so the failure would
+not be a clean panic. The one-shot high-water line the probe logs after its
+first completed cycle is the evidence to read on a board whose primary is
+TLS; until someone runs one, treat 8,192 as plausible rather than proven.
+
+**The internal-RAM cost is one sample, and the variance is wider than the
+cost.** `xTaskCreateWithCaps` puts the stack in PSRAM but the TCB goes through
+`pvPortMalloc`, which is internal-only: `sizeof(StaticTask_t)` is 348 bytes in
+this build, taken at `app_main` before every ASIC and HTTP task is created.
+That matters here because this file has already declined less (see the ~200
+bytes refused elsewhere) and because `main.c` records a board that hashed
+0 GH/s after `asic_result_0` failed to create.
+
+What the first boot on this code showed: every task started, the probe among
+them, and `minFreeHeapInternal` settled at 2,331. The release before it read
+9,087 — but these figures swing by several KB between boots of the *same*
+image, so one sample on each side cannot attribute the difference to 348
+bytes. It is recorded here as unresolved, not as a regression. Settling it
+needs several reboots per image, compared at the same uptime.
+
 ### A rejected setup reply resets the retry counter (2026-11-23, not fixed)
 
 `stratum_task`'s `STRATUM_RESULT_SETUP` branch zeroes `retry_attempts` before

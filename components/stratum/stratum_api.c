@@ -55,10 +55,6 @@
  */
 #define STRATUM_MAX_JOB_ID 128
 
-/* Stratum itself nests about four deep: the notify params array holding the
- * merkle branch array. Sixteen leaves room for anything a real pool sends and
- * stops a line that would recurse cJSON into the task's stack canary. */
-#define STRATUM_MAX_JSON_DEPTH 16
 static const char * TAG = "stratum_api";
 
 static char * json_rpc_buffer = NULL;
@@ -299,6 +295,11 @@ static int json_nesting_exceeds(const char * text, int limit)
         }
     }
     return 0;
+}
+
+bool STRATUM_V1_json_too_deep(const char * text)
+{
+    return text != NULL && json_nesting_exceeds(text, STRATUM_MAX_JSON_DEPTH) != 0;
 }
 
 static const char * str_at(cJSON * array, int index)

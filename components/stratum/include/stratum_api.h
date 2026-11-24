@@ -120,6 +120,20 @@ int STRATUM_V1_authorize(esp_transport_handle_t transport, int send_uid, const c
 
 int STRATUM_V1_configure_version_rolling(esp_transport_handle_t transport, int send_uid, uint32_t * version_mask);
 
+/*
+ * Stratum itself nests about four deep: the notify params array holding the
+ * merkle branch array. Sixteen leaves room for anything a real pool sends.
+ *
+ * Exported because anything that hands a pool's line to cJSON needs it, not
+ * only STRATUM_V1_parse(). cJSON takes a stack frame per nesting level and
+ * CJSON_NESTING_LIMIT is 1000, so on an 8 KB task stack a line of a few
+ * hundred open brackets runs off the bottom of the stack, writes over
+ * whatever is below it, and panics on the canary check. The limit lives here
+ * so there is one of it.
+ */
+#define STRATUM_MAX_JSON_DEPTH 16
+bool STRATUM_V1_json_too_deep(const char * text);
+
 int STRATUM_V1_suggest_difficulty(esp_transport_handle_t transport, int send_uid, uint32_t difficulty);
 
 int STRATUM_V1_extranonce_subscribe(esp_transport_handle_t transport, int send_uid);

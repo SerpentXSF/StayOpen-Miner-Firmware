@@ -30,6 +30,9 @@
 #include "freertos/idf_additions.h"
 #include "esp_transport_tcp.h"
 #include "esp_transport_ssl.h"
+#include "lwip/sockets.h"
+#include <strings.h>
+#include <unistd.h>
 
 /* The payout address the shipped config templates carry, so an
  * unconfigured miner cannot quietly mine to somebody else's wallet.
@@ -311,8 +314,9 @@ void stratum_close_connection(GlobalState * GLOBAL_STATE)
 /* A promotion still standing after this long is treated as having stuck. */
 #define PRIMARY_PROBE_FLAP_WINDOW_US ((int64_t) 600 * 1000 * 1000)
 
-#define PROBE_SUBSCRIBE_ID 1
-#define PROBE_AUTHORIZE_ID 2
+#define PROBE_CONFIGURE_ID 1
+#define PROBE_SUBSCRIBE_ID 2
+#define PROBE_AUTHORIZE_ID 3
 
 static TaskHandle_t primary_probe_handle = NULL;
 
@@ -364,6 +368,18 @@ static bool probe_line_is_authorized(const char * line)
     if (strstr(line, "\"result\"") == NULL) {
         return false;
     }
+    /*
+     * Before cJSON recurses, and for the same reason the live parser does it
+     * in STRATUM_V1_parse: a frame per nesting level, 8 KB of stack under
+     * this task, and no limit of cJSON's own worth anything at that depth.
+     * The 512-byte cap above is not a depth limit -- 512 open brackets is
+     * around 500 levels, roughly four times what fits.
+     */
+    if (STRATUM_V1_json_too_deep(line)) {
+        ESP_LOGW(TAG, "primary probe: ignoring a reply from the primary nested "
+                      "deeper than %d levels", STRATUM_MAX_JSON_DEPTH);
+        return false;
+    }
 
     cJSON * root = cJSON_Parse(line);
     if (root == NULL) {
@@ -373,8 +389,17 @@ static bool probe_line_is_authorized(const char * line)
     bool ok = false;
     cJSON * id = cJSON_GetObjectItem(root, "id");
     cJSON * result = cJSON_GetObjectItem(root, "result");
+    cJSON * error = cJSON_GetObjectItem(root, "error");
+    /*
+     * A non-null error is a refusal whatever result says, which is the order
+     * the live parser tests in. Measured against the node this runs with: a
+     * refused worker answers {"result":false,"error":null}, so a null error
+     * proves nothing on its own and result is the field carrying the answer
+     * -- but a pool that fills in both must not read as accepted.
+     */
+    bool no_error = (error == NULL) || cJSON_IsNull(error);
     if (cJSON_IsNumber(id) && id->valueint == PROBE_AUTHORIZE_ID
-            && cJSON_IsTrue(result)) {
+            && cJSON_IsTrue(result) && no_error) {
         ok = true;
     }
 
@@ -478,7 +503,31 @@ void stratum_primary_heartbeat(void * pvParameters)
     int64_t last_promote_us = 0;
     int64_t holdoff_until_us = 0;
     uint32_t holdoff_ms = PRIMARY_PROBE_HOLDOFF_MIN_MS;
+    uint32_t fail_streak_acted = 0;
     bool logged_stack = false;
+    bool logged_same_endpoint = false;
+
+    /*
+     * Make lwIP's per-thread semaphore now, while the board is booting and
+     * internal RAM is at its best. LWIP_NETCONN_SEM_PER_THREAD is 1 on this
+     * port, so the first lwIP call from any task allocates a binary semaphore
+     * out of internal RAM -- and if that allocation fails the caller does not
+     * get an error back, it hits LWIP_ASSERT in tcpip_send_msg_wait_sem() and
+     * the board panics.
+     *
+     * Left alone, this task would pay that on its first cycle after the first
+     * failover of each boot: the one moment the comment above this function
+     * says the design keeps allocations away from, because that is when a
+     * BC04's internal heap is at its worst. Every other task pays it at boot.
+     * This one now does too.
+     */
+    int warm = socket(AF_INET, SOCK_STREAM, 0);
+    if (warm >= 0) {
+        close(warm);
+    } else {
+        ESP_LOGW(TAG, "primary probe: could not pre-arm lwIP; the first probe "
+                      "after a failover will have to allocate instead");
+    }
 
     ESP_LOGI(TAG, "primary probe: resident, will watch the primary whenever "
                   "pool A is on its fallback");
@@ -493,8 +542,9 @@ void stratum_primary_heartbeat(void * pvParameters)
                     && now - last_promote_us < PRIMARY_PROBE_FLAP_WINDOW_US) {
                 /* Promoted, and back on the fallback already: it did not
                  * stick. Back off before trying the same thing again. */
-                if (holdoff_ms < PRIMARY_PROBE_HOLDOFF_MAX_MS) {
-                    holdoff_ms *= 2;
+                holdoff_ms *= 2;
+                if (holdoff_ms > PRIMARY_PROBE_HOLDOFF_MAX_MS) {
+                    holdoff_ms = PRIMARY_PROBE_HOLDOFF_MAX_MS;
                 }
                 holdoff_until_us = now + ((int64_t) holdoff_ms * 1000);
                 last_promote_us = 0;
@@ -509,8 +559,45 @@ void stratum_primary_heartbeat(void * pvParameters)
         }
 
         if (!module->is_using_fallback || GLOBAL_STATE->promote_requested) {
+            /* Each spell on the fallback is its own episode. A streak carried
+             * over from the last one would swallow the first warning of the
+             * next, and would hold its first probe off by a ladder earned
+             * against a different outage. */
+            probe_fail_streak = 0;
+            fail_streak_acted = 0;
             continue;
         }
+
+        /*
+         * Back off on repeated failures, not only on promotions that did not
+         * hold. A primary that answers but never qualifies -- the ordinary
+         * case being a pool that refuses this worker -- would otherwise be
+         * connected to, subscribed to and authorized against once a minute
+         * for as long as that lasts. That is 1,440 times a day, and to the
+         * pool it looks like a client stuck in a retry loop, which is the
+         * sort of thing that earns a rate limit or a ban on the address.
+         *
+         * Derived from the streak rather than set at each failure, so that a
+         * failure path added later cannot forget to back off.
+         */
+        if (probe_fail_streak != fail_streak_acted) {
+            fail_streak_acted = probe_fail_streak;
+            uint32_t fail_ms = PRIMARY_PROBE_HOLDOFF_MIN_MS;
+            for (uint32_t i = 1; i < probe_fail_streak; i++) {
+                if (fail_ms >= PRIMARY_PROBE_HOLDOFF_MAX_MS) {
+                    break;
+                }
+                fail_ms *= 2;
+            }
+            if (fail_ms > PRIMARY_PROBE_HOLDOFF_MAX_MS) {
+                fail_ms = PRIMARY_PROBE_HOLDOFF_MAX_MS;
+            }
+            int64_t fail_until = now + ((int64_t) fail_ms * 1000);
+            if (fail_until > holdoff_until_us) {
+                holdoff_until_us = fail_until;
+            }
+        }
+
         if (now < holdoff_until_us) {
             continue;
         }
@@ -534,6 +621,28 @@ void stratum_primary_heartbeat(void * pvParameters)
         uint16_t port = module->pool_port;
         tls_mode tls = module->pool_tls;
         char * cert = module->pool_cert;
+
+        /*
+         * Nothing to switch back to when both URLs are the same endpoint --
+         * which is what the project ships: config.cvs.example and
+         * config.bc04.cvs.example both set stratumurl and fbstratumurl to
+         * solo.ckpool.org:3333. On such a board the "primary" is serving by
+         * definition the moment the fallback is, so every failover would be
+         * followed by this task tearing down a working session to reconnect
+         * to the very same pool, throwing away its in-flight work and
+         * resetting its difficulty for nothing.
+         */
+        if (module->fallback_pool_url != NULL
+                && strcasecmp(probe_url, module->fallback_pool_url) == 0
+                && port == module->fallback_pool_port) {
+            if (!logged_same_endpoint) {
+                logged_same_endpoint = true;
+                ESP_LOGI(TAG, "primary probe: pool A's primary and fallback are "
+                              "the same endpoint (%s:%d), so there is nothing to "
+                              "switch back to; staying quiet", probe_url, port);
+            }
+            continue;
+        }
 
         /* Our own buffer, never STATUM_MODULE.lastResolvedIp, which
          * stratum_task reads between its own resolve and its connect. */
@@ -573,7 +682,24 @@ void stratum_primary_heartbeat(void * pvParameters)
          * so a pool that treats clients differently by agent treats the probe
          * the same way.
          */
+        /*
+         * mining.configure first, exactly as the live session does. Sending
+         * less than the live session sends is the one asymmetry that matters
+         * in the dangerous direction: a pool that drops the connection on
+         * configure would pass the probe and then fail every real session,
+         * and pool A would be promoted straight into a loop. The reply is not
+         * inspected, because the live session does not gate on it either --
+         * what is being matched here is what goes out, not what comes back.
+         */
         int n = snprintf(probe_tx, sizeof(probe_tx),
+                         "{\"id\": %d, \"method\": \"mining.configure\", \"params\": "
+                         "[[\"version-rolling\"], {\"version-rolling.mask\": \"ffffffff\"}]}\n",
+                         PROBE_CONFIGURE_ID);
+        if (n > 0 && n < (int) sizeof(probe_tx)) {
+            esp_transport_write(hb, probe_tx, n, 0);
+        }
+
+        n = snprintf(probe_tx, sizeof(probe_tx),
                          "{\"id\": %d, \"method\": \"mining.subscribe\", \"params\": [\"volc/%s/%s\"]}\n",
                          PROBE_SUBSCRIBE_ID, GLOBAL_STATE->asic_model_str,
                          esp_app_get_description()->version);
@@ -767,6 +893,19 @@ void stratum_task(void * pvParameters)
             if (GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback) {
                 GLOBAL_STATE->SYSTEM_MODULE.is_using_fallback = false;
                 retry_attempts = 0;
+                /* The same reset the failover does, for the same reason: these
+                 * counters describe one pool's session, and carrying the
+                 * fallback's over is how a switch back would show up as a
+                 * burst of rejects that never happened. */
+                for (int i = 0; i < GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats_count; i++) {
+                    GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].count = 0;
+                    GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats[i].message[0] = '\0';
+                }
+                GLOBAL_STATE->SYSTEM_MODULE.rejected_reason_stats_count = 0;
+                GLOBAL_STATE->SYSTEM_MODULE.shares_accepted = 0;
+                GLOBAL_STATE->SYSTEM_MODULE.shares_rejected = 0;
+                GLOBAL_STATE->SYSTEM_MODULE.work_received = 0;
+                GLOBAL_STATE->SYSTEM_MODULE.best_session_nonce_diff = 0;
                 ESP_LOGI(TAG, "pool A: the primary is serving work again, switching back to it");
             } else {
                 /* Already back on the primary by another route. Clearing it
