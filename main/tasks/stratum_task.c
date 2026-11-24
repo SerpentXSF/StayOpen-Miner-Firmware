@@ -309,6 +309,16 @@ void stratum_close_connection(GlobalState * GLOBAL_STATE)
 /* A reply line; a notify is never this short, which is what keeps cJSON off
  * the kilobyte lines. */
 #define PRIMARY_PROBE_REPLY_MAX      512
+/*
+ * PSRAM .bss, so this number is not traded against internal RAM and there is
+ * no reason to be tight with it. 8192 was the usual figure for an esp-tls
+ * task and the plain-TCP path measured about 2,350 of it -- but the deep path
+ * is an mbedtls handshake with esp_crt_bundle logging at INFO from inside the
+ * x509 verify callback, and no task in this tree has been measured doing TLS
+ * on a PSRAM stack. An overflow there would write over neighbouring PSRAM
+ * heap before the canary check noticed, so the margin is the point.
+ */
+#define PRIMARY_PROBE_STACK          16384
 #define PRIMARY_PROBE_HOLDOFF_MIN_MS 60000
 #define PRIMARY_PROBE_HOLDOFF_MAX_MS 1800000
 /* A promotion still standing after this long is treated as having stuck. */
@@ -319,6 +329,29 @@ void stratum_close_connection(GlobalState * GLOBAL_STATE)
 #define PROBE_AUTHORIZE_ID 3
 
 static TaskHandle_t primary_probe_handle = NULL;
+
+/*
+ * Allocated statically, both halves.
+ *
+ * xTaskCreateWithCaps puts the stack where it is asked but the TCB always
+ * goes through pvPortMalloc, which is internal-only: 348 bytes on this build,
+ * taken at app_main ahead of every ASIC, HTTP and system task. On a BC04 that
+ * is a pool whose floor has been measured in the tens of bytes, and this
+ * project has already watched a new task's internal appetite stop
+ * asic_result_0 being created, leaving the miner hashing nothing.
+ *
+ * Static allocation does not give those 348 bytes back -- .bss comes out of
+ * the same RAM -- but it stops them being a runtime allocation that competes
+ * with later tasks and can fail at exactly the wrong moment. The cost becomes
+ * a link-time constant: visible in the map, identical on every boot, and
+ * incapable of failing halfway. StaticTask_t stays in internal .bss because
+ * the scheduler touches it; only the stack goes to PSRAM.
+ *
+ * Stack depth is in bytes on this port: StackType_t is uint8_t on Xtensa.
+ */
+EXT_RAM_BSS_ATTR __attribute__((aligned(16)))
+static StackType_t probe_stack[PRIMARY_PROBE_STACK];
+static StaticTask_t probe_tcb;
 
 /*
  * Out of internal RAM for the reason above, and safe there: none of these is
@@ -726,7 +759,7 @@ void stratum_primary_heartbeat(void * pvParameters)
             ESP_LOGI(TAG, "primary probe: %u of its %d stack bytes were never used "
                           "on the first full cycle",
                      (unsigned) (uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
-                     8192);
+                     PRIMARY_PROBE_STACK);
         }
 
         if (!serving) {
@@ -872,10 +905,13 @@ void stratum_task(void * pvParameters)
      * its fallback without a restart, which is what it did before -- so it is
      * logged loudly and mining carries on.
      */
-    if (xTaskCreateWithCaps(stratum_primary_heartbeat, "primary probe", 8192,
-                            pvParameters, 1, &primary_probe_handle,
-                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
-        primary_probe_handle = NULL;
+    primary_probe_handle = xTaskCreateStatic(
+        stratum_primary_heartbeat, "primary probe", PRIMARY_PROBE_STACK,
+        pvParameters, 1, probe_stack, &probe_tcb);
+    if (primary_probe_handle == NULL) {
+        /* Cannot happen for want of memory now that both buffers are static;
+         * it would mean one of them was NULL. Kept because the consequence is
+         * worth naming either way: a failover goes back to being one-way. */
         ESP_LOGE(TAG, "primary probe: could not be created; a failover will be "
                       "one-way until the fallback itself fails or the board restarts");
     }

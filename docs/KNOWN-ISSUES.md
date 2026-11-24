@@ -3305,44 +3305,101 @@ to a subsystem whose first one has not yet run on hardware, and the
 hardcoded-index defects above mean the lock fix alone would not finish the
 job.
 
-### Two things about the primary probe that are not measured (2026-11-23)
+### The primary probe, measured on hardware (2026-11-24)
 
-The probe task is resident and its idle path is measured. On a BC04 running
-this code, `TASKS` reports:
+Both of the things the previous round shipped unmeasured now have figures off
+a BC04, and the switch back has run twice.
+
+**The stack is measured on a full cycle, not reasoned.** The probe now runs on
+16,384 bytes of PSRAM `.bss` rather than 8,192, and logs its high-water once
+after the first cycle that gets past connect:
 
 ```
-primary probe        prio  1  unused   5840
+I (121185) TASKS:   primary probe        prio  1  unused  14032
+I (147165) primary probe: 14000 of its 16384 stack bytes were never used on the first full cycle
 ```
 
-So about 2,350 of its 8,192 stack bytes are in use while it sits on the
-primary doing nothing but the per-minute check. Two things that figure does
-not cover:
+So a complete cycle -- resolve, connect, `mining.configure`, subscribe,
+authorize, twelve seconds of reads, a cJSON parse and the promotion -- uses
+**2,384 bytes**. Idle use is 2,352, so the cycle itself costs about 30 bytes
+more than sitting still; the work is all in buffers that live in `.bss`, not
+on the stack.
 
-**The TLS path has never run.** 8,192 was chosen, not measured, and the deep
-path is a TLS handshake: mbedtls runs on this task's stack, and
-`esp_crt_bundle` logs at INFO from inside the x509 verify callback, which puts
-the `_svfprintf_r` path (around 1.6 KB on its own) on top of the handshake's
-deepest point. Both boards here run pool A in plaintext (`stratumtls 0`), so
-nothing in this house exercises it. An overflow on a PSRAM stack also writes
-over neighbouring heap before the canary check notices, so the failure would
-not be a clean panic. The one-shot high-water line the probe logs after its
-first completed cycle is the evidence to read on a board whose primary is
-TLS; until someone runs one, treat 8,192 as plausible rather than proven.
+The stack was raised because the deep path is an mbedtls handshake and neither
+board here runs pool A over TLS, so nothing in this house exercises it. The
+reasoning for 8,192 was that it is the usual figure for an esp-tls task --
+plausible, but an overflow on a PSRAM stack writes over neighbouring heap
+before the canary check notices, so a plausible figure is not good enough.
+16,384 in PSRAM `.bss` costs nothing internal, and against a measured 2,384 it
+leaves room for a handshake several times larger than the one estimated. The
+TLS path is still unexercised; it now has margin rather than an argument.
 
-**The internal-RAM cost is one sample, and the variance is wider than the
-cost.** `xTaskCreateWithCaps` puts the stack in PSRAM but the TCB goes through
-`pvPortMalloc`, which is internal-only: `sizeof(StaticTask_t)` is 348 bytes in
-this build, taken at `app_main` before every ASIC and HTTP task is created.
-That matters here because this file has already declined less (see the ~200
-bytes refused elsewhere) and because `main.c` records a board that hashed
-0 GH/s after `asic_result_0` failed to create.
+**The task is statically allocated, and its internal cost is a link-time
+constant.** `xTaskCreateWithCaps` puts the stack where it is told but the TCB
+always goes through `pvPortMalloc`, which is internal-only -- 348 bytes, taken
+at `app_main` ahead of every ASIC, HTTP and system task. That is the shape of
+a failure this file already records: a monitor task's own internal appetite
+once stopped `asic_result_0` being created and the miner hashed nothing for
+twenty minutes.
 
-What the first boot on this code showed: every task started, the probe among
-them, and `minFreeHeapInternal` settled at 2,331. The release before it read
-9,087 — but these figures swing by several KB between boots of the *same*
-image, so one sample on each side cannot attribute the difference to 348
-bytes. It is recorded here as unresolved, not as a regression. Settling it
-needs several reboots per image, compared at the same uptime.
+Both halves are now static: the stack in PSRAM `.bss`, the `StaticTask_t` in
+internal `.bss` because the scheduler touches it. The ELF shows it exactly:
+
+```
+3c2b4380 00004000 b probe_stack     (PSRAM, 16 KB)
+3fca90b0 0000015c b probe_tcb       (internal, 348 bytes)
+```
+
+This does not give the 348 bytes back -- `.bss` comes out of the same RAM --
+but it stops them being a runtime allocation that competes with later tasks
+and can fail halfway. The cost is now visible in the map, identical on every
+boot, and incapable of failing.
+
+**And the floor was surveyed rather than guessed at.** Four boots of this
+image, every one verified to be running the intended OTA slot, sampled at 75 s
+and 140 s because this file already records that the minimum does not always
+fall during start-up:
+
+| | low | high | mean |
+|---|---|---|---|
+| `minFreeHeapInternal` | 567 | 4,019 | 2,095 |
+| `minFreeHeapDma` | 475 | 1,431 | 806 |
+| `largestBlockDma` | 8,192 | 13,312 | |
+
+Set against this board's own history -- a ten-boot survey that read
+**131 low, 584 mean**, a later pair of readings at **23 internal / 19 DMA**,
+and 2.0.35 reading **603 / 87 with a largest DMA block of 3,072** -- this
+image floors *higher* than any of them, with a DMA block three to four times
+larger. The DMA figure is the one that matters, because the failure this
+margin actually produces is a ~1,600-byte contiguous `MALLOC_CAP_DMA`
+allocation in `esp_aes_process_dma_ext_ram()`.
+
+That is not proof the probe costs nothing: these are different builds months
+apart, so the improvement is not attributable to this change either. What
+closes the question is already in this file -- returning **4,608 bytes** of
+permanent task stack did not move the steady-state floor at all, because the
+floor is set by fragmentation rather than by total free. A 348-byte increase
+in the other direction is not expected to move it, and four boots did not.
+
+**The switch back has run, twice.** Forced by pointing pool A's primary at
+192.0.2.1 (TEST-NET-1, routable nowhere) and ending its session over
+`/api/system/pool/drop`, then restoring the primary and touching nothing else:
+
+```
+I (102735) Switching target due to too many failures (retries: 3)...
+I (147175) primary probe: 192.168.50.x:3333 is serving work and accepted this worker, asking for a switch back
+I (148175) pool A: the primary is serving work again, switching back to it
+```
+
+Failover 30 s after the drop both times; promotion 61 s and 40 s after the
+primary came back, inside one probe period. `uptimeSeconds` climbed
+monotonically across both runs, which is the check that matters: a board that
+only returns via a reboot is the original bug wearing the fix's clothes. The
+board hashed about 5,000 GH/s on the fallback throughout, and the share
+counters reset on the way back as they do on the way out.
+
+What has still never run: the probe against a pool that answers but refuses
+the worker, and the probe over TLS.
 
 ### A rejected setup reply resets the retry counter (2026-11-23, not fixed)
 
